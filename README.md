@@ -8,6 +8,10 @@ word.
 
 Everything happens on your computer. Nothing is uploaded, and there's no account or server.
 
+> **Open beta.** This is Radiance Music's first public version: it's new, some things may not work yet,
+> and it changes often. Tell us what breaks or what you'd like: [open an issue](https://github.com/RadianceADM/radiance-music/issues)
+> or email hello@radianceph.com.
+
 **Get it:** [music.radianceph.com](https://music.radianceph.com) has the download (and the phone
 app, [Radiance Music for Android](https://github.com/RadianceADM/radiance-music-android)). Or
 take the newest `RadianceMusic-linux-x86_64.tar.gz` from [Releases](https://github.com/RadianceADM/radiance-music/releases),
