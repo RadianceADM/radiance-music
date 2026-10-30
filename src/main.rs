@@ -5,6 +5,9 @@
 //!
 //! SPDX-License-Identifier: GPL-3.0-or-later
 
+// Windows: a windowed program (no console window beside it)
+#![cfg_attr(windows, windows_subsystem = "windows")]
+
 mod align;
 mod archive;
 mod art;
@@ -684,7 +687,30 @@ fn probe_mixer(args: &[String]) -> glib::ExitCode {
     glib::ExitCode::SUCCESS
 }
 
+/// Windows: the app's own folder holds GStreamer's plugins, GTK's settings and its icons
+/// (bin\ beside lib\ and share\); say so before anything starts looking.
+#[cfg(windows)]
+fn windows_paths() {
+    let Some(root) = std::env::current_exe().ok().and_then(|e| e.parent()?.parent().map(|p| p.to_path_buf())) else { return };
+    let set = |k: &str, v: std::path::PathBuf| {
+        if std::env::var_os(k).is_none() {
+            std::env::set_var(k, v);
+        }
+    };
+    set("GST_PLUGIN_SYSTEM_PATH_1_0", root.join("lib").join("gstreamer-1.0"));
+    set("GST_PLUGIN_SCANNER_1_0", root.join("libexec").join("gstreamer-1.0").join("gst-plugin-scanner.exe"));
+    set("GSETTINGS_SCHEMA_DIR", root.join("share").join("glib-2.0").join("schemas"));
+    set("XDG_DATA_DIRS", root.join("share"));
+    set("GIO_MODULE_DIR", root.join("lib").join("gio").join("modules")); // TLS for https
+    // this GnuTLS refuses glib-networking's default "%COMPAT" priority string
+    if std::env::var_os("G_TLS_GNUTLS_PRIORITY").is_none() {
+        std::env::set_var("G_TLS_GNUTLS_PRIORITY", "NORMAL");
+    }
+}
+
 fn main() -> glib::ExitCode {
+    #[cfg(windows)]
+    windows_paths();
     let args: Vec<String> = std::env::args().collect();
     // which version this is (the Linux download's installer also asks it, to see the app's libraries load)
     if args.get(1).map(String::as_str) == Some("--version") {
@@ -829,6 +855,9 @@ fn main() -> glib::ExitCode {
         builder = builder.flags(gtk::gio::ApplicationFlags::NON_UNIQUE);
     }
     let app = builder.build();
+    // always dark (owner: "either stone or true black lang"), whatever the system's light or dark
+    // setting is (a light desktop, or Windows, would otherwise get libadwaita's light look)
+    app.connect_startup(|_| adw::StyleManager::default().set_color_scheme(adw::ColorScheme::ForceDark));
     app.connect_activate(move |app| {
         if let Some(w) = app.active_window() {
             w.present();

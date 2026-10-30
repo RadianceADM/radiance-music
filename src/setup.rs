@@ -112,6 +112,12 @@ pub fn refresh_scripts() {
 
 /// A step's command, at the lowest priority (setting up never slows you down).
 fn quiet(program: &Path, args: &[&str]) -> Command {
+    if !cfg!(unix) {
+        // Windows has no nice or ionice: the step runs as it is
+        let mut cmd = Command::new(program);
+        cmd.args(args);
+        return cmd;
+    }
     let mut cmd = Command::new("nice");
     cmd.arg("-n").arg("19");
     if Path::new("/usr/bin/ionice").exists() {

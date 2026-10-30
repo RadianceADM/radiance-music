@@ -561,6 +561,9 @@ pub struct Player {
 impl Player {
     pub fn new(on_event: impl Fn(Event) + 'static) -> Result<Player, String> {
         gst::init().map_err(|e| e.to_string())?;
+        // Windows: the GTK 4 video sink is inside the app (music videos)
+        #[cfg(windows)]
+        let _ = gstgtk4::plugin_register_static();
         let on_event: Rc<dyn Fn(Event)> = Rc::new(on_event);
         let active = Rc::new(Cell::new(0));
         let decks: Rc<RefCell<Vec<Rc<Deck>>>> = Rc::default();

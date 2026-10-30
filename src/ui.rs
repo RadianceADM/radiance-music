@@ -234,7 +234,10 @@ fn bg_art<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'static, done: im
             let p = pool.clone();
             let _ = std::thread::Builder::new().name("radiance-art".into()).spawn(move || {
                 // this thread only, below the window's (Linux: a thread is its own task)
-                unsafe { libc::setpriority(libc::PRIO_PROCESS, 0, 10) };
+                #[cfg(unix)]
+                unsafe {
+                    libc::setpriority(libc::PRIO_PROCESS, 0, 10)
+                };
                 loop {
                     let job = {
                         let (lock, ready) = &*p;

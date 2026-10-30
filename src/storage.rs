@@ -45,6 +45,7 @@ fn size_of(p: &Path) -> u64 {
 }
 
 /// Free space on the drive holding `p`, in bytes.
+#[cfg(unix)]
 pub fn free_space(p: &Path) -> u64 {
     let Ok(c) = std::ffi::CString::new(p.as_os_str().as_encoded_bytes()) else { return 0 };
     let mut s: libc::statvfs = unsafe { std::mem::zeroed() };
@@ -53,6 +54,16 @@ pub fn free_space(p: &Path) -> u64 {
     } else {
         0
     }
+}
+
+/// Free space on the drive holding `p`, in bytes (Windows: as GIO reads it).
+#[cfg(not(unix))]
+pub fn free_space(p: &Path) -> u64 {
+    use gtk::gio::prelude::*;
+    gtk::gio::File::for_path(p)
+        .query_filesystem_info("filesystem::free", gtk::gio::Cancellable::NONE)
+        .map(|i| i.attribute_uint64("filesystem::free"))
+        .unwrap_or(0)
 }
 
 /// What the library and the app take (worker thread).

@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.7.11 — 2026-10-31
+
+- **Always the dark look** (Stone or True Black), even on a light desktop: it followed the
+  system's light or dark setting before.
+- **Radiance Music for Windows (open beta):** `RadianceMusic-Setup.exe` installs it for you
+  alone (no administrator), with a Start menu entry and an uninstaller that leaves your songs
+  where they are. Searching, playing lossless and YouTube songs, lyrics, liking and saving work;
+  splitting songs on Windows comes later (it needs Python there).
+
 ## v0.7.10 — 2026-10-31
 
 - **A Flatpak download:** `RadianceMusic.flatpak` installs on almost any Linux, older ones

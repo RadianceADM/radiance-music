@@ -23,7 +23,8 @@ pub fn use_sign_in_from(browser: Option<String>) {
 
 /// yt-dlp, with the browser sign-in if one was set.
 fn yt_dlp(nice: bool) -> Command {
-    let mut cmd = if nice {
+    // nice: a Linux program (Windows has none; there it runs at its usual priority)
+    let mut cmd = if nice && cfg!(unix) {
         let mut c = Command::new("nice");
         c.args(["-n", "10", "yt-dlp"]);
         c

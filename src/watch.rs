@@ -36,10 +36,12 @@ fn stacks() -> String {
         return "(no gdb)".into();
     };
     // Yama: only this one process (it becomes gdb) may attach
+    #[cfg(target_os = "linux")]
     unsafe {
         libc::prctl(libc::PR_SET_PTRACER, child.id() as libc::c_ulong, 0, 0, 0);
     }
     let out = child.wait_with_output().map(|o| String::from_utf8_lossy(&o.stdout).to_string()).unwrap_or_default();
+    #[cfg(target_os = "linux")]
     unsafe {
         libc::prctl(libc::PR_SET_PTRACER, 0 as libc::c_ulong, 0, 0, 0);
     }

@@ -1,6 +1,6 @@
 [package]
 name = "radiance-music"
-version = "0.7.10"
+version = "0.7.11"
 edition = "2021"
 description = "Search any song and play it: lossless from free libraries first, YouTube Music as the fallback; likes are saved, with synced lyrics, album art and your EQ"
 license = "GPL-3.0-or-later"
@@ -33,3 +33,7 @@ lto = "thin"
 # function names and lines kept, so a freeze's stacks (watch.rs) say where it was
 debug = "line-tables-only"
 strip = "none"
+
+# Windows: GStreamer's GTK 4 video sink comes inside the app (Fedora's Windows GStreamer has none)
+[target.'cfg(windows)'.dependencies]
+gst-plugin-gtk4 = { version = "0.15", features = ["gtk_v4_14"] }
