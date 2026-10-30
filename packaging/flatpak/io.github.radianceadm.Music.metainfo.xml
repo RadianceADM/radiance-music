@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.radianceadm.Music</id>
+  <name>Radiance Music</name>
+  <summary>Search any song, like it to keep it, split it into its parts</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+  <developer id="io.github.radianceadm">
+    <name>Radiance Innovation Centers</name>
+  </developer>
+  <description>
+    <p>An open beta. Search any song and play it, lossless first. Like it, and it's saved on your computer with its cover, its lyrics and its music video, so it plays with no internet.</p>
+    <p>Split a liked song into drums, bass, other and vocals right on your computer, and turn each one up or down in the Mixer. The lyrics light up word by word as they're sung.</p>
+  </description>
+  <launchable type="desktop-id">io.github.radianceadm.Music.desktop</launchable>
+  <url type="homepage">https://music.radianceph.com</url>
+  <url type="bugtracker">https://github.com/RadianceADM/radiance-music/issues</url>
+  <content_rating type="oars-1.1"/>
+  <releases>
+    <release version="0.7.10" date="2026-10-31"/>
+    <release version="0.7.9" date="2026-10-31"/>
+  </releases>
+</component>

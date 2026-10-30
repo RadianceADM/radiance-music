@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.7.10 — 2026-10-31
+
+- **A Flatpak download:** `RadianceMusic.flatpak` installs on almost any Linux, older ones
+  too, with everything it needs inside (yt-dlp, Deno for YouTube, FFmpeg). Radiance Music's
+  own: it isn't on Flathub.
+- Share Songs with a Phone draws its QR code in the Stone look's darkest, not navy.
+
 ## v0.7.9 — 2026-10-31
 
 - **How to Use It, the first time the app opens:** five cards to page through (search, like it

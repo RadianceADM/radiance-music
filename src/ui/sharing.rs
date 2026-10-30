@@ -196,7 +196,7 @@ fn draw_qr(cr: &gtk::cairo::Context, w: i32, h: i32, text: Option<&str>) {
     let cell = (side - 2.0 * pad) / n as f64;
     let (ox, oy) = (x0 + pad, y0 + pad);
     let eye = |x: usize, y: usize| (x < 7 && y < 7) || (x >= n - 7 && y < 7) || (x < 7 && y >= n - 7);
-    cr.set_source_rgb(0x0C as f64 / 255.0, 0x1D as f64 / 255.0, 0x38 as f64 / 255.0);
+    cr.set_source_rgb(0x0C as f64 / 255.0, 0x0A as f64 / 255.0, 0x09 as f64 / 255.0); // the Stone look's deepest (no navy)
     for y in 0..n {
         for x in 0..n {
             if colors[y * n + x] == qrcode::Color::Dark && !eye(x, y) {
@@ -208,13 +208,13 @@ fn draw_qr(cr: &gtk::cairo::Context, w: i32, h: i32, text: Option<&str>) {
     let _ = cr.fill();
     for (ex, ey) in [(0, 0), (n - 7, 0), (0, n - 7)] {
         let (x, y) = (ox + ex as f64 * cell, oy + ey as f64 * cell);
-        cr.set_source_rgb(0x0C as f64 / 255.0, 0x1D as f64 / 255.0, 0x38 as f64 / 255.0);
+        cr.set_source_rgb(0x0C as f64 / 255.0, 0x0A as f64 / 255.0, 0x09 as f64 / 255.0); // the Stone look's deepest (no navy)
         round(x, y, 7.0 * cell, 2.2 * cell);
         let _ = cr.fill();
         cr.set_source_rgb(1.0, 1.0, 1.0);
         round(x + cell, y + cell, 5.0 * cell, 1.5 * cell);
         let _ = cr.fill();
-        cr.set_source_rgb(0x0C as f64 / 255.0, 0x1D as f64 / 255.0, 0x38 as f64 / 255.0);
+        cr.set_source_rgb(0x0C as f64 / 255.0, 0x0A as f64 / 255.0, 0x09 as f64 / 255.0); // the Stone look's deepest (no navy)
         round(x + 2.0 * cell, y + 2.0 * cell, 3.0 * cell, 1.1 * cell);
         let _ = cr.fill();
     }

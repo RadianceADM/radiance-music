@@ -1,6 +1,6 @@
 [package]
 name = "radiance-music"
-version = "0.7.9"
+version = "0.7.10"
 edition = "2021"
 description = "Search any song and play it: lossless from free libraries first, YouTube Music as the fallback; likes are saved, with synced lyrics, album art and your EQ"
 license = "GPL-3.0-or-later"

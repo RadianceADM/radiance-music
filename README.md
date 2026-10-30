@@ -15,7 +15,8 @@ Everything happens on your computer. Nothing is uploaded, and there's no account
 **Get it:** [music.radianceph.com](https://music.radianceph.com) has the download (and the phone
 app, [Radiance Music for Android](https://github.com/RadianceADM/radiance-music-android)). Or
 take the newest `RadianceMusic-linux-x86_64.tar.gz` from [Releases](https://github.com/RadianceADM/radiance-music/releases),
-unpack it and run `./install.sh`.
+unpack it and run `./install.sh`. On an older Linux, or one it doesn't run on, take
+`RadianceMusic.flatpak` instead (below).
 
 ## What it does
 
@@ -103,6 +104,22 @@ home folder (`~/.local/bin`, your apps, its icon; no password) and says what it 
 anything. Run it again to update. To remove it, delete `~/.local/bin/radiance-music`,
 `~/.local/share/applications/io.github.radianceadm.Music.desktop` and
 `~/.local/share/icons/hicolor/scalable/apps/io.github.radianceadm.Music.svg`.
+
+## The Flatpak
+
+`RadianceMusic.flatpak` (on [Releases](https://github.com/RadianceADM/radiance-music/releases)) runs on
+almost any Linux with Flatpak, with what it needs inside: yt-dlp, Deno for YouTube, FFmpeg. Install it
+with your software centre, or:
+
+```sh
+flatpak install --user RadianceMusic.flatpak   # it fetches the GNOME runtime from Flathub the first time
+flatpak run io.github.radianceadm.Music
+```
+
+It's Radiance Music's own, not on Flathub. Inside it, Share Songs with a Phone can't open Ubuntu's
+firewall for you: if yours is on, open the ports once with
+`sudo ufw allow proto tcp from 192.168.0.0/16 to any port 47800:47809`. Build it yourself with
+`packaging/flatpak/build.sh` (flatpak-builder, GNOME 49 runtime and SDK, rust-stable extension).
 
 ## Build and install
 

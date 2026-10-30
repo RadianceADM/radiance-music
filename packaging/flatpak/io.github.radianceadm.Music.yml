@@ -1,0 +1,94 @@
+# Radiance Music's own Flatpak: the RadianceMusic.flatpak download on its GitHub
+# Releases and music.radianceph.com, for Linux systems the plain download can't
+# run on. NOT for Flathub: Flathub accepts no AI-assisted manifests, and this one
+# is (see docs.flathub.org/docs/for-app-authors/requirements#generative-ai-policy).
+#
+# Build (packaging/flatpak/build.sh): flatpak-builder with network for the Rust
+# crates and yt-dlp, then a single-file bundle.
+id: io.github.radianceadm.Music
+runtime: org.gnome.Platform
+runtime-version: '49'
+sdk: org.gnome.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+command: radiance-music
+finish-args:
+  - --share=network # searching, streaming, saving; Share Songs with a Phone listens on 47800-47809
+  - --share=ipc
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --socket=pulseaudio # PipeWire's sound, as the native app plays it
+  - --device=dri
+  - --filesystem=xdg-music # liked songs go to Music/Radiance Music
+  - --filesystem=xdg-videos # their music videos
+  - --own-name=org.mpris.MediaPlayer2.RadianceMusic # the top bar's media controls
+modules:
+  # FFmpeg, only what yt-dlp asks of it: joining a video to its sound, taking a
+  # song's sound out (Opus), its tags. Nothing else is built.
+  - name: ffmpeg
+    config-opts:
+      - --disable-doc
+      - --disable-debug
+      - --disable-autodetect
+      - --disable-everything
+      - --enable-libopus
+      - --enable-protocol=file,pipe
+      - --enable-demuxer=matroska,mov,ogg,aac,mp3,flac,wav
+      - --enable-muxer=matroska,webm,mp4,ipod,ogg,opus,flac,mp3,wav
+      - --enable-decoder=aac,opus,libopus,vorbis,mp3,flac,pcm_s16le
+      - --enable-encoder=libopus,aac,flac,pcm_s16le
+      - --enable-parser=aac,opus,vorbis,flac,mpegaudio,h264,hevc,vp8,vp9,av1
+      - --enable-bsf=aac_adtstoasc,extract_extradata,h264_mp4toannexb,vp9_superframe
+      - --enable-filter=aresample,aformat,anull,volume,null,format,copy
+      - --enable-swresample
+    cleanup:
+      - /include
+      - /lib/pkgconfig
+      - /lib/*.a
+      - /share/ffmpeg
+    sources:
+      - type: archive
+        url: https://ffmpeg.org/releases/ffmpeg-9.0.2.tar.xz
+        sha256: 8c3850283eb25fa026482078a04051e0be17347b09ef81a0849bec15a96e002e
+
+  # Deno: yt-dlp solves YouTube's JavaScript challenges with it
+  - name: deno
+    buildsystem: simple
+    build-commands:
+      - install -Dm755 deno /app/bin/deno
+    sources:
+      - type: archive
+        url: https://github.com/denoland/deno/releases/download/v2.9.8/deno-x86_64-unknown-linux-gnu.zip
+        sha256: e890975bc2549807bbcc0b584ffafda72cc7c93349dd99c80483dd784f6c4609
+        strip-components: 0
+
+  # yt-dlp with its YouTube challenge solver (yt-dlp-ejs); newest when built
+  - name: yt-dlp
+    buildsystem: simple
+    build-options:
+      build-args:
+        - --share=network
+    build-commands:
+      - pip3 install --prefix=/app --no-cache-dir --no-warn-script-location "yt-dlp[default]"
+
+  - name: radiance-music
+    buildsystem: simple
+    build-options:
+      append-path: /usr/lib/sdk/rust-stable/bin
+      env:
+        CARGO_HOME: /run/build/radiance-music/cargo
+      build-args:
+        - --share=network
+    build-commands:
+      - cargo build --release --locked
+      - install -Dm755 target/release/radiance-music /app/bin/radiance-music
+      - install -Dm644 data/io.github.radianceadm.Music.desktop /app/share/applications/io.github.radianceadm.Music.desktop
+      - install -Dm644 data/icons/io.github.radianceadm.Music.svg /app/share/icons/hicolor/scalable/apps/io.github.radianceadm.Music.svg
+      - install -Dm644 packaging/flatpak/io.github.radianceadm.Music.metainfo.xml /app/share/metainfo/io.github.radianceadm.Music.metainfo.xml
+    sources:
+      - type: dir
+        path: ../..
+        skip:
+          - target
+          - .git
+          - packaging/flatpak/out
