@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.7.8 — 2026-10-31
+
+- Share Songs with a Phone says where the phone's side is now: Radiance Music for Android
+  0.5.9 keeps sharing songs in its Settings (Get songs), no longer behind a QR button on Library.
+
 ## v0.7.7 — 2026-10-30
 
 - **The Linux download runs on more systems:** it needs glibc 2.39 or newer now (2.43 before),

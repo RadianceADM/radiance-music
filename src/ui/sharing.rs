@@ -1,5 +1,5 @@
 //! Share Songs with a Phone (the menu): a QR code the phone scans (Radiance
-//! Music for Android: Library → the QR button → Scan a QR), to take this
+//! Music for Android: Settings → Get songs), to take this
 //! computer's liked songs with their parts, lyrics and covers, or to send the
 //! phone's here. Only what the other side hasn't got goes.
 
@@ -91,9 +91,9 @@ impl Ui {
                     Ok(Some(words)) => {
                         *text.borrow_mut() = Some(words);
                         caption.set_text(&if to_phone {
-                            format!("Scan with Radiance Music on the phone (Library → the QR button → Scan a QR). It takes your {} liked songs with their parts, lyrics and covers, but only what it hasn't got.", saved.len())
+                            format!("Scan with Radiance Music on the phone (Settings → Get songs; before 0.5.9, Library → the QR button). It takes your {} liked songs with their parts, lyrics and covers, but only what it hasn't got.", saved.len())
                         } else {
-                            "Scan with Radiance Music on the phone (Library → the QR button → Scan a QR). Its songs come here with their parts, lyrics and covers, but only what this computer hasn't got.".to_string()
+                            "Scan with Radiance Music on the phone (Settings → Get songs; before 0.5.9, Library → the QR button). Its songs come here with their parts, lyrics and covers, but only what this computer hasn't got.".to_string()
                         });
                     }
                     Ok(None) => {

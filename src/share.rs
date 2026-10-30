@@ -1,5 +1,5 @@
 //! Songs to and from a phone by QR code (Radiance Music for Android:
-//! Library → Share songs → Scan a QR), straight over the local network: no
+//! Settings → Get songs), straight over the local network: no
 //! server in between.
 //!
 //! The computer shows the QR and listens; the phone scans it and connects.
