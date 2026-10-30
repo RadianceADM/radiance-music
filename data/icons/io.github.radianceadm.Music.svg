@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <!-- Radiance Music: a setting sun with four sound bars standing in it (drums, bass, other, vocals) -->
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="0.35" y2="1">
+      <stop offset="0" stop-color="#1B3866"/>
+      <stop offset="1" stop-color="#0C1D38"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="64" cy="69.8" r="71.9" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFAE63" stop-opacity="0.45"/>
+      <stop offset="1" stop-color="#FFAE63" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="sun" x1="0" y1="32.7" x2="0" y2="102.3" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFDB94"/>
+      <stop offset="1" stop-color="#F38A35"/>
+    </linearGradient>
+    <linearGradient id="sea" x1="0" y1="87.2" x2="0" y2="105.8" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#0C1D38" stop-opacity="0"/>
+      <stop offset="1" stop-color="#0C1D38"/>
+    </linearGradient>
+    <clipPath id="round">
+      <rect x="6" y="6" width="116" height="116" rx="27"/>
+    </clipPath>
+  </defs>
+  <g clip-path="url(#round)">
+    <rect x="6" y="6" width="116" height="116" fill="url(#tile)"/>
+    <rect x="6" y="6" width="116" height="116" fill="url(#glow)"/>
+    <circle cx="64" cy="67.5" r="34.8" fill="url(#sun)"/>
+    <g stroke="#0C1D38" stroke-width="5.8" stroke-linecap="round">
+      <path d="M50.7 73.3V112.7"/>
+      <path d="M59.6 60.5V112.7"/>
+      <path d="M68.4 67.5V112.7"/>
+      <path d="M77.3 77.9V112.7"/>
+    </g>
+    <rect x="6" y="87.2" width="116" height="34.8" fill="url(#sea)"/>
+  </g>
+</svg>

@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 100 100">
+  <!-- Radiance Music's logo on its navy tile: the R in the middle, the wave m running out to the edge -->
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="35" y2="100" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#1B3866"/>
+      <stop offset="1" stop-color="#0C1D38"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="72" cy="78" r="62" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFAE63" stop-opacity="0.40"/>
+      <stop offset="1" stop-color="#FFAE63" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="leg" x1="50.5" y1="0" x2="90.5" y2="0" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#F5F7FA"/>
+      <stop offset="0.24" stop-color="#FFDB94"/>
+      <stop offset="1" stop-color="#F38A35"/>
+    </linearGradient>
+    <linearGradient id="fade" x1="90.5" y1="71" x2="100.5" y2="61" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#F38A35"/>
+      <stop offset="1" stop-color="#F38A35" stop-opacity="0"/>
+    </linearGradient>
+    <clipPath id="round"><rect width="100" height="100" rx="23.5"/></clipPath>
+  </defs>
+  <g clip-path="url(#round)">
+    <rect width="100" height="100" fill="url(#tile)"/>
+    <rect width="100" height="100" fill="url(#glow)"/>
+    <g fill="none" stroke-width="8.8" stroke-linejoin="round">
+      <path stroke="#F5F7FA" stroke-linecap="round" d="M38 71V29H51.5A10.5 10.5 0 0 1 51.5 50H38"/>
+      <path stroke="url(#leg)" stroke-linecap="round" d="M50.5 50C56.5 51.5 61 59 61 71C62.5467 60 63.4167 52.5 68.25 52.5C73.0833 52.5 73.9533 60 75.5 70.6C77.0467 60 77.9167 52.5 82.75 52.5C87.5833 52.5 88.0667 71 90.5 71"/>
+      <path stroke="url(#fade)" stroke-linecap="butt" d="M90.5 71C94.5 71 97.5 66 100.5 61"/>
+    </g>
+  </g>
+</svg>
