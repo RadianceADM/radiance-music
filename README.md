@@ -105,6 +105,14 @@ anything. Run it again to update. To remove it, delete `~/.local/bin/radiance-mu
 `~/.local/share/applications/io.github.radianceadm.Music.desktop` and
 `~/.local/share/icons/hicolor/scalable/apps/io.github.radianceadm.Music.svg`.
 
+## Windows
+
+`RadianceMusic-Setup.exe` (on [Releases](https://github.com/RadianceADM/radiance-music/releases)) installs
+Radiance Music for you alone (no administrator), with a Start menu entry; its uninstaller leaves
+your songs where they are. Windows 10 or 11, 64-bit. It's new in the open beta: searching,
+playing, lyrics, liking and saving work; splitting songs on Windows comes later. Built on Linux
+(Fedora's mingw64 GTK 4 and GStreamer, with `packaging/windows/pack.sh` and `installer.nsi`).
+
 ## The Flatpak
 
 `RadianceMusic.flatpak` (on [Releases](https://github.com/RadianceADM/radiance-music/releases)) runs on
