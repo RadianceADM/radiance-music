@@ -80,6 +80,8 @@ pub struct Settings {
     pub autoplay: bool,
     /// The firewall lets a phone in for Share Songs with a Phone (done once).
     pub share_firewall_open: bool,
+    /// How to Use It was shown (the first time the app opened).
+    pub guide_seen: bool,
 }
 
 pub const FADE_RANGE: (f64, f64) = (1.0, 12.0);
@@ -111,6 +113,7 @@ pub fn load() -> Settings {
         look: if v["look"].as_str() == Some("black") { "black".into() } else { "stone".into() },
         autoplay: v["autoplay"].as_bool().unwrap_or(true),
         share_firewall_open: v["share_firewall_open"].as_bool().unwrap_or(false),
+        guide_seen: v["guide_seen"].as_bool().unwrap_or(false),
         split: (|| {
             Some(SplitServer {
                 host: text("host").filter(|h| !h.is_empty())?,
@@ -129,7 +132,7 @@ pub fn save(s: &Settings) {
     if let Some(dir) = p.parent() {
         let _ = fs::create_dir_all(dir);
     }
-    let mut v = json!({ "transition": s.transition.id(), "fade": s.fade, "volume": s.volume, "look": s.look, "autoplay": s.autoplay, "share_firewall_open": s.share_firewall_open });
+    let mut v = json!({ "transition": s.transition.id(), "fade": s.fade, "volume": s.volume, "look": s.look, "autoplay": s.autoplay, "share_firewall_open": s.share_firewall_open, "guide_seen": s.guide_seen });
     if let Some(l) = &s.local_split {
         v["local_split"] = json!({ "python": l.python, "script": l.script, "threads": l.threads });
     }

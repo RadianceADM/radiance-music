@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.7.9 — 2026-10-31
+
+- **How to Use It, the first time the app opens:** five cards to page through (search, like it
+  and it's saved, split and mix, sing along, on your phone too), a few plain words each, as
+  the phone app's. Skip any time; the main menu's How to Use It shows them again.
+
 ## v0.7.8 — 2026-10-31
 
 - Share Songs with a Phone says where the phone's side is now: Radiance Music for Android

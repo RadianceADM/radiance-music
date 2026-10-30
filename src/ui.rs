@@ -20,6 +20,7 @@ mod home;
 mod sharing;
 mod splash;
 mod splitting;
+mod guide;
 use backdrop::Backdrop;
 use lens::Lens;
 
@@ -1609,6 +1610,15 @@ impl Ui {
         unsaved.into_iter().for_each(|t| self.save_liked(t));
         self.start_media_controls();
         self.home_later_parts(0); // what changed while it was being built
+        // how to use it, the first time the app opens (once the start's dark has opened)
+        if !self.settings.borrow().guide_seen && std::env::var_os("RADIANCE_SHOT").is_none() {
+            let me = Rc::downgrade(self);
+            glib::timeout_add_local_once(Duration::from_millis(1800), move || {
+                if let Some(me) = me.upgrade() {
+                    me.show_guide();
+                }
+            });
+        }
         let steps: Vec<String> = took.iter().map(|(what, ms)| format!("{what} {ms} ms")).collect();
         let line = format!("started Radiance Music {} in {} ms{}", env!("CARGO_PKG_VERSION"), began.elapsed().as_millis(), if steps.is_empty() { String::new() } else { format!(" ({})", steps.join(", ")) });
         if std::env::var_os("RADIANCE_SHOT").is_some() {
@@ -2219,6 +2229,7 @@ impl Ui {
         app.append(Some("Share Songs with a Phone…"), Some("win.share-songs"));
         app.append(Some("Storage and Folder"), Some("win.storage"));
         app.append(Some("Open the Music Folder"), Some("win.music-folder"));
+        app.append(Some("How to Use It"), Some("win.guide"));
         app.append(Some("About Radiance Music"), Some("win.about"));
         menu.append_section(None, &app);
         let leave = gio::Menu::new();
@@ -2349,6 +2360,14 @@ impl Ui {
         if let Some(app) = self.window.application() {
             app.set_accels_for_action("win.quit", &["<Control>q"]);
         }
+        let guide = gio::SimpleAction::new("guide", None);
+        let me = Rc::downgrade(self);
+        guide.connect_activate(move |_, _| {
+            if let Some(me) = me.upgrade() {
+                me.show_guide();
+            }
+        });
+        self.window.add_action(&guide);
         let about = gio::SimpleAction::new("about", None);
         let me = Rc::downgrade(self);
         about.connect_activate(move |_, _| {
