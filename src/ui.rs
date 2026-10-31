@@ -1444,7 +1444,7 @@ impl Ui {
             }
             // closed while music plays: it plays on (the media controls, or opening the app, bring it
             // back; on Windows the controls are its own, and opening it again reaches this copy
-            // through gdbus.exe, shipped beside GIO)
+            // through one_copy in main.rs)
             let playing = u.player.borrow().as_ref().is_some_and(|p| p.playing());
             if playing && !u.quitting.get() && std::env::var_os("RADIANCE_SHOT").is_none() {
                 w.set_visible(false);
@@ -2432,7 +2432,8 @@ impl Ui {
     }
 
     fn connect(self: &Rc<Self>) {
-        // the internet: GIO says when it comes and goes (Linux and Windows alike)
+        // the internet: GIO says when it comes and goes (Linux and Windows alike); an empty
+        // search or a song that won't load also asks for itself (net::reachable)
         let monitor = gio::NetworkMonitor::default();
         self.set_online(monitor.is_network_available(), false);
         let me = Rc::downgrade(self);

@@ -2,6 +2,9 @@
 
 ## v0.7.12 — 2026-10-31
 
+- **Sound on Windows:** 0.7.11's player asked for Linux's sound output, so on Windows it
+  couldn't play a song at all. It plays through Windows' own (WASAPI) now (checked on a real
+  Windows 11).
 - **Windows splits songs too**, as Linux does: drums, bass, other and vocals, made on your PC,
   and every word of the lyrics timed from the vocals (MMS). Everything comes inside the
   installer (Python, Demucs, the word-timing model), so there's nothing to download or set up:

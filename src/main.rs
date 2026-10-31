@@ -171,7 +171,10 @@ fn probe(query: &str) -> glib::ExitCode {
 fn probe_decks(a: &str, b: &str) -> glib::ExitCode {
     use std::rc::Rc;
     use std::time::Instant;
-    std::env::set_var("RADIANCE_SILENT", "1");
+    // RADIANCE_LOUD=1: through the real sound output (the Windows VM's goes nowhere), not silent
+    if std::env::var_os("RADIANCE_LOUD").is_none() {
+        std::env::set_var("RADIANCE_SILENT", "1");
+    }
     let main = glib::MainLoop::new(None, false);
     let player = Rc::new(player::Player::new(|_| {}).expect("player"));
     let uri = |f: &str| glib::filename_to_uri(f, None).map(|u| u.to_string()).unwrap_or_default();
@@ -724,6 +727,71 @@ fn windows_paths() {
     }
 }
 
+/// Windows has no D-Bus, so GApplication can't tell the app is already running (GIO's own way
+/// keeps a gdbus.exe running beside it as a D-Bus for the session). One copy, our own way: the
+/// first listens on a local port (saved in the data folder); a second asks it to show its
+/// window, and quits. So closing the window while music plays keeps it playing, as on Linux:
+/// opening the app again brings the window back.
+#[cfg(windows)]
+mod one_copy {
+    use std::io::{BufRead, BufReader, Write};
+    use std::net::{TcpListener, TcpStream};
+    use std::time::Duration;
+
+    use gtk::glib;
+
+    const ASK: &str = "radiance-music show";
+    const SHOWN: &str = "radiance-music shown";
+
+    fn port_file() -> std::path::PathBuf {
+        glib::user_data_dir().join("radiance-music").join("running.port")
+    }
+
+    /// Another copy runs and was asked to show its window (then this one quits).
+    pub fn ask_the_other() -> bool {
+        let Some(port) = std::fs::read_to_string(port_file()).ok().and_then(|s| s.trim().parse::<u16>().ok()) else { return false };
+        let Ok(mut s) = TcpStream::connect_timeout(&([127, 0, 0, 1], port).into(), Duration::from_millis(500)) else { return false };
+        let _ = s.set_read_timeout(Some(Duration::from_secs(3)));
+        if s.write_all(format!("{ASK}\n").as_bytes()).is_err() {
+            return false;
+        }
+        let mut answer = String::new();
+        BufReader::new(s).read_line(&mut answer).is_ok() && answer.trim() == SHOWN
+    }
+
+    /// This is the copy: the next ones are heard (`show` runs on the window's thread).
+    pub fn listen(show: fn()) {
+        let Ok(listener) = TcpListener::bind("127.0.0.1:0") else { return };
+        let Ok(addr) = listener.local_addr() else { return };
+        let file = port_file();
+        if let Some(d) = file.parent() {
+            let _ = std::fs::create_dir_all(d);
+        }
+        let _ = std::fs::write(&file, addr.port().to_string());
+        let _ = std::thread::Builder::new().name("one-copy".into()).spawn(move || {
+            for conn in listener.incoming().flatten() {
+                let _ = conn.set_read_timeout(Some(Duration::from_secs(2)));
+                let mut line = String::new();
+                if BufReader::new(&conn).read_line(&mut line).is_ok() && line.trim() == ASK {
+                    let _ = (&conn).write_all(format!("{SHOWN}\n").as_bytes());
+                    glib::MainContext::default().invoke(show);
+                }
+            }
+        });
+    }
+}
+
+/// The app's window, shown again (asked by a second copy, see one_copy).
+#[cfg(windows)]
+fn show_window() {
+    if let Some(app) = gtk::gio::Application::default().and_downcast::<gtk::Application>() {
+        if let Some(w) = app.windows().first() {
+            w.set_visible(true);
+            w.present();
+        }
+    }
+}
+
 fn main() -> glib::ExitCode {
     #[cfg(windows)]
     windows_paths();
@@ -861,6 +929,14 @@ fn main() -> glib::ExitCode {
     // quits (design checks). RADIANCE_SHOT_PLAY=1 plays the last song on, with
     // no sound at all; it never saves where you are and never splits.
     let shot = std::env::var("RADIANCE_SHOT").ok();
+    // Windows: opened again, the copy that runs shows its window and this one goes
+    #[cfg(windows)]
+    if shot.is_none() {
+        if one_copy::ask_the_other() {
+            return glib::ExitCode::SUCCESS;
+        }
+        one_copy::listen(show_window);
+    }
     let shot_play = shot.is_some() && std::env::var_os("RADIANCE_SHOT_PLAY").is_some();
     if shot_play {
         std::env::set_var("RADIANCE_SILENT", "1");

@@ -69,23 +69,35 @@ fn retire(e: gst::Element) {
     }
 }
 
+/// The sound output: PipeWire's PulseAudio side on Linux, Windows' own (WASAPI) there.
+/// (Windows 0.7.11 asked for pulsesink too, and had no sound at all: real Windows 11 VM.)
+const SOUND_OUT: &str = if cfg!(windows) { "wasapisink" } else { "pulsesink" };
+
+/// The stream named "Radiance Music" (music, with its icon), for the desktop's sound settings
+/// and Speaker EQ: PulseAudio's output only (the others have no such properties).
+fn name_stream(sink: &gst::Element) {
+    if sink.find_property("stream-properties").is_none() {
+        return;
+    }
+    let props = gst::Structure::builder("props")
+        .field("media.role", "music")
+        .field("application.name", "Radiance Music")
+        .field("application.icon_name", "io.github.radianceadm.Music")
+        .build();
+    sink.set_property("stream-properties", &props);
+    sink.set_property("client-name", "Radiance Music");
+}
+
 /// A deck's player, its sound output, its own volume and its messages.
 fn build(i: usize, active: Rc<Cell<usize>>, decks: Rc<RefCell<Vec<Rc<Deck>>>>, on_event: Rc<dyn Fn(Event)>) -> Result<(gst::Element, gst::Element, gst::Element, gst::bus::BusWatchGuard), String> {
         let playbin = gst::ElementFactory::make("playbin3").build().map_err(|e| e.to_string())?;
         // RADIANCE_SILENT: no sound at all (tests)
         let silent = std::env::var_os("RADIANCE_SILENT").is_some();
-        let sink = gst::ElementFactory::make(if silent { "fakesink" } else { "pulsesink" }).build().map_err(|e| e.to_string())?;
+        let sink = gst::ElementFactory::make(if silent { "fakesink" } else { SOUND_OUT }).build().map_err(|e| e.to_string())?;
         if silent {
             sink.set_property("sync", true);
-        }
-        let props = gst::Structure::builder("props")
-            .field("media.role", "music")
-            .field("application.name", "Radiance Music")
-            .field("application.icon_name", "io.github.radianceadm.Music")
-            .build();
-        if !silent {
-            sink.set_property("stream-properties", &props);
-            sink.set_property("client-name", "Radiance Music");
+        } else {
+            name_stream(&sink);
         }
         // the deck's own volume, then the sound output, as the player's audio sink
         let level = gst::ElementFactory::make("volume").name("level").build().map_err(|e| e.to_string())?;
@@ -744,7 +756,7 @@ impl Player {
             "audiomixer name=mix ! audioconvert ! audio/x-raw,format=F32LE{rate} ! identity name=keeper ! volume name=master ! audioconvert ! {}{} name=sound ",
             if record.is_some() { "audio/x-raw,format=F32LE,channels=2 ! " } else { "" },
             // recording: in real time, its samples go into the file (below)
-            if record.is_some() || silent { "fakesink sync=true" } else { "pulsesink" }
+            if record.is_some() || silent { "fakesink sync=true" } else { SOUND_OUT }
         );
         if let Some(uri) = whole {
             desc += &format!(" uridecodebin name=wholefile caps=audio/x-raw uri=\"{uri}\" ! audioconvert ! audioresample ! audio/x-raw,format=F32LE ! volume name=whole volume={w:.3} ! mix.");
@@ -785,13 +797,7 @@ impl Player {
             }
         }
         if let (false, None, Some(out)) = (silent, &record, pipeline.by_name("sound")) {
-            let props = gst::Structure::builder("props")
-                .field("media.role", "music")
-                .field("application.name", "Radiance Music")
-                .field("application.icon_name", "io.github.radianceadm.Music")
-                .build();
-            out.set_property("stream-properties", &props);
-            out.set_property("client-name", "Radiance Music");
+            name_stream(&out);
         }
         let on_event = self.on_event.clone();
         let start = Cell::new(start);
@@ -916,7 +922,7 @@ impl Player {
     pub fn load_video(&self, picture: &str, sound: &str) -> Result<gtk::gdk::Paintable, String> {
         self.stop();
         let silent = std::env::var_os("RADIANCE_SILENT").is_some();
-        let out = if silent { "fakesink sync=true" } else { "pulsesink" };
+        let out = if silent { "fakesink sync=true" } else { SOUND_OUT };
         // a saved video: one file, picture and sound together; else two streams
         let desc = if picture == sound {
             format!(
@@ -934,13 +940,7 @@ impl Player {
         let volume = pipeline.by_name("volume").ok_or("no volume")?;
         volume.set_property("volume", self.master.get());
         if let (false, Some(out)) = (silent, pipeline.by_name("sound")) {
-            let props = gst::Structure::builder("props")
-                .field("media.role", "music")
-                .field("application.name", "Radiance Music")
-                .field("application.icon_name", "io.github.radianceadm.Music")
-                .build();
-            out.set_property("stream-properties", &props);
-            out.set_property("client-name", "Radiance Music");
+            name_stream(&out);
         }
         let on_event = self.on_event.clone();
         let guard = pipeline
