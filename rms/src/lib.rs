@@ -14,6 +14,7 @@
 
 pub mod auth;
 pub mod db;
+pub mod events;
 pub mod library;
 pub mod lyrics;
 pub mod media;
@@ -90,6 +91,10 @@ pub struct App {
     pub db: Mutex<rusqlite::Connection>,
     pub splitter: split::Splitter,
     pub party: party::Party,
+    /// Change events for the apps (/api/events).
+    pub events: events::Events,
+    /// The server's own id (db::server_id).
+    pub id: String,
 }
 
 pub type Shared = Arc<App>;
@@ -98,6 +103,10 @@ impl App {
     /// The database, for one short step (never held across an await).
     pub fn db(&self) -> std::sync::MutexGuard<'_, rusqlite::Connection> {
         self.db.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    pub fn server_id(&self) -> &str {
+        &self.id
     }
 
     /// "Bassi's server" (owner's ruling: the owner's name from the setup page); None before setup.
@@ -169,7 +178,8 @@ pub fn open(mut cfg: Config) -> Result<Shared, String> {
     if db::owner(&conn).is_none() {
         cfg.setup_key = Some(setup_key(&cfg)?);
     }
-    let app = Arc::new(App { cfg, db: Mutex::new(conn), splitter: split::Splitter::default(), party: party::Party::default() });
+    let id = db::server_id(&conn)?;
+    let app = Arc::new(App { cfg, db: Mutex::new(conn), splitter: split::Splitter::default(), party: party::Party::default(), events: events::Events::default(), id });
     // a crashed upload's leftovers
     if let Ok(dir) = std::fs::read_dir(app.cfg.work()) {
         for e in dir.flatten() {
@@ -231,6 +241,9 @@ pub fn router(app: Shared) -> Router {
         // the library
         .route("/api/library", get(library::list))
         .route("/api/songs", post(library::upload).layer(DefaultBodyLimit::max(library::MOST_UPLOAD as usize)))
+        .route("/api/songs/{id}", get(library::one))
+        .route("/api/songs/{id}/parts", post(library::upload_parts).layer(DefaultBodyLimit::max(library::MOST_UPLOAD as usize)))
+        .route("/api/events", get(events::ws))
         .route("/files/{*name}", get(library::file))
         // the split queue
         .route("/api/split", post(split::ask))

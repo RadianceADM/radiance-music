@@ -100,8 +100,9 @@ On your server's page (the address you opened at setup, in the same browser):
 
 1. **Invite a friend:** type their name, then click **Make an invite**. You get a link and a QR code.
 2. Send them the link. In Radiance Music they go to **Settings → Servers → Join a server**, then paste
-   the link or scan the code. If they don't have the app yet, the link's page lets them listen to
-   parties in a browser.
+   the link or scan the code. On a device that has the app, the link's page also has an
+   **Open in Radiance Music** button that joins straight away. If they don't have the app yet, the
+   page lets them listen to parties in a browser.
 3. Each link works **once**, on one device, and **expires after 7 days** if it isn't used (the list of
    invites shows how long each has left). For a friend's second device, or if their link expired, click
    **New link** next to their name. For your own phone and computer, click **Add one of my devices**.
@@ -192,7 +193,7 @@ party's WebSocket also accept `?t=TOKEN`, because players and browsers can't set
 
 | Call | What it does |
 |---|---|
-| `GET /api/status` | The server's name, whether it's set up, the splitter's and the models' state (no token needed) |
+| `GET /api/status` | The server's name and `id` (made at its first start and never changed, so an app knows it's the same server at a new address), whether it's set up, the splitter's and the models' state (no token needed) |
 | `POST /api/setup {name, key}` | The setup page's form (the setup key is required): makes the owner, returns this browser's token and the owner's first invite |
 | `POST /api/join {code, device_name}` | Joins with an invite's one-time code, and returns the device's `token` |
 | `GET /api/me` | Who this device is (person, role, device, server name) and what it may do: `can {add, split, host}` |
@@ -202,7 +203,9 @@ party's WebSocket also accept `?t=TOKEN`, because players and browsers can't set
 | `PATCH /api/people/ID {can_add, can_split, can_host}` | Owner: a friend's switches. With one off, that friend gets a plain 403 |
 | `POST /api/people/ID/revoke` | Owner: removes a friend (all their devices) |
 | `POST /api/devices/ID/revoke` | Removes a device (the owner any device, a friend only their own) |
-| `GET /api/library` | Every song: `artist`, `title`, `duration_ms`, `split`, `parts`, `word_times`, `added_by`, and `files` by kind (song, drums, bass, other, vocals, music, lyrics, cover, video; each with `name`, `size`, `url`) |
+| `GET /api/library?q=&offset=&limit=` | The songs (no parameters: all of them; `q`: every word in the artist, title or file name; `total`: how many match). Each song: `artist`, `title`, `duration_ms`, `split`, `parts`, `word_times`, `added_by`, and `files` by kind (song, drums, bass, other, vocals, music, lyrics, cover, video; each with `name`, `size`, `url`) |
+| `GET /api/songs/ID` | One song, as one entry of `/api/library` |
+| `POST /api/songs/ID/parts` (multipart) | A song split on a phone or computer brings its parts: `drums`, `bass`, `other`, `vocals` (all four, with what the server has), `music`, and optional `lyrics`. Parts the server has are skipped. `replace=1` (query or field; the owner only) puts the new ones in their place. Needs "Can add songs" |
 | `GET /files/NAME` | Any library file, with HTTP Range (seeking) |
 | `POST /api/songs` (multipart) | `song` file, plus optional `cover`, `lyrics`, `video`, `artist`, `title`, `seconds`. If the song is already there (same artist and title), it's skipped |
 | `POST /api/split {song}` | Queues a song for splitting (`song`: its id, or its file name) |
@@ -214,6 +217,7 @@ party's WebSocket also accept `?t=TOKEN`, because players and browsers can't set
 | `POST /api/party/control {action}` | `play`, `pause`, `skip`, `seek {position_ms}`, `reorder {entry, to}`, `remove {entry}`: the host, or everyone if allowed. `allow {everyone}`: the host only |
 | `POST /api/party/react {emoji}` | A reaction everyone sees |
 | `POST /api/party/end` | Ends the party (the host, or the server's owner) |
+| `GET /api/events` | WebSocket (`?t=` works) instead of polling: `{"type":"hello","server":{id,name}}`, then `{"type":"library"}` when songs or parts change, `{"type":"queue", …the queue}` when the split queue changes (at most twice a second while splitting), `{"type":"me"}` when your switches change or you're removed (then it closes) |
 | `GET /api/party/ws` | WebSocket: the full state on every change; send `{"type":"time","client_ms":N}` to get `{"type":"time","client_ms":N,"server_ms":M}` back |
 
 **Playing in time.** A playing party song has `started_at_server_ms`: the server time at which its position

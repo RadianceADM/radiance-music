@@ -34,6 +34,8 @@ pub async fn status(State(app): State<Shared>, headers: HeaderMap) -> Json<Value
     let host = base.split("://").nth(1).unwrap_or("").to_string();
     Json(json!({
         "server": name,
+        // the server's own id: the same after its address changes (owner, 2026-11-01)
+        "id": app.server_id(),
         "needs_setup": name.is_none(),
         // always, before setup (owner, 2026-11-01)
         "setup_key_needed": name.is_none(),
@@ -98,7 +100,7 @@ pub async fn setup(State(app): State<Shared>, headers: HeaderMap, Json(body): Js
             "token": token,
             "person": { "id": person, "name": name, "role": "owner" },
             "device": { "id": device, "name": device_name },
-            "server": { "name": crate::server_name(&name) },
+            "server": { "name": crate::server_name(&name), "id": app.server_id() },
             "invite": invite_json(&app, &headers, &code, person, &name, "owner", now),
         })),
     ))
@@ -177,7 +179,7 @@ pub async fn join(State(app): State<Shared>, Json(body): Json<JoinBody>) -> ApiR
             "token": token,
             "person": { "id": person, "name": name, "role": role },
             "device": { "id": device, "name": device_name },
-            "server": { "name": app.server_name() },
+            "server": { "name": app.server_name(), "id": app.server_id() },
         })),
     ))
 }
@@ -188,7 +190,7 @@ pub async fn me(State(app): State<Shared>, who: Who) -> Json<Value> {
     Json(json!({
         "person": { "id": who.person, "name": who.name, "role": if who.owner { "owner" } else { "friend" } },
         "device": { "id": who.device, "name": device_name },
-        "server": { "name": app.server_name() },
+        "server": { "name": app.server_name(), "id": app.server_id() },
         // what the owner lets this person do (the owner: everything)
         "can": { "add": who.can_add, "split": who.can_split, "host": who.can_host },
     }))
@@ -319,6 +321,8 @@ pub async fn switches(State(app): State<Shared>, Owner(_): Owner, Path(id): Path
         }
     }
     let (name, add, split, host): (String, bool, bool, bool) = conn.query_row("SELECT name, can_add, can_split, can_host FROM people WHERE id = ?1", params![id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?;
+    drop(conn);
+    app.events.me(id);
     Ok(Json(json!({ "id": id, "name": name, "can": { "add": add, "split": split, "host": host } })))
 }
 
@@ -340,14 +344,15 @@ pub async fn revoke_person(State(app): State<Shared>, Owner(_): Owner, Path(id):
         tx.execute("UPDATE invites SET revoked_ms = ?1 WHERE person_id = ?2 AND used_ms IS NULL AND revoked_ms IS NULL", params![now, id])?;
         tx.commit()?;
     }
-    // out of the party too
+    // out of the party too, and told on the events line
     app.party.recheck_listeners(&app);
+    app.events.me(id);
     Ok(Json(json!({ "ok": true })))
 }
 
 /// A device stops working: the owner removes any; a friend, their own (a lost phone).
 pub async fn revoke_device(State(app): State<Shared>, who: Who, Path(id): Path<i64>) -> ApiResult<Json<Value>> {
-    {
+    let person = {
         let conn = app.db();
         let found: Option<(i64, String)> = conn.query_row("SELECT d.person_id, p.role FROM devices d JOIN people p ON p.id = d.person_id WHERE d.id = ?1", params![id], |r| Ok((r.get(0)?, r.get(1)?))).optional()?;
         let Some((person, role)) = found else { return Err(not_found("There's no such device.")) };
@@ -361,7 +366,9 @@ pub async fn revoke_device(State(app): State<Shared>, who: Who, Path(id): Path<i
             }
         }
         conn.execute("UPDATE devices SET revoked_ms = ?1 WHERE id = ?2 AND revoked_ms IS NULL", params![now_ms(), id])?;
-    }
+        person
+    };
     app.party.recheck_listeners(&app);
+    app.events.me(person);
     Ok(Json(json!({ "ok": true })))
 }

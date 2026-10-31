@@ -58,6 +58,14 @@ pub fn qr_svg(text: &str) -> String {
     }
 }
 
+/// What encodeURIComponent leaves as it is.
+const URI_COMPONENT: &percent_encoding::AsciiSet = &percent_encoding::NON_ALPHANUMERIC.remove(b'-').remove(b'_').remove(b'.').remove(b'!').remove(b'~').remove(b'*').remove(b'\'').remove(b'(').remove(b')');
+
+/// The link that opens an invite in the apps (they register radiancemusic://).
+pub fn app_link(invite: &str) -> String {
+    format!("radiancemusic://join?u={}", percent_encoding::utf8_percent_encode(invite, URI_COMPONENT))
+}
+
 pub fn escape(s: &str) -> String {
     s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;").replace('\'', "&#39;")
 }
@@ -100,6 +108,7 @@ pub async fn join_page(State(app): State<Shared>, headers: HeaderMap, Path(code)
         .replace("{{WHO}}", &escape(&who))
         .replace("{{PROBLEM}}", &escape(problem))
         .replace("{{CODE}}", &escape(&auth::show_code(&plain)))
+        .replace("{{APPLINK}}", &escape(&app_link(&link)))
         .replace("{{LINK}}", &escape(&link))
         .replace("{{QR}}", &if state == "ok" { qr_svg(&link) } else { String::new() });
     let status = if state == "ok" { StatusCode::OK } else { StatusCode::NOT_FOUND };

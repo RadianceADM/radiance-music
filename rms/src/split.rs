@@ -395,6 +395,7 @@ fn set_job(app: &Shared, job: i64, state: &str, progress: f64, note: Option<&str
          WHERE id = ?5 AND state != 'removed'",
         params![state, progress, note, now, job],
     );
+    app.events.queue();
 }
 
 async fn run(app: &Shared, job: i64, song: i64) {
@@ -463,6 +464,7 @@ async fn split_one(app: &Shared, job: i64, song_id: i64, work: &Path, stop: &Not
         }
         put(&from, &dir.join(format!("{stem}.{name}"))).map_err(|e| format!("couldn't keep {name}: {e}"))?;
     }
+    app.events.library();
     let mut note = "Split into drums, bass, other and vocals".to_string();
     // 2. each word's time, from its Vocals part
     match plan {
@@ -482,6 +484,7 @@ async fn split_one(app: &Shared, job: i64, song_id: i64, work: &Path, stop: &Not
                         let tmp = work.join("lyrics.yaml");
                         std::fs::write(&tmp, kept).map_err(|e| e.to_string())?;
                         put(&tmp, &dir.join(format!("{stem}.lyrics.yaml"))).map_err(|e| e.to_string())?;
+                        app.events.library();
                         note += "; every word is timed.";
                     }
                     _ => note += "; the word timing found no words.",
@@ -605,6 +608,7 @@ pub async fn ask(State(app): State<Shared>, who: Who, Json(body): Json<AskBody>)
     if queued {
         crate::log(&format!("{} queued {} for splitting", who.name, song.file));
         app.splitter.wake.notify_one();
+        app.events.queue();
     }
     let ahead = turns(&app.db())?.iter().position(|(job, _)| *job == row.id);
     let status = if queued { StatusCode::CREATED } else { StatusCode::OK };
@@ -615,6 +619,11 @@ pub async fn ask(State(app): State<Shared>, who: Who, Json(body): Json<AskBody>)
 /// whose turn is next), the last day's finished ones, and the splitter's state
 /// in plain words.
 pub async fn queue(State(app): State<Shared>, _who: Who) -> ApiResult<Json<Value>> {
+    queue_json(&app).map(Json)
+}
+
+/// The queue as GET /api/queue (and the events line) has it.
+pub fn queue_json(app: &Shared) -> Result<Value, crate::ApiError> {
     let (mut rows, order): (Vec<JobRow>, Vec<(i64, Option<i64>)>) = {
         let conn = app.db();
         let order = turns(&conn)?;
@@ -634,9 +643,9 @@ pub async fn queue(State(app): State<Shared>, _who: Who) -> ApiResult<Json<Value
         "waiting" => (1, place(r.id).unwrap_or(usize::MAX) as i64),
         _ => (2, -r.finished_ms.unwrap_or(0)),
     });
-    let jobs: Vec<Value> = rows.iter().map(|r| job_json(&app, r, if r.state == "waiting" { place(r.id) } else { None })).collect();
+    let jobs: Vec<Value> = rows.iter().map(|r| job_json(app, r, if r.state == "waiting" { place(r.id) } else { None })).collect();
     let next = order.first().and_then(|(job, _)| rows.iter().find(|r| r.id == *job)).and_then(|r| r.asked_by.as_ref()).map(|(id, name)| json!({ "id": id, "name": name }));
-    Ok(Json(json!({ "splitter": app.splitter.status_json(), "models": app.splitter.models_json(), "threads": app.cfg.threads, "next_turn": next, "jobs": jobs })))
+    Ok(json!({ "splitter": app.splitter.status_json(), "models": app.splitter.models_json(), "threads": app.cfg.threads, "next_turn": next, "jobs": jobs }))
 }
 
 /// DELETE /api/queue/ID: a song comes out of the queue (stopped, if it's being
@@ -657,5 +666,6 @@ pub async fn remove(State(app): State<Shared>, who: Who, UrlPath(id): UrlPath<i6
         }
     }
     app.splitter.wake.notify_one();
+    app.events.queue();
     Ok(Json(json!({ "ok": true })))
 }

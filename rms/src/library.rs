@@ -16,17 +16,18 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use axum::body::Body;
-use axum::extract::{Multipart, Path as UrlPath, Request, State};
+use axum::extract::{Multipart, Path as UrlPath, Query, Request, State};
 use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use rusqlite::params;
+use serde::Deserialize;
 use serde_json::{json, Value};
 use tower::ServiceExt;
 
 use crate::auth::{Listener, Who};
 use crate::db::{self, Song};
-use crate::{bad, broken, not_found, now_ms, ApiError, ApiResult, Shared};
+use crate::{bad, broken, forbidden, not_found, now_ms, ApiError, ApiResult, Shared};
 
 /// A song's own file.
 pub const SONG_EXTS: [&str; 3] = ["opus", "flac", "m4a"];
@@ -43,6 +44,7 @@ const MOST_SONG: u64 = 1 << 30;
 const MOST_VIDEO: u64 = 4 << 30;
 const MOST_COVER: u64 = 20 << 20;
 const MOST_LYRICS: u64 = 2 << 20;
+const MOST_PART: u64 = 1 << 30;
 
 /// A name as the apps file it (track.rs file_name): no characters a file
 /// system refuses, at most 150 characters.
@@ -158,6 +160,7 @@ pub fn sync(app: &Shared) -> Result<Vec<(Song, Found)>, ApiError> {
         .filter_map(|f| known.get(&f.file).filter(|(_, d, _)| d.is_none()).map(|(id, ..)| (*id, crate::media::duration_ms(&app.cfg.library().join(&f.file)))))
         .filter(|(_, d)| d.is_some())
         .collect();
+    let mut changed = !new.is_empty();
     {
         let mut conn = app.db();
         let tx = conn.transaction()?;
@@ -175,9 +178,14 @@ pub fn sync(app: &Shared) -> Result<Vec<(Song, Found)>, ApiError> {
             let now_gone = !here.contains(file.as_str());
             if now_gone != *gone {
                 tx.execute("UPDATE songs SET gone = ?1 WHERE id = ?2", params![now_gone, id])?;
+                changed = true;
             }
         }
         tx.commit()?;
+    }
+    // songs put in or taken out of the folder by hand
+    if changed {
+        app.events.library();
     }
     let songs = db::songs(&app.db())?;
     let mut by_file: HashMap<String, Found> = found.into_iter().map(|f| (f.file.clone(), f)).collect();
@@ -224,13 +232,44 @@ pub fn song_json(dir: &Path, s: &Song, f: &Found) -> Value {
     })
 }
 
-/// GET /api/library: every song, with its parts, lyrics, cover and video, and who added it.
-pub async fn list(State(app): State<Shared>, _who: Who) -> ApiResult<Json<Value>> {
+#[derive(Deserialize, Default)]
+pub struct ListQuery {
+    #[serde(default)]
+    q: Option<String>,
+    #[serde(default)]
+    offset: Option<usize>,
+    #[serde(default)]
+    limit: Option<usize>,
+}
+
+/// A song matches a search when every word of it is in its artist, title or file name.
+fn matches(s: &Song, words: &[String]) -> bool {
+    let hay = format!("{} {} {}", s.artist, s.title, s.file).to_lowercase();
+    words.iter().all(|w| hay.contains(w.as_str()))
+}
+
+/// GET /api/library?q=&offset=&limit=: the songs, with their parts, lyrics,
+/// cover and video, and who added them. No parameters: every song. `total`:
+/// how many match (all of them, without q).
+pub async fn list(State(app): State<Shared>, _who: Who, Query(p): Query<ListQuery>) -> ApiResult<Json<Value>> {
     let a = app.clone();
     let songs = tokio::task::spawn_blocking(move || sync(&a)).await.map_err(|e| broken(e.to_string()))??;
     let dir = app.cfg.library();
-    let list: Vec<Value> = songs.iter().map(|(s, f)| song_json(&dir, s, f)).collect();
-    Ok(Json(json!({ "server": app.server_name(), "count": list.len(), "songs": list })))
+    let words: Vec<String> = p.q.as_deref().unwrap_or("").split_whitespace().map(str::to_lowercase).collect();
+    let matched: Vec<&(Song, Found)> = songs.iter().filter(|(s, _)| matches(s, &words)).collect();
+    let total = matched.len();
+    let offset = p.offset.unwrap_or(0).min(total);
+    let list: Vec<Value> = matched[offset..].iter().take(p.limit.unwrap_or(usize::MAX)).map(|(s, f)| song_json(&dir, s, f)).collect();
+    Ok(Json(json!({ "server": app.server_name(), "total": total, "offset": offset, "count": list.len(), "songs": list })))
+}
+
+/// GET /api/songs/ID: one song, as one entry of /api/library.
+pub async fn one(State(app): State<Shared>, _who: Who, UrlPath(id): UrlPath<i64>) -> ApiResult<Json<Value>> {
+    let song = db::song(&app.db(), id)?.ok_or_else(|| not_found("That song isn't in the library."))?;
+    let dir = app.cfg.library();
+    let (d, file) = (dir.clone(), song.file.clone());
+    let f = tokio::task::spawn_blocking(move || found(&d, &file)).await.ok().flatten().ok_or_else(|| not_found("That song's file isn't in the library anymore."))?;
+    Ok(Json(song_json(&dir, &song, &f)))
 }
 
 fn mime_for(name: &str) -> mime::Mime {
@@ -409,8 +448,118 @@ pub async fn upload(State(app): State<Shared>, who: Who, mut form: Multipart) ->
     if !skipped {
         crate::log(&format!("{} added {stem}", who.name));
     }
+    if !skipped || !added.is_empty() {
+        app.events.library();
+    }
     let status = if skipped { StatusCode::OK } else { StatusCode::CREATED };
     Ok((status, Json(json!({ "added": !skipped, "skipped": skipped, "extras": added, "song": song }))))
+}
+
+#[derive(Deserialize, Default)]
+pub struct PartsQuery {
+    #[serde(default)]
+    replace: Option<String>,
+}
+
+fn yes(v: &str) -> bool {
+    matches!(v.trim(), "1" | "true" | "yes")
+}
+
+/// POST /api/songs/ID/parts (multipart): a song split on a phone or computer
+/// brings its parts to the server (drums, bass, other, vocals, and music), and
+/// maybe its lyrics. Parts the server has are skipped; `replace=1` (the owner
+/// only) puts the new ones in their place. The same switch as adding songs.
+pub async fn upload_parts(State(app): State<Shared>, who: Who, UrlPath(id): UrlPath<i64>, Query(q): Query<PartsQuery>, mut form: Multipart) -> ApiResult<(StatusCode, Json<Value>)> {
+    if !who.can_add {
+        return Err(crate::auth::switched_off(&app, "adding songs"));
+    }
+    let song = db::song(&app.db(), id)?.ok_or_else(|| not_found("That song isn't in the library."))?;
+    let tmp = Upload(app.cfg.work().join(format!("upload-{}", &crate::auth::new_token()[..16])));
+    fs::create_dir_all(&tmp.0).map_err(|e| broken(e.to_string()))?;
+    let mut replace = q.replace.as_deref().is_some_and(yes);
+    // part → (its extension, where it waits)
+    let mut parts: Vec<(String, String, PathBuf)> = vec![];
+    let mut lyrics: Option<(String, PathBuf)> = None;
+    while let Some(mut field) = form.next_field().await.map_err(|e| bad(format!("The upload didn't come through: {e}")))? {
+        let name = field.name().unwrap_or("").to_string();
+        if PARTS.contains(&name.as_str()) {
+            let original = field.file_name().unwrap_or("").to_lowercase();
+            let ext = split_ext(&original).map(|(_, e)| e).unwrap_or_default();
+            if !PART_EXTS.contains(&ext.as_str()) {
+                return Err(bad("Parts come as .ogg, .flac or .m4a files (as the splitter makes them)."));
+            }
+            let to = tmp.0.join(&name);
+            if save_field(&mut field, &to, MOST_PART, &format!("{name} part")).await? > 0 {
+                parts.push((name, ext, to));
+            }
+        } else if name == "lyrics" {
+            let original = field.file_name().unwrap_or("").to_lowercase();
+            let to = tmp.0.join("lyrics");
+            if save_field(&mut field, &to, MOST_LYRICS, "lyrics file").await? > 0 {
+                lyrics = Some((original, to));
+            }
+        } else if name == "replace" {
+            replace |= yes(&field.text().await.map_err(|e| bad(e.to_string()))?);
+        } else {
+            while field.chunk().await.ok().flatten().is_some() {}
+        }
+    }
+    if replace && !who.owner {
+        return Err(forbidden("Only the server's owner can replace a song's parts."));
+    }
+    if parts.is_empty() {
+        return Err(bad("Send the song's parts: drums, bass, other and vocals (and music)."));
+    }
+    let dir = app.cfg.library();
+    let stem = song.file.rsplit_once('.').map(|(s, _)| s.to_string()).unwrap_or_else(|| song.file.clone());
+    let have = found(&dir, &song.file).ok_or_else(|| not_found("That song's file isn't in the library anymore."))?;
+    // all four, with what's here already: a split is whole or not kept
+    let missing: Vec<&str> = FOUR.iter().copied().filter(|p| !have.files.contains_key(*p) && !parts.iter().any(|(n, ..)| n == p)).collect();
+    if !missing.is_empty() {
+        return Err(bad(format!("A split song brings all four parts: it lacks its {}.", missing.join(", "))));
+    }
+    let (mut added, mut skipped) = (vec![], vec![]);
+    for (part, ext, path) in &parts {
+        if have.files.contains_key(part) && !replace {
+            skipped.push(part.clone());
+            continue;
+        }
+        if replace {
+            // the part in its new form only (no older copy beside it)
+            for e in PART_EXTS.iter().filter(|e| **e != ext.as_str()) {
+                let _ = fs::remove_file(dir.join(format!("{stem}.{part}.{e}")));
+            }
+        }
+        put(path, &dir.join(format!("{stem}.{part}.{ext}"))).map_err(|e| broken(format!("Couldn't keep the {part} part: {e}")))?;
+        added.push(part.clone());
+    }
+    // its lyrics: kept when the server has none, or none with word times (or replacing)
+    let mut lyrics_kept = false;
+    if let Some((original, path)) = &lyrics {
+        let theirs = fs::read_to_string(path).unwrap_or_default();
+        let ours = have.files.get("lyrics").and_then(|(n, _)| fs::read_to_string(dir.join(n)).ok());
+        let better = ours.as_deref().is_none_or(|o| !crate::lyrics::has_word_times(o) && crate::lyrics::has_word_times(&theirs));
+        if replace || better {
+            let name = if original.ends_with(".lrc") || original.ends_with(".txt") { format!("{stem}.lrc") } else { format!("{stem}.lyrics.yaml") };
+            put(path, &dir.join(name)).map_err(|e| broken(format!("Couldn't keep the lyrics: {e}")))?;
+            lyrics_kept = true;
+        }
+    }
+    // split now: a song waiting in the queue for it is done
+    let closed = app.db().execute(
+        "UPDATE jobs SET state = 'done', progress = 1, note = ?1, finished_ms = ?2 WHERE song_id = ?3 AND state = 'waiting'",
+        params![format!("Its parts came from {}'s device.", who.name), now_ms(), song.id],
+    )?;
+    if closed > 0 {
+        app.events.queue();
+    }
+    if !added.is_empty() || lyrics_kept {
+        crate::log(&format!("{} brought the parts of {stem} ({})", who.name, added.join(", ")));
+        app.events.library();
+    }
+    let now = found(&dir, &song.file).map(|f| song_json(&dir, &song, &f));
+    let status = if added.is_empty() && !lyrics_kept { StatusCode::OK } else { StatusCode::CREATED };
+    Ok((status, Json(json!({ "added": added, "skipped": skipped, "lyrics": lyrics_kept, "song": now }))))
 }
 
 /// A song named in a request: its id (number or text), or its file's name.

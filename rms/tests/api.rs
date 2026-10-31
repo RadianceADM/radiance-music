@@ -876,3 +876,255 @@ async fn invites_expire_after_seven_days() {
     let (st, _) = s.post("/api/join", None, json!({ "code": again["code"] })).await;
     assert_eq!(st, StatusCode::CREATED);
 }
+
+/// A multipart form with these parts (name, file name, bytes).
+fn parts_form(parts: &[(&str, &str, &[u8])]) -> reqwest::multipart::Form {
+    parts.iter().fold(reqwest::multipart::Form::new(), |f, (name, file, bytes)| f.part(name.to_string(), reqwest::multipart::Part::bytes(bytes.to_vec()).file_name(file.to_string())))
+}
+
+const FOUR_AND_MUSIC: [&str; 5] = ["drums", "bass", "other", "vocals", "music"];
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn parts_split_on_a_device_come_to_the_server() {
+    // no splitter here: a song asked for waits in the queue
+    let s = server(Some("/nowhere/python3")).await;
+    let owner = s.setup("Bassi").await;
+    let (mika, mika_id) = s.friend(&owner, "Mika").await;
+    let lib = s.library();
+    put(&lib, "Ivy - Nine.flac", &flac(9_000));
+    put(&lib, "Jay - Ten.flac", &flac(9_000));
+    let (_, v) = s.get("/api/library", Some(&mika)).await;
+    let id = |artist: &str| v["songs"].as_array().unwrap().iter().find(|x| x["artist"] == artist).unwrap()["id"].as_i64().unwrap();
+    let (ivy, jay) = (id("Ivy"), id("Jay"));
+    let (st, _) = s.post("/api/split", Some(&mika), json!({ "song": ivy })).await;
+    assert_eq!(st, StatusCode::CREATED);
+    let send = |token: &str, song: i64, query: &str, form: reqwest::multipart::Form| {
+        s.http.post(format!("{}/api/songs/{song}/parts{query}", s.base)).bearer_auth(token.to_string()).multipart(form).send()
+    };
+    let timed = b"version: \"1.0\"\n# word times: MMS forced alignment (Meta, torchaudio MMS_FA) on the song's Vocals part\nlines:\n  - text: \"hi\"\n    start_ms: 0\n    end_ms: 900\n    words:\n      - text: \"hi\"\n        start_ms: 0\n        end_ms: 900\n";
+
+    // the four and music, and its timed lyrics, from Mika's phone
+    let mut all: Vec<(&str, String, Vec<u8>)> = FOUR_AND_MUSIC.iter().map(|p| (*p, format!("{p}.ogg"), format!("{p} from the phone").into_bytes())).collect();
+    all.push(("lyrics", "Ivy - Nine.lyrics.yaml".into(), timed.to_vec()));
+    let form = parts_form(&all.iter().map(|(n, f, b)| (*n, f.as_str(), b.as_slice())).collect::<Vec<_>>());
+    let res = send(&mika, ivy, "", form).await.unwrap();
+    assert_eq!(res.status(), StatusCode::CREATED);
+    let v: Value = res.json().await.unwrap();
+    assert_eq!(v["added"], json!(["drums", "bass", "other", "vocals", "music"]));
+    assert_eq!(v["lyrics"], true);
+    assert_eq!(v["song"]["split"], true);
+    assert_eq!(v["song"]["word_times"], true);
+    assert_eq!(std::fs::read(lib.join("Ivy - Nine.vocals.ogg")).unwrap(), b"vocals from the phone");
+    // the song waiting in the queue for it is done
+    let (_, q) = s.get("/api/queue", Some(&mika)).await;
+    assert_eq!(q["jobs"][0]["state"], "done", "{q}");
+    assert_eq!(q["jobs"][0]["note"], "Its parts came from Mika's device.");
+
+    // again: the server has them, so they're skipped
+    let form = parts_form(&[("drums", "drums.ogg", "other drums".as_bytes()), ("vocals", "vocals.ogg", "other vocals".as_bytes())]);
+    let res = send(&mika, ivy, "", form).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let v: Value = res.json().await.unwrap();
+    assert_eq!(v["skipped"], json!(["drums", "vocals"]));
+    assert_eq!(v["added"], json!([]));
+    assert_eq!(std::fs::read(lib.join("Ivy - Nine.drums.ogg")).unwrap(), b"drums from the phone");
+    // replacing: the owner only
+    let form = parts_form(&[("drums", "drums.flac", "lossless drums".as_bytes())]);
+    let res = send(&mika, ivy, "?replace=1", form).await.unwrap();
+    assert_eq!(res.status(), StatusCode::FORBIDDEN);
+    let form = parts_form(&[("drums", "drums.flac", "lossless drums".as_bytes())]);
+    let res = send(&owner, ivy, "?replace=1", form).await.unwrap();
+    assert_eq!(res.status(), StatusCode::CREATED);
+    assert_eq!(std::fs::read(lib.join("Ivy - Nine.drums.flac")).unwrap(), b"lossless drums");
+    assert!(!lib.join("Ivy - Nine.drums.ogg").exists(), "the old drums made way");
+    // as a form field too
+    let form = parts_form(&[("bass", "bass.ogg", "new bass".as_bytes())]).text("replace", "1");
+    let res = send(&owner, ivy, "", form).await.unwrap();
+    assert_eq!(res.status(), StatusCode::CREATED);
+    assert_eq!(std::fs::read(lib.join("Ivy - Nine.bass.ogg")).unwrap(), b"new bass");
+
+    // a split is whole: a song without parts needs all four
+    let form = parts_form(&[("vocals", "vocals.ogg", "just the voice".as_bytes())]);
+    let res = send(&mika, jay, "", form).await.unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    let v: Value = res.json().await.unwrap();
+    assert!(v["error"].as_str().unwrap().contains("drums, bass, other"), "{v}");
+    assert!(!lib.join("Jay - Ten.vocals.ogg").exists());
+    let form = parts_form(&[("drums", "drums.mp3", "x".as_bytes())]);
+    assert_eq!(send(&mika, jay, "", form).await.unwrap().status(), StatusCode::BAD_REQUEST);
+    let form = parts_form(&[("drums", "drums.ogg", "x".as_bytes())]);
+    assert_eq!(send(&mika, 9999, "", form).await.unwrap().status(), StatusCode::NOT_FOUND);
+    // the same switch as adding songs
+    let res = s.http.patch(format!("{}/api/people/{mika_id}", s.base)).bearer_auth(&owner).json(&json!({ "can_add": false })).send().await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let form = parts_form(&FOUR_AND_MUSIC.iter().map(|p| (*p, "x.ogg", b"x".as_slice())).collect::<Vec<_>>());
+    let res = send(&mika, jay, "", form).await.unwrap();
+    assert_eq!(res.status(), StatusCode::FORBIDDEN);
+    let v: Value = res.json().await.unwrap();
+    assert!(v["error"].as_str().unwrap().contains("turned off adding songs"), "{v}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn one_song_and_searching_the_library() {
+    let s = server(None).await;
+    let owner = s.setup("Bassi").await;
+    for (name, ms) in [("Ben&Ben - Leaves", 271_000), ("Ben&Ben - Maybe the Night", 250_000), ("NIKI - Every Summertime", 198_000), ("Zack Tabudlo - Binibini", 233_000), ("Moira - Paubaya", 284_000)] {
+        put(&s.library(), &format!("{name}.flac"), &flac(ms));
+    }
+    let (st, all) = s.get("/api/library", Some(&owner)).await;
+    assert_eq!(st, StatusCode::OK);
+    assert_eq!(all["total"], 5);
+    assert_eq!(all["count"], 5);
+    // one song: the same as its entry in the library
+    let entry = all["songs"][2].clone();
+    let (st, one) = s.get(&format!("/api/songs/{}", entry["id"]), Some(&owner)).await;
+    assert_eq!(st, StatusCode::OK);
+    assert_eq!(one, entry);
+    let (st, _) = s.get("/api/songs/9999", Some(&owner)).await;
+    assert_eq!(st, StatusCode::NOT_FOUND);
+    let (st, _) = s.get(&format!("/api/songs/{}", entry["id"]), None).await;
+    assert_eq!(st, StatusCode::UNAUTHORIZED);
+    // searching: every word, any case
+    let (_, v) = s.get("/api/library?q=ben", Some(&owner)).await;
+    assert_eq!(v["total"], 2);
+    let (_, v) = s.get("/api/library?q=BEN%20night", Some(&owner)).await;
+    assert_eq!(v["total"], 1);
+    assert_eq!(v["songs"][0]["title"], "Maybe the Night");
+    let (_, v) = s.get("/api/library?q=nothing-like-it", Some(&owner)).await;
+    assert_eq!((v["total"].as_i64(), v["count"].as_i64()), (Some(0), Some(0)));
+    // paging
+    let (_, v) = s.get("/api/library?limit=2", Some(&owner)).await;
+    assert_eq!((v["total"].as_i64(), v["count"].as_i64(), v["offset"].as_i64()), (Some(5), Some(2), Some(0)));
+    assert_eq!(v["songs"][0], all["songs"][0]);
+    let (_, v) = s.get("/api/library?offset=4&limit=2", Some(&owner)).await;
+    assert_eq!(v["count"], 1);
+    assert_eq!(v["songs"][0], all["songs"][4]);
+    let (_, v) = s.get("/api/library?offset=99", Some(&owner)).await;
+    assert_eq!((v["total"].as_i64(), v["count"].as_i64()), (Some(5), Some(0)));
+    let (_, v) = s.get("/api/library?q=ben&offset=1&limit=5", Some(&owner)).await;
+    assert_eq!((v["total"].as_i64(), v["count"].as_i64()), (Some(2), Some(1)));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_server_keeps_its_id() {
+    let s = server(None).await;
+    let (_, v) = s.get("/api/status", None).await;
+    let id = v["id"].as_str().unwrap().to_string();
+    assert_eq!(id.len(), 32);
+    assert!(id.chars().all(|c| c.is_ascii_hexdigit()));
+    let owner = s.setup("Bassi").await;
+    let (_, me) = s.get("/api/me", Some(&owner)).await;
+    assert_eq!(me["server"]["id"], id.as_str());
+    let (_, inv) = s.post("/api/invites", Some(&owner), json!({ "name": "Mika" })).await;
+    let (_, joined) = s.post("/api/join", None, json!({ "code": inv["code"] })).await;
+    assert_eq!(joined["server"]["id"], id.as_str());
+    // the same after a restart (its address may have changed meanwhile)
+    let cfg = rms::Config {
+        data: s.dir.join("data"),
+        bind: "127.0.0.1:0".into(),
+        python: "/nowhere/python3".into(),
+        scripts: s.dir.join("scripts"),
+        domain: Some("music.example.com".into()),
+        public_url: None,
+        setup_key: None,
+        threads: 1,
+    };
+    assert_eq!(rms::open(cfg).unwrap().server_id(), id);
+    // another server: another id
+    let other = server(None).await;
+    let (_, v) = other.get("/api/status", None).await;
+    assert_ne!(v["id"], id.as_str());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_join_page_opens_the_app() {
+    let s = server(None).await;
+    let owner = s.setup("Bassi").await;
+    let (_, inv) = s.post("/api/invites", Some(&owner), json!({ "name": "Mika" })).await;
+    let link = inv["link"].as_str().unwrap();
+    let html = s.http.get(link).send().await.unwrap().text().await.unwrap();
+    let encoded: String = link.chars().map(|c| match c { ':' => "%3A".to_string(), '/' => "%2F".to_string(), c => c.to_string() }).collect();
+    assert!(html.contains(&format!("href=\"radiancemusic://join?u={encoded}\"")), "{html}");
+    assert!(html.contains("Open in Radiance Music"));
+    // the QR and the code stay
+    assert!(html.contains("<svg") && html.contains(inv["code"].as_str().unwrap()));
+}
+
+/// The next text message on an events line that `ok` likes (others skipped).
+async fn next_event<S>(ws: &mut S, ok: impl Fn(&Value) -> bool) -> Value
+where
+    S: futures_util::Stream<Item = Result<tokio_tungstenite::tungstenite::Message, tokio_tungstenite::tungstenite::Error>> + Unpin,
+{
+    loop {
+        let m = tokio::time::timeout(Duration::from_secs(15), ws.next()).await.expect("an event in time").expect("the line is open").unwrap();
+        if let Ok(text) = m.to_text() {
+            if let Ok(v) = serde_json::from_str::<Value>(text) {
+                if ok(&v) {
+                    return v;
+                }
+            }
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn change_events_instead_of_polling() {
+    let s = server(None).await;
+    let owner = s.setup("Bassi").await;
+    let (mika, mika_id) = s.friend(&owner, "Mika").await;
+    wait_for(&s, "/api/status", None, |v| v["models"]["state"] == "ready", 20).await;
+    let (_, status) = s.get("/api/status", None).await;
+    let url = format!("{}/api/events?t={mika}", s.base.replace("http://", "ws://"));
+    assert!(tokio_tungstenite::connect_async(format!("{}/api/events", s.base.replace("http://", "ws://"))).await.is_err(), "no key, no events");
+    let (mut ws, _) = tokio_tungstenite::connect_async(url).await.unwrap();
+    let hello = next_event(&mut ws, |v| v["type"] == "hello").await;
+    assert_eq!(hello["server"]["id"], status["id"]);
+
+    // a song added: the library changed
+    let form = reqwest::multipart::Form::new().part("song", reqwest::multipart::Part::bytes(flac(4_000)).file_name("Kai - Eleven.flac"));
+    let res = s.http.post(format!("{}/api/songs", s.base)).bearer_auth(&owner).multipart(form).send().await.unwrap();
+    assert_eq!(res.status(), StatusCode::CREATED);
+    let song = res.json::<Value>().await.unwrap()["song"]["id"].clone();
+    next_event(&mut ws, |v| v["type"] == "library").await;
+    // a song split: the queue as it goes, up to done, and the library (its parts)
+    let (st, _) = s.post("/api/split", Some(&mika), json!({ "song": song })).await;
+    assert_eq!(st, StatusCode::CREATED);
+    let first = next_event(&mut ws, |v| v["type"] == "queue").await;
+    assert_eq!(first["jobs"][0]["song"]["title"], "Eleven");
+    assert!(first["splitter"]["ready"].as_bool().unwrap());
+    // (its parts land a moment before it's marked done: either order)
+    let (mut done, mut parts) = (Value::Null, false);
+    while done.is_null() || !parts {
+        let v = next_event(&mut ws, |v| v["type"] == "library" || (v["type"] == "queue" && v["jobs"][0]["state"] == "done")).await;
+        if v["type"] == "library" {
+            parts = true;
+        } else {
+            done = v;
+        }
+    }
+    assert_eq!(done["jobs"][0]["progress"], 1.0);
+    // Mika's switches changed: she's told
+    let res = s.http.patch(format!("{}/api/people/{mika_id}", s.base)).bearer_auth(&owner).json(&json!({ "can_split": false })).send().await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    next_event(&mut ws, |v| v["type"] == "me").await;
+    // removed: told, then the line closes
+    s.post(&format!("/api/people/{mika_id}/revoke"), Some(&owner), json!({})).await;
+    next_event(&mut ws, |v| v["type"] == "me").await;
+    let mut closed = false;
+    for _ in 0..10 {
+        match tokio::time::timeout(Duration::from_secs(5), ws.next()).await.unwrap() {
+            Some(Ok(m)) if m.is_close() => {
+                closed = true;
+                break;
+            }
+            Some(Ok(_)) => continue,
+            _ => {
+                closed = true;
+                break;
+            }
+        }
+    }
+    assert!(closed);
+    let (st, _) = s.get("/api/me", Some(&mika)).await;
+    assert_eq!(st, StatusCode::UNAUTHORIZED);
+}

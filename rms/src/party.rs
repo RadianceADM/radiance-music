@@ -490,7 +490,8 @@ pub async fn end(State(app): State<Shared>, who: Who) -> ApiResult<Json<Value>> 
     Ok(Json(app.party.snapshot()))
 }
 
-fn still_joined(app: &Shared, device: i64) -> bool {
+/// The device is still joined (not removed, nor its person).
+pub fn still_joined(app: &Shared, device: i64) -> bool {
     app.db()
         .query_row("SELECT 1 FROM devices d JOIN people p ON p.id = d.person_id WHERE d.id = ?1 AND d.revoked_ms IS NULL AND p.revoked_ms IS NULL", params![device], |_| Ok(()))
         .is_ok()

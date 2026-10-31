@@ -55,6 +55,10 @@ CREATE TABLE IF NOT EXISTS jobs (
   finished_ms INTEGER
 );
 CREATE INDEX IF NOT EXISTS jobs_state ON jobs(state);
+CREATE TABLE IF NOT EXISTS meta (
+  key TEXT PRIMARY KEY,            -- server_id: made at the first start, never changes
+  value TEXT NOT NULL
+);
 ";
 
 pub fn open(path: &Path) -> Result<Connection, String> {
@@ -71,6 +75,14 @@ pub fn open(path: &Path) -> Result<Connection, String> {
         }
     }
     Ok(conn)
+}
+
+/// The server's own id: random, made at the first start and kept, so an app
+/// knows it's the same server when its address changes (a domain added).
+pub fn server_id(conn: &Connection) -> Result<String, String> {
+    let fresh = crate::auth::new_token()[..32].to_string();
+    conn.execute("INSERT OR IGNORE INTO meta (key, value) VALUES ('server_id', ?1)", params![fresh]).map_err(|e| e.to_string())?;
+    conn.query_row("SELECT value FROM meta WHERE key = 'server_id'", [], |r| r.get(0)).map_err(|e| e.to_string())
 }
 
 /// Invites last this long, unused.
