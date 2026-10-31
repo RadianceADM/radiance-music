@@ -130,6 +130,23 @@ It's Radiance Music's own, not on Flathub. Inside it, Share Songs with a Phone c
 firewall for you: if yours is on, open the ports once with
 `sudo ufw allow proto tcp from 192.168.0.0/16 to any port 47800:47809`. Build it yourself with
 `packaging/flatpak/build.sh` (flatpak-builder, GNOME 49 runtime and SDK, rust-stable extension).
+Installing it also adds Radiance Music's own Flatpak repo
+(`https://radianceadm.github.io/radiance-music-flatpak/`, signed), where its updates come from.
+
+## Updates
+
+A little after it opens (at most every 6 hours), or from the menu's **Look for Updates**, the app
+looks for a newer release. When there is one, it asks: **Update Now** downloads it while the music
+plays (checked against the SHA-256 GitHub gives for the file), then **Restart to Update** puts it on
+and opens the new version; **Remind Me Later** asks again in a day; **Skip This Version** waits for
+the next one. How it's put on depends on how you installed it:
+
+- **Windows:** the new `RadianceMusic-Setup.exe` runs quietly once the app has closed, into the same
+  folder, then opens the app again.
+- **Linux download:** the new tarball's `install.sh`, then the new app.
+- **The Flatpak:** Flatpak's own update from Radiance Music's repo (your computer asks once whether
+  the app may update itself); GNOME Software and `flatpak update` see its updates too.
+- **Built from source:** it says so and opens the release page.
 
 ## Build and install
 

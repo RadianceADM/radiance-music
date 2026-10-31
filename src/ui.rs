@@ -21,6 +21,7 @@ mod sharing;
 mod splash;
 mod splitting;
 mod guide;
+mod update;
 use backdrop::Backdrop;
 use lens::Lens;
 
@@ -1792,6 +1793,7 @@ impl Ui {
 
     /// The start's last bits, and how long it all took (in the app log).
     fn started(self: &Rc<Self>, began: Instant, took: &[(&'static str, u128)]) {
+        self.look_for_updates(false); // a newer version out? (the pop-up, a little later)
         // likes that weren't saved yet (offline, or the app closed while saving)
         let unsaved: Vec<Track> = self.liked.borrow().iter().filter(|t| t.file.is_none() && library::saves(t)).cloned().collect();
         unsaved.into_iter().for_each(|t| self.save_liked(t));
@@ -2430,6 +2432,7 @@ impl Ui {
         app.append(Some("Storage and Folder"), Some("win.storage"));
         app.append(Some("Open the Music Folder"), Some("win.music-folder"));
         app.append(Some("How to Use It"), Some("win.guide"));
+        app.append(Some("Look for Updates"), Some("win.updates"));
         app.append(Some("About Radiance Music"), Some("win.about"));
         menu.append_section(None, &app);
         let leave = gio::Menu::new();
@@ -2593,6 +2596,14 @@ impl Ui {
             }
         });
         self.window.add_action(&about);
+        let updates = gio::SimpleAction::new("updates", None);
+        let me = Rc::downgrade(self);
+        updates.connect_activate(move |_, _| {
+            if let Some(me) = me.upgrade() {
+                me.look_for_updates(true);
+            }
+        });
+        self.window.add_action(&updates);
         let me = Rc::downgrade(self);
         let folder = gio::SimpleAction::new("music-folder", None);
         folder.connect_activate(move |_, _| {

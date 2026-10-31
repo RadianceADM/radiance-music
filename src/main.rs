@@ -37,6 +37,7 @@ mod split;
 mod storage;
 mod track;
 mod ui;
+mod update;
 mod watch;
 mod youtube;
 
@@ -801,6 +802,10 @@ fn main() -> glib::ExitCode {
         println!("Radiance Music {}", env!("CARGO_PKG_VERSION"));
         return glib::ExitCode::SUCCESS;
     }
+    if args.get(1).map(String::as_str) == Some("--probe-update") {
+        // the whole update without the window ("apply": put on, as Restart to Update)
+        return update::probe(args.get(2).map(String::as_str) == Some("apply"));
+    }
     if args.get(1).map(String::as_str) == Some("--probe-video") {
         // a liked song's music video, saved as the app does (720p, at most 1.5 MB/s)
         let want = args.get(2).cloned().unwrap_or_default().to_lowercase();
@@ -942,6 +947,7 @@ fn main() -> glib::ExitCode {
         std::env::set_var("RADIANCE_SILENT", "1");
     }
     let wait = std::env::var("RADIANCE_SHOT_WAIT").ok().and_then(|s| s.parse().ok()).unwrap_or(8u64).min(18);
+    update::wait_for_old(); // just updated: the old copy closes first
     let mut builder = adw::Application::builder().application_id(APP_ID);
     if shot.is_some() {
         builder = builder.flags(gtk::gio::ApplicationFlags::NON_UNIQUE);
