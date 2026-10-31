@@ -311,6 +311,10 @@ pub fn put(from: &Path, to: &Path) -> std::io::Result<()> {
 /// library has already (same artist and title) is skipped; only the extras it
 /// lacks are kept.
 pub async fn upload(State(app): State<Shared>, who: Who, mut form: Multipart) -> ApiResult<(StatusCode, Json<Value>)> {
+    // friends add songs unless the owner turned it off for them (owner, 2026-11-01)
+    if !who.can_add {
+        return Err(crate::auth::switched_off(&app, "adding songs"));
+    }
     let tmp = Upload(app.cfg.work().join(format!("upload-{}", &crate::auth::new_token()[..16])));
     fs::create_dir_all(&tmp.0).map_err(|e| broken(e.to_string()))?;
     let mut texts: HashMap<String, String> = HashMap::new();
@@ -410,7 +414,18 @@ pub async fn upload(State(app): State<Shared>, who: Who, mut form: Multipart) ->
 }
 
 /// A song named in a request: its id (number or text), or its file's name.
+/// Not known yet: the folder is read again first (a song copied in by hand).
 pub fn resolve(app: &Shared, v: &Value) -> Result<Song, ApiError> {
+    match find(app, v)? {
+        Some(song) => Ok(song),
+        None => {
+            sync(app)?;
+            find(app, v)?.ok_or_else(|| not_found("That song isn't in the library."))
+        }
+    }
+}
+
+fn find(app: &Shared, v: &Value) -> Result<Option<Song>, ApiError> {
     let conn = app.db();
     let found = match v {
         Value::Number(n) => n.as_i64().map(|id| db::song(&conn, id)).transpose()?.flatten(),
@@ -424,5 +439,5 @@ pub fn resolve(app: &Shared, v: &Value) -> Result<Song, ApiError> {
         },
         _ => None,
     };
-    found.ok_or_else(|| not_found("That song isn't in the library."))
+    Ok(found)
 }

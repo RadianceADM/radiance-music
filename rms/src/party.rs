@@ -291,6 +291,9 @@ pub struct StartBody {
 
 /// POST /api/party/start: anyone can start one (one at a time on a server).
 pub async fn start(State(app): State<Shared>, who: Who, body: axum::body::Bytes) -> ApiResult<(StatusCode, Json<Value>)> {
+    if !who.can_host {
+        return Err(crate::auth::switched_off(&app, "hosting parties"));
+    }
     // the body may be left out: {everyone_controls: false}
     let body: StartBody = if body.iter().all(u8::is_ascii_whitespace) { StartBody::default() } else { serde_json::from_slice(&body).map_err(|e| bad(format!("That isn't the party's settings: {e}")))? };
     {

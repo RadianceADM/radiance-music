@@ -41,11 +41,14 @@ parties from.
 **[Deploy on Hostinger](https://www.hostinger.com/vps/docker-hosting?compose_url=https://raw.githubusercontent.com/RadianceADM/radiance-music/main/rms/docker-compose.yml)**
 
 1. Click the link above. Hostinger opens its Docker VPS setup with the server already filled in.
-2. Pick a plan (KVM 2 or bigger) and finish the order. Hostinger sets up the VPS and starts the server.
-3. Open `http://YOUR-VPS-ADDRESS` in a browser (the address is in hPanel → VPS).
-4. **Type your name.** Your friends will see the server as "*your name*'s server". You get your own join
-   link and its QR code for the app.
-5. Leave the page open for a few minutes the first time: it downloads the splitting models (about 1.3 GB,
+2. **Type a setup key** where it asks for `RMS_SETUP_KEY` (any word only you know, such as `sunset-2026`).
+   It keeps your new server yours: nobody can set it up without the key. If you leave it empty, the server
+   makes one and shows it in its log (Docker Manager → your project → Logs).
+3. Pick a plan (KVM 2 or bigger) and finish the order. Hostinger sets up the VPS and starts the server.
+4. Open `http://YOUR-VPS-ADDRESS` in a browser (the address is in hPanel → VPS).
+5. **Type your name and the setup key.** Your friends will see the server as "*your name*'s server". You
+   get your own join link and its QR code for the app. After that, the key isn't needed any more.
+6. Leave the page open for a few minutes the first time: it downloads the splitting models (about 1.3 GB,
    only once) and shows how far along it is.
 
 To add a domain later, see [Add a domain (https)](#add-a-domain-https).
@@ -60,11 +63,12 @@ curl -fsSLO https://raw.githubusercontent.com/RadianceADM/radiance-music/main/rm
 docker compose up -d
 ```
 
-Then open `http://YOUR-SERVER-ADDRESS` and type your name. With a domain, put it in a `.env` file next to
-`docker-compose.yml` first:
+Then open `http://YOUR-SERVER-ADDRESS` and type your name and the setup key. The server made the key at
+its first start: it's in `docker compose logs rms` (look for "The setup key is"). To choose your own key
+and a domain, put them in a `.env` file next to `docker-compose.yml` first:
 
 ```sh
-echo "RMS_DOMAIN=music.example.com" > .env
+printf 'RMS_SETUP_KEY=sunset-2026\nRMS_DOMAIN=music.example.com\n' > .env
 docker compose up -d
 ```
 
@@ -81,9 +85,10 @@ With a domain (Caddy gets the https certificate by itself):
 sudo RMS_DOMAIN=music.example.com bash radiance-music/rms/install.sh
 ```
 
-The script installs Python, ffmpeg and the splitter (PyTorch for the processor, plus Demucs), builds the
-server, and starts it as a service called `radiance-music-server`. It ends by printing the address to open.
-Without a domain, that's `http://YOUR-SERVER-ADDRESS:8080`.
+The script asks you for a setup key (press Enter and the server makes one). It installs Python, ffmpeg and
+the splitter (PyTorch for the processor, plus Demucs), builds the server, and starts it as a service called
+`radiance-music-server`. It ends by printing the address to open and the setup key. Without a domain, the
+address is `http://YOUR-SERVER-ADDRESS:8080`.
 
 - Settings: `/etc/radiance-music-server.env` (after changing it: `sudo systemctl restart radiance-music-server`)
 - Your library, the database and the models: `/var/lib/radiance-music-server`
@@ -97,13 +102,15 @@ On your server's page (the address you opened at setup, in the same browser):
 2. Send them the link. In Radiance Music they go to **Settings → Servers → Join a server**, then paste
    the link or scan the code. If they don't have the app yet, the link's page lets them listen to
    parties in a browser.
-3. Each link works **once**, on one device. For a friend's second device, click **New link** next to their name.
-   For your own phone and computer, click **Add one of my devices**.
+3. Each link works **once**, on one device, and **expires after 7 days** if it isn't used (the list of
+   invites shows how long each has left). For a friend's second device, or if their link expired, click
+   **New link** next to their name. For your own phone and computer, click **Add one of my devices**.
 
 Friends can play the library, add songs, split songs (the parts land in the library for everyone), and
-join or start listening parties. To remove a friend, click **Remove** next to their name. Their devices
-stop working at once, and the songs they added stay. You can also remove a single device, such as a lost
-phone.
+join or start listening parties. Under each friend's name, three switches let you turn some of that off for
+them: **Can add songs**, **Can split** and **Can host a party** (all on at first). Playing and joining
+parties always stay on. To remove a friend, click **Remove** next to their name. Their devices stop working
+at once, and the songs they added stay. You can also remove a single device, such as a lost phone.
 
 ## Adding songs
 
@@ -116,7 +123,8 @@ phone.
   `docker cp "Artist - Title.opus" radiance-music-server-rms-1:/data/library/`
 
 Click **Split** on a song to queue it. Its parts appear beside it a few minutes later. If it has lyrics,
-every word gets its time too.
+every word gets its time too. When several people queue songs, they **take turns**: one song each, in the
+order each person asked for their own. The queue shows whose turn is next.
 
 ## Listening parties
 
@@ -157,7 +165,7 @@ No domain? If the server has a public IPv4 address such as `203.0.113.5`, you ca
 | Setting | What it does | Default |
 |---|---|---|
 | `RMS_DOMAIN` | Your domain: https through Caddy, and links use it | none (http) |
-| `RMS_SETUP_KEY` | The setup page asks for this key, so nobody else can claim a new server before you open it | none |
+| `RMS_SETUP_KEY` | The key the setup page asks for, so nobody else can claim your new server. Not needed after setup | made at the first start (log and `setup-key.txt`) |
 | `RMS_DATA` | The folder with the library, `server.db` and the models | `/data` (Docker), `/var/lib/radiance-music-server` (install.sh) |
 | `RMS_BIND` | Where the server listens | `0.0.0.0:8080` |
 | `RMS_PYTHON` | The Python that has the splitter | `/opt/rms/venv/bin/python` |
@@ -185,19 +193,20 @@ party's WebSocket also accept `?t=TOKEN`, because players and browsers can't set
 | Call | What it does |
 |---|---|
 | `GET /api/status` | The server's name, whether it's set up, the splitter's and the models' state (no token needed) |
-| `POST /api/setup {name}` | The setup page's form: makes the owner, returns this browser's token and the owner's first invite |
+| `POST /api/setup {name, key}` | The setup page's form (the setup key is required): makes the owner, returns this browser's token and the owner's first invite |
 | `POST /api/join {code, device_name}` | Joins with an invite's one-time code, and returns the device's `token` |
-| `GET /api/me` | Who this device is (person, role, device, server name) |
-| `POST /api/invites {name}` or `{person}` | Owner: an invite for a new friend, or for another device of someone already on the server |
-| `GET /api/invites`, `DELETE /api/invites/CODE` | Owner: invites not used yet; take one back |
-| `GET /api/people` | Owner: everyone, with their devices |
+| `GET /api/me` | Who this device is (person, role, device, server name) and what it may do: `can {add, split, host}` |
+| `POST /api/invites {name}` or `{person}` | Owner: an invite for a new friend, or for another device of someone already on the server. Unused invites expire after 7 days (`expires_ms`, `expires_in_days`) |
+| `GET /api/invites`, `DELETE /api/invites/CODE` | Owner: invites not used yet (and not expired); take one back |
+| `GET /api/people` | Owner: everyone, with their devices, their switches (`can`), and their waiting and expired invites |
+| `PATCH /api/people/ID {can_add, can_split, can_host}` | Owner: a friend's switches. With one off, that friend gets a plain 403 |
 | `POST /api/people/ID/revoke` | Owner: removes a friend (all their devices) |
 | `POST /api/devices/ID/revoke` | Removes a device (the owner any device, a friend only their own) |
 | `GET /api/library` | Every song: `artist`, `title`, `duration_ms`, `split`, `parts`, `word_times`, `added_by`, and `files` by kind (song, drums, bass, other, vocals, music, lyrics, cover, video; each with `name`, `size`, `url`) |
 | `GET /files/NAME` | Any library file, with HTTP Range (seeking) |
 | `POST /api/songs` (multipart) | `song` file, plus optional `cover`, `lyrics`, `video`, `artist`, `title`, `seconds`. If the song is already there (same artist and title), it's skipped |
 | `POST /api/split {song}` | Queues a song for splitting (`song`: its id, or its file name) |
-| `GET /api/queue`, `DELETE /api/queue/ID` | The split queue with progress and plain-words notes; take a song out (the owner, or whoever asked) |
+| `GET /api/queue`, `DELETE /api/queue/ID` | The split queue with progress and plain-words notes. Waiting songs are listed in their turns, and `next_turn` says whose turn is next. Take a song out (the owner, or whoever asked) |
 | `GET /api/time` | `{now_ms}`: the server's clock, for clock-offset pings (no token needed) |
 | `GET /api/party` | The party's state (`on: false` when there's none) |
 | `POST /api/party/start {everyone_controls}` | Starts a party (one at a time) |
@@ -214,5 +223,6 @@ so everyone receives it in time. A listener keeps its clock offset to the server
 `position = (now + offset) - started_at_server_ms`. A late joiner uses the same formula. When a song
 ends, the server starts the next one by itself.
 
-The image is built from the repository's root:
+The image pins PyTorch 2.15.0+cpu, torchaudio 2.11.1+cpu and Demucs 4.1.0: the set that split songs and
+timed words in it. It's built from the repository's root:
 `docker build -f rms/Dockerfile -t ghcr.io/radianceadm/radiance-music-server:latest .`

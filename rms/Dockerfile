@@ -18,7 +18,8 @@ RUN CARGO_PROFILE_RELEASE_STRIP=true cargo build --release --locked
 
 # 2. what runs: Debian, Python with the splitter (the app's own pip list, as
 #    setup.rs install() has it: PyTorch for the CPU, torchaudio, Demucs,
-#    soundfile, PyAV) and ffmpeg
+#    soundfile, PyAV) and ffmpeg. PyTorch, torchaudio and Demucs are pinned to
+#    the set that split and timed words in this image (owner, 2026-11-01).
 FROM docker.io/library/debian:trixie-slim
 RUN apt-get update \
  && apt-get install -y --no-install-recommends python3 python3-venv ffmpeg ca-certificates tini \
@@ -27,8 +28,8 @@ RUN python3 -m venv /opt/rms/venv \
  && /opt/rms/venv/bin/pip install --no-cache-dir -q --upgrade pip \
  && /opt/rms/venv/bin/pip install --no-cache-dir --progress-bar off --only-binary=:all: \
       --index-url https://download.pytorch.org/whl/cpu --extra-index-url https://pypi.org/simple \
-      torch torchaudio soundfile av numpy pyyaml \
- && /opt/rms/venv/bin/pip install --no-cache-dir -q --only-binary=:all: demucs \
+      torch==2.15.0+cpu torchaudio==2.11.1+cpu soundfile av numpy pyyaml \
+ && /opt/rms/venv/bin/pip install --no-cache-dir -q --only-binary=:all: demucs==4.1.0 \
  && /opt/rms/venv/bin/python -c "import torch, torchaudio, demucs, soundfile, av; assert hasattr(torchaudio.pipelines, 'MMS_FA'); print('splitter ok: torch', torch.__version__, 'torchaudio', torchaudio.__version__)"
 COPY server/split.py server/align.py /opt/rms/scripts/
 COPY --from=build /src/target/release/rms /usr/local/bin/rms

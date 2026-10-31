@@ -345,7 +345,7 @@ async fn rest(app: &Shared, secs: u64) {
 /// start), then one song after another.
 pub async fn worker(app: Shared) {
     // songs that were being split when the server stopped start over
-    let _ = app.db().execute("UPDATE jobs SET state = 'waiting', progress = 0, note = NULL WHERE state IN ('splitting', 'timing')", []);
+    let _ = app.db().execute("UPDATE jobs SET state = 'waiting', progress = 0, note = NULL, started_ms = NULL WHERE state IN ('splitting', 'timing')", []);
     if models_ready(&app) {
         app.splitter.set_models(|m| {
             m.state = "ready";
@@ -375,7 +375,10 @@ pub async fn worker(app: Shared) {
             }
             continue;
         }
-        let next: Option<(i64, i64)> = app.db().query_row("SELECT id, song_id FROM jobs WHERE state = 'waiting' ORDER BY id LIMIT 1", [], |r| Ok((r.get(0)?, r.get(1)?))).optional().ok().flatten();
+        let next: Option<(i64, i64)> = {
+            let conn = app.db();
+            turns(&conn).ok().and_then(|t| t.first().copied()).and_then(|(job, _)| conn.query_row("SELECT id, song_id FROM jobs WHERE id = ?1", params![job], |r| Ok((r.get(0)?, r.get(1)?))).ok())
+        };
         match next {
             Some((job, song)) => run(&app, job, song).await,
             None => rest(&app, 300).await,
@@ -492,6 +495,35 @@ async fn split_one(app: &Shared, job: i64, song_id: i64, work: &Path, stop: &Not
     Ok(note)
 }
 
+/// The waiting songs in the order they'll be split: people take turns
+/// (owner, 2026-11-01), one song each, whoever had a song split longest ago (or
+/// never) first; each person's own songs in the order they asked for them.
+/// (job, who asked)
+pub fn turns(conn: &rusqlite::Connection) -> rusqlite::Result<Vec<(i64, Option<i64>)>> {
+    let waiting: Vec<(i64, Option<i64>)> = conn.prepare("SELECT id, asked_by FROM jobs WHERE state = 'waiting' ORDER BY id")?.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<Result<_, _>>()?;
+    // when each person's last turn began (a song being split now counts)
+    let mut last: std::collections::HashMap<Option<i64>, i64> = conn
+        .prepare("SELECT asked_by, MAX(started_ms) FROM jobs WHERE state != 'waiting' AND started_ms IS NOT NULL GROUP BY asked_by")?
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+        .collect::<Result<_, _>>()?;
+    let mut lines: Vec<(Option<i64>, std::collections::VecDeque<i64>)> = vec![];
+    for (job, who) in waiting {
+        match lines.iter_mut().find(|(p, _)| *p == who) {
+            Some((_, line)) => line.push_back(job),
+            None => lines.push((who, [job].into())),
+        }
+    }
+    let mut order = vec![];
+    let mut turn = i64::MAX / 2;
+    while let Some(pick) = lines.iter().enumerate().filter(|(_, (_, l))| !l.is_empty()).min_by_key(|(_, (p, l))| (last.get(p).copied().unwrap_or(-1), l[0])).map(|(i, _)| i) {
+        let (who, line) = &mut lines[pick];
+        order.push((line.pop_front().unwrap_or_default(), *who));
+        last.insert(*who, turn);
+        turn += 1;
+    }
+    Ok(order)
+}
+
 fn job_json(app: &Shared, row: &JobRow, ahead: Option<usize>) -> Value {
     let note = match (row.state.as_str(), &row.note) {
         ("waiting", _) => app.splitter.holdup().unwrap_or_else(|| match ahead {
@@ -548,6 +580,9 @@ pub struct AskBody {
 /// POST /api/split {song}: the song goes in the queue (once: asking again
 /// gives its place; a song split already says so).
 pub async fn ask(State(app): State<Shared>, who: Who, Json(body): Json<AskBody>) -> ApiResult<(StatusCode, Json<Value>)> {
+    if !who.can_split {
+        return Err(crate::auth::switched_off(&app, "splitting songs"));
+    }
     let song = library::resolve(&app, &body.song)?;
     let dir = app.cfg.library();
     let file = song.file.clone();
@@ -571,16 +606,18 @@ pub async fn ask(State(app): State<Shared>, who: Who, Json(body): Json<AskBody>)
         crate::log(&format!("{} queued {} for splitting", who.name, song.file));
         app.splitter.wake.notify_one();
     }
-    let ahead: i64 = app.db().query_row("SELECT COUNT(*) FROM jobs WHERE state = 'waiting' AND id < ?1", params![row.id], |r| r.get(0))?;
+    let ahead = turns(&app.db())?.iter().position(|(job, _)| *job == row.id);
     let status = if queued { StatusCode::CREATED } else { StatusCode::OK };
-    Ok((status, Json(json!({ "already_split": false, "queued": queued, "job": job_json(&app, &row, Some(ahead as usize)) }))))
+    Ok((status, Json(json!({ "already_split": false, "queued": queued, "job": job_json(&app, &row, ahead) }))))
 }
 
-/// GET /api/queue: the songs at work and waiting (and the last day's
-/// finished ones), with the splitter's state in plain words.
+/// GET /api/queue: the songs at work, the waiting ones in their turns (and
+/// whose turn is next), the last day's finished ones, and the splitter's state
+/// in plain words.
 pub async fn queue(State(app): State<Shared>, _who: Who) -> ApiResult<Json<Value>> {
-    let rows: Vec<JobRow> = {
+    let (mut rows, order): (Vec<JobRow>, Vec<(i64, Option<i64>)>) = {
         let conn = app.db();
+        let order = turns(&conn)?;
         let mut st = conn.prepare(&format!(
             "{JOB_SELECT} WHERE j.state IN ('waiting', 'splitting', 'timing') OR (j.state IN ('done', 'failed') AND j.finished_ms > ?1)
              ORDER BY CASE j.state WHEN 'splitting' THEN 0 WHEN 'timing' THEN 0 WHEN 'waiting' THEN 1 ELSE 2 END,
@@ -588,20 +625,18 @@ pub async fn queue(State(app): State<Shared>, _who: Who) -> ApiResult<Json<Value
              LIMIT 200"
         ))?;
         let rows = st.query_map(params![now_ms() - 24 * 3600 * 1000], job_row)?.collect::<Result<_, _>>()?;
-        rows
+        (rows, order)
     };
-    let mut waiting = 0;
-    let jobs: Vec<Value> = rows
-        .iter()
-        .map(|r| {
-            let ahead = (r.state == "waiting").then(|| {
-                waiting += 1;
-                waiting - 1
-            });
-            job_json(&app, r, ahead)
-        })
-        .collect();
-    Ok(Json(json!({ "splitter": app.splitter.status_json(), "models": app.splitter.models_json(), "threads": app.cfg.threads, "jobs": jobs })))
+    let place = |id: i64| order.iter().position(|(j, _)| *j == id);
+    // running first, then the waiting ones in their turns, then the finished
+    rows.sort_by_key(|r| match r.state.as_str() {
+        "splitting" | "timing" => (0, 0),
+        "waiting" => (1, place(r.id).unwrap_or(usize::MAX) as i64),
+        _ => (2, -r.finished_ms.unwrap_or(0)),
+    });
+    let jobs: Vec<Value> = rows.iter().map(|r| job_json(&app, r, if r.state == "waiting" { place(r.id) } else { None })).collect();
+    let next = order.first().and_then(|(job, _)| rows.iter().find(|r| r.id == *job)).and_then(|r| r.asked_by.as_ref()).map(|(id, name)| json!({ "id": id, "name": name }));
+    Ok(Json(json!({ "splitter": app.splitter.status_json(), "models": app.splitter.models_json(), "threads": app.cfg.threads, "next_turn": next, "jobs": jobs })))
 }
 
 /// DELETE /api/queue/ID: a song comes out of the queue (stopped, if it's being

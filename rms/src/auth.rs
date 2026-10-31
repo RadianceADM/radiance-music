@@ -19,6 +19,10 @@ pub struct Who {
     pub name: String,
     pub owner: bool,
     pub device: i64,
+    /// The owner's switches for a friend (the owner can always): add songs, split, host a party.
+    pub can_add: bool,
+    pub can_split: bool,
+    pub can_host: bool,
 }
 
 pub fn hash(token: &str) -> String {
@@ -44,6 +48,18 @@ pub fn new_code() -> String {
     random(12).iter().map(|b| CODE_LETTERS[*b as usize % CODE_LETTERS.len()] as char).collect()
 }
 
+/// A setup key as typed: the same key with or without its dashes, spaces or capitals.
+pub fn same_key(typed: &str, key: &str) -> bool {
+    let plain = |k: &str| k.chars().filter(|c| !c.is_whitespace() && *c != '-').flat_map(char::to_lowercase).collect::<String>();
+    !plain(key).is_empty() && plain(typed) == plain(key)
+}
+
+/// "The server's owner (Bassi) turned off adding songs for you…": a switch that's off, in plain words.
+pub fn switched_off(app: &Shared, what: &str) -> crate::ApiError {
+    let owner = crate::db::owner(&app.db()).map(|(_, n)| n).unwrap_or_else(|| "the owner".into());
+    crate::forbidden(format!("The server's owner ({owner}) turned off {what} for you. Ask them if you'd like it back on."))
+}
+
 /// A code as typed or pasted (dashes, spaces, small letters), as kept.
 pub fn plain_code(code: &str) -> String {
     code.chars().filter(|c| c.is_ascii_alphanumeric()).map(|c| c.to_ascii_uppercase()).collect()
@@ -62,10 +78,22 @@ pub fn lookup(app: &Shared, token: &str) -> Option<Who> {
     let conn = app.db();
     let who = conn
         .query_row(
-            "SELECT d.id, p.id, p.name, p.role, d.seen_ms FROM devices d JOIN people p ON p.id = d.person_id
+            "SELECT d.id, p.id, p.name, p.role, d.seen_ms, p.can_add, p.can_split, p.can_host FROM devices d JOIN people p ON p.id = d.person_id
              WHERE d.token_sha256 = ?1 AND d.revoked_ms IS NULL AND p.revoked_ms IS NULL",
             params![hash(token)],
-            |r| Ok((Who { device: r.get(0)?, person: r.get(1)?, name: r.get(2)?, owner: r.get::<_, String>(3)? == "owner" }, r.get::<_, Option<i64>>(4)?)),
+            |r| {
+                let owner = r.get::<_, String>(3)? == "owner";
+                let who = Who {
+                    device: r.get(0)?,
+                    person: r.get(1)?,
+                    name: r.get(2)?,
+                    owner,
+                    can_add: owner || r.get(5)?,
+                    can_split: owner || r.get(6)?,
+                    can_host: owner || r.get(7)?,
+                };
+                Ok((who, r.get::<_, Option<i64>>(4)?))
+            },
         )
         .optional()
         .ok()

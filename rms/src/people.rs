@@ -11,7 +11,11 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::auth::{self, Owner, Who};
+use crate::db::INVITE_MS;
 use crate::{bad, conflict, forbidden, not_found, now_ms, web, ApiError, ApiResult, Shared};
+
+const KEY_MISSING: &str = "Type the setup key first. It's the key you typed when deploying; if you didn't type one: Hostinger → Docker Manager → your project → Logs, or the file setup-key.txt in the server's data.";
+const KEY_WRONG: &str = "That setup key isn't right. It's the key you typed when deploying; if you didn't type one: Hostinger → Docker Manager → your project → Logs, or the file setup-key.txt in the server's data.";
 
 /// Names are kept short (they show on every friend's screen).
 const MOST_NAME: usize = 40;
@@ -31,7 +35,8 @@ pub async fn status(State(app): State<Shared>, headers: HeaderMap) -> Json<Value
     Json(json!({
         "server": name,
         "needs_setup": name.is_none(),
-        "setup_key_needed": app.cfg.setup_key.is_some(),
+        // always, before setup (owner, 2026-11-01)
+        "setup_key_needed": name.is_none(),
         "version": crate::VERSION,
         "address": base,
         "https": https,
@@ -59,9 +64,12 @@ pub async fn setup(State(app): State<Shared>, headers: HeaderMap, Json(body): Js
     if name.is_empty() {
         return Err(bad("Type your name: your friends will see the server as \"<your name>'s server\"."));
     }
+    // the setup key (owner, 2026-11-01: required); none here once it's set up (then it says so below)
     if let Some(key) = &app.cfg.setup_key {
-        if body.key.as_deref().map(str::trim) != Some(key.as_str()) {
-            return Err(forbidden("That setup key isn't right. It's the RMS_SETUP_KEY this server was started with."));
+        let typed = body.key.as_deref().unwrap_or("");
+        if !crate::auth::same_key(typed, key) {
+            tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+            return Err(forbidden(if typed.trim().is_empty() { KEY_MISSING } else { KEY_WRONG }));
         }
     }
     let token = auth::new_token();
@@ -99,12 +107,16 @@ pub async fn setup(State(app): State<Shared>, headers: HeaderMap, Json(body): Js
 /// An invite as the owner sees it: its code, its link and the link's QR.
 fn invite_json(app: &Shared, headers: &HeaderMap, code: &str, person: i64, name: &str, role: &str, created_ms: i64) -> Value {
     let link = format!("{}/join/{}", web::base_url(app, headers), auth::show_code(code));
+    let expires = created_ms + INVITE_MS;
     json!({
         "code": auth::show_code(code),
         "link": link,
         "qr_svg": web::qr_svg(&link),
         "person": { "id": person, "name": name, "role": role },
         "created_ms": created_ms,
+        // unused invites last 7 days (owner, 2026-11-01)
+        "expires_ms": expires,
+        "expires_in_days": ((expires - now_ms()).max(0) as f64 / 86_400_000.0).ceil() as i64,
     })
 }
 
@@ -125,15 +137,19 @@ pub async fn join(State(app): State<Shared>, Json(body): Json<JoinBody>) -> ApiR
     let now = now_ms();
     let joined = {
         let mut conn = app.db();
-        let found: Option<(i64, Option<i64>, Option<i64>, String, String, Option<i64>)> = conn
+        let found: Option<(i64, Option<i64>, Option<i64>, String, String, Option<i64>, i64)> = conn
             .query_row(
-                "SELECT i.person_id, i.used_ms, i.revoked_ms, p.name, p.role, p.revoked_ms FROM invites i JOIN people p ON p.id = i.person_id WHERE i.code = ?1",
+                "SELECT i.person_id, i.used_ms, i.revoked_ms, p.name, p.role, p.revoked_ms, i.created_ms FROM invites i JOIN people p ON p.id = i.person_id WHERE i.code = ?1",
                 params![code],
-                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)),
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?)),
             )
             .optional()?;
+        // an invite past its 7 days is turned away like one taken back
+        let expired = found.as_ref().is_some_and(|f| f.1.is_none() && now - f.6 > INVITE_MS);
+        let found = found.map(|(a, b, c, d, e, f, _)| (a, b, c, d, e, f));
         match found {
             None => Err(not_found("That invite code isn't right. Check it, or ask the server's owner for a new one.")),
+            Some(_) if expired => Err(ApiError(StatusCode::GONE, "That invite expired: invites last 7 days. Ask the server's owner for a new one.".into())),
             Some((_, Some(_), ..)) => Err(ApiError(StatusCode::GONE, "That invite was used already: each one works once. Ask the server's owner for a new one.".into())),
             Some((_, _, Some(_), ..)) | Some((.., Some(_))) => Err(ApiError(StatusCode::GONE, "The owner took that invite back. Ask them for a new one.".into())),
             Some((person, None, None, name, role, None)) => {
@@ -173,6 +189,8 @@ pub async fn me(State(app): State<Shared>, who: Who) -> Json<Value> {
         "person": { "id": who.person, "name": who.name, "role": if who.owner { "owner" } else { "friend" } },
         "device": { "id": who.device, "name": device_name },
         "server": { "name": app.server_name() },
+        // what the owner lets this person do (the owner: everything)
+        "can": { "add": who.can_add, "split": who.can_split, "host": who.can_host },
     }))
 }
 
@@ -222,9 +240,9 @@ pub async fn invites(State(app): State<Shared>, Owner(_): Owner, headers: Header
         let conn = app.db();
         let mut st = conn.prepare(
             "SELECT i.code, p.id, p.name, p.role, i.created_ms FROM invites i JOIN people p ON p.id = i.person_id
-             WHERE i.used_ms IS NULL AND i.revoked_ms IS NULL AND p.revoked_ms IS NULL ORDER BY i.created_ms DESC",
+             WHERE i.used_ms IS NULL AND i.revoked_ms IS NULL AND p.revoked_ms IS NULL AND i.created_ms > ?1 ORDER BY i.created_ms DESC",
         )?;
-        let rows = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))?.collect::<Result<_, _>>()?;
+        let rows = st.query_map(params![now_ms() - INVITE_MS], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))?.collect::<Result<_, _>>()?;
         rows
     };
     let list: Vec<Value> = rows.iter().map(|(code, id, name, role, at)| invite_json(&app, &headers, code, *id, name, role, *at)).collect();
@@ -249,21 +267,59 @@ pub async fn take_back(State(app): State<Shared>, Owner(_): Owner, Path(code): P
 /// Everyone on the server, with their devices (the owner's page).
 pub async fn people(State(app): State<Shared>, Owner(_): Owner) -> ApiResult<Json<Value>> {
     let conn = app.db();
-    let mut st = conn.prepare("SELECT id, name, role, created_ms, revoked_ms FROM people ORDER BY role = 'owner' DESC, revoked_ms IS NOT NULL, name COLLATE NOCASE")?;
-    let people: Vec<(i64, String, String, i64, Option<i64>)> = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))?.collect::<Result<_, _>>()?;
+    let mut st = conn.prepare("SELECT id, name, role, created_ms, revoked_ms, can_add, can_split, can_host FROM people ORDER BY role = 'owner' DESC, revoked_ms IS NOT NULL, name COLLATE NOCASE")?;
+    #[allow(clippy::type_complexity)]
+    let people: Vec<(i64, String, String, i64, Option<i64>, bool, bool, bool)> =
+        st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?)))?.collect::<Result<_, _>>()?;
     let mut dev = conn.prepare("SELECT id, name, created_ms, seen_ms, revoked_ms FROM devices WHERE person_id = ?1 ORDER BY created_ms")?;
-    let mut open = conn.prepare("SELECT COUNT(*) FROM invites WHERE person_id = ?1 AND used_ms IS NULL AND revoked_ms IS NULL")?;
+    let mut open = conn.prepare("SELECT COUNT(*), COALESCE(SUM(created_ms <= ?2), 0) FROM invites WHERE person_id = ?1 AND used_ms IS NULL AND revoked_ms IS NULL")?;
+    let since = now_ms() - INVITE_MS;
     let mut list = vec![];
-    for (id, name, role, created, revoked) in people {
+    for (id, name, role, created, revoked, can_add, can_split, can_host) in people {
         let devices: Vec<Value> = dev
             .query_map(params![id], |r| {
                 Ok(json!({ "id": r.get::<_, i64>(0)?, "name": r.get::<_, String>(1)?, "created_ms": r.get::<_, i64>(2)?, "seen_ms": r.get::<_, Option<i64>>(3)?, "removed": r.get::<_, Option<i64>>(4)?.is_some() }))
             })?
             .collect::<Result<_, _>>()?;
-        let invites: i64 = open.query_row(params![id], |r| r.get(0))?;
-        list.push(json!({ "id": id, "name": name, "role": role, "created_ms": created, "removed": revoked.is_some(), "devices": devices, "open_invites": invites }));
+        let (unused, expired): (i64, i64) = open.query_row(params![id, since], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        let owner = role == "owner";
+        list.push(json!({
+            "id": id, "name": name, "role": role, "created_ms": created, "removed": revoked.is_some(), "devices": devices,
+            "open_invites": unused - expired, "expired_invites": expired,
+            "can": { "add": owner || can_add, "split": owner || can_split, "host": owner || can_host },
+        }));
     }
     Ok(Json(json!({ "people": list })))
+}
+
+#[derive(Deserialize)]
+pub struct SwitchesBody {
+    #[serde(default)]
+    can_add: Option<bool>,
+    #[serde(default)]
+    can_split: Option<bool>,
+    #[serde(default)]
+    can_host: Option<bool>,
+}
+
+/// PATCH /api/people/ID {can_add, can_split, can_host}: the owner's switches
+/// for a friend (all on at first; owner, 2026-11-01).
+pub async fn switches(State(app): State<Shared>, Owner(_): Owner, Path(id): Path<i64>, Json(body): Json<SwitchesBody>) -> ApiResult<Json<Value>> {
+    let conn = app.db();
+    let found: Option<(String, Option<i64>)> = conn.query_row("SELECT role, revoked_ms FROM people WHERE id = ?1", params![id], |r| Ok((r.get(0)?, r.get(1)?))).optional()?;
+    match found {
+        None => return Err(not_found("There's nobody like that on this server.")),
+        Some((role, _)) if role == "owner" => return Err(forbidden("It's your server: you can always do everything on it.")),
+        Some((_, Some(_))) => return Err(conflict("That friend was removed.")),
+        _ => {}
+    }
+    for (column, value) in [("can_add", body.can_add), ("can_split", body.can_split), ("can_host", body.can_host)] {
+        if let Some(v) = value {
+            conn.execute(&format!("UPDATE people SET {column} = ?1 WHERE id = ?2"), params![v, id])?;
+        }
+    }
+    let (name, add, split, host): (String, bool, bool, bool) = conn.query_row("SELECT name, can_add, can_split, can_host FROM people WHERE id = ?1", params![id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?;
+    Ok(Json(json!({ "id": id, "name": name, "can": { "add": add, "split": split, "host": host } })))
 }
 
 /// The owner removes a friend: their devices stop working at once and their

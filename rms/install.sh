@@ -10,7 +10,8 @@
 #
 # Other settings, the same way: RMS_PORT (8080: where it listens without a
 # domain), RMS_DATA (/var/lib/radiance-music-server: the library, the
-# database and the models), RMS_SETUP_KEY (the setup page asks for it),
+# database and the models), RMS_SETUP_KEY (the key the setup page asks for:
+# it asks you for one, or the server makes one and this shows it at the end),
 # RMS_BINARY (an rms program built elsewhere: skips building it here).
 #
 # Run it again to update (after a `git pull`): your library and people stay.
@@ -39,6 +40,19 @@ case " ${ID:-} ${ID_LIKE:-} " in
   *" debian "*|*" ubuntu "*) family=debian ;;
   *" fedora "*|*" rhel "*|*" centos "*) family=fedora ;;
   *) die "This script knows Debian, Ubuntu and Fedora. On another system, follow the README's steps by hand." ;;
+esac
+
+# the setup key (owner, 2026-11-01: required): typed here, or made by the server at its first start
+KEY="${RMS_SETUP_KEY:-}"
+if [ -z "$KEY" ] && [ -f "$ENV_FILE" ]; then
+  KEY=$(sed -n 's/^RMS_SETUP_KEY=//p' "$ENV_FILE" | head -n 1)
+fi
+if [ -z "$KEY" ] && [ ! -s "$DATA/server.db" ] && [ -t 0 ]; then
+  echo "The setup page asks for a setup key, so nobody else can claim your new server before you open it."
+  read -r -p "Type a setup key (letters, digits, dashes), or press Enter and the server makes one: " KEY
+fi
+case "$KEY" in
+  *[!A-Za-z0-9._-]*) die "Use only letters, digits, dashes, dots or underscores in the setup key." ;;
 esac
 
 # what splitting needs: about 2.7 GB of memory while it works
@@ -76,10 +90,18 @@ fi
 say "Setting up the splitter (PyTorch for the CPU and Demucs: about 1 GB to download)"
 [ -x "$OPT/venv/bin/python" ] || python3 -m venv "$OPT/venv"
 "$OPT/venv/bin/pip" install -q --upgrade pip
+# the set the Docker image is tested with, where this Python can have it (3.11 or newer)
+if python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)'; then
+  torch_set="torch==2.15.0+cpu torchaudio==2.11.1+cpu"; demucs_set="demucs==4.1.0"
+else
+  torch_set="torch torchaudio"; demucs_set="demucs"
+  echo "Note: $(python3 -V) is older than 3.11, so it gets the newest PyTorch that suits it (the tested set needs 3.11)."
+fi
+# shellcheck disable=SC2086
 "$OPT/venv/bin/pip" install -q --progress-bar off --only-binary=:all: \
   --index-url https://download.pytorch.org/whl/cpu --extra-index-url https://pypi.org/simple \
-  torch torchaudio soundfile av numpy pyyaml
-"$OPT/venv/bin/pip" install -q --only-binary=:all: demucs
+  $torch_set soundfile av numpy pyyaml
+"$OPT/venv/bin/pip" install -q --only-binary=:all: "$demucs_set"
 "$OPT/venv/bin/python" -c "import torch, torchaudio, demucs, soundfile, av; print('The splitter is in: PyTorch', torch.__version__)"
 install -d "$OPT/scripts"
 install -m 644 "$repo/server/split.py" "$repo/server/align.py" "$OPT/scripts/"
@@ -97,7 +119,7 @@ if [ -n "$DOMAIN" ]; then bind="127.0.0.1:8080"; else bind="0.0.0.0:$PORT"; fi
   echo "RMS_PYTHON=$OPT/venv/bin/python"
   echo "RMS_SCRIPTS=$OPT/scripts"
   [ -n "$DOMAIN" ] && echo "RMS_DOMAIN=$DOMAIN"
-  [ -n "${RMS_SETUP_KEY:-}" ] && echo "RMS_SETUP_KEY=$RMS_SETUP_KEY"
+  [ -n "$KEY" ] && echo "RMS_SETUP_KEY=$KEY"
   [ -n "${RMS_THREADS:-}" ] && echo "RMS_THREADS=$RMS_THREADS"
   true
 } > "$ENV_FILE"
@@ -185,13 +207,23 @@ done
 [ "$up" = yes ] || die "It didn't start. See what it said: journalctl -u $UNIT -n 50"
 
 ip=$(hostname -I 2>/dev/null | awk '{print $1}')
+if curl -fsS "http://${bind/0.0.0.0/127.0.0.1}/api/status" 2>/dev/null | grep -q '"needs_setup":false'; then
+  key_line="It's set up already: open it to manage it."
+elif [ -n "$KEY" ]; then
+  key_line="The setup key is the one you typed."
+elif [ -s "$DATA/setup-key.txt" ]; then
+  key_line="The setup key: $(cat "$DATA/setup-key.txt")  (also in $DATA/setup-key.txt)"
+else
+  key_line="The setup key is set up already, or see: journalctl -u $UNIT | grep 'setup key'"
+fi
 if [ -n "$DOMAIN" ]; then address="https://$DOMAIN"; else address="http://${ip:-this-server}:$PORT"; fi
 cat <<EOF
 
 Radiance Music Server is running.
 
-  Open $address in a browser and type your name: that sets it up
-  and gives you the link for your own phone and computer.
+  Open $address in a browser, type your name and the setup key: that sets
+  it up and gives you the link for your own phone and computer.
+  $key_line
 
   The splitting models download now (about 1.3 GB, once); the page shows how far along.
   Your library, the database and the models: $DATA

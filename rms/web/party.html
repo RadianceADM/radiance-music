@@ -14,12 +14,20 @@
     box-shadow: 0 18px 40px rgba(0, 0, 0, 0.5), 0 0 60px rgba(243, 138, 53, 0.15); display: grid; place-items: center; color: var(--muted); }
   .cover .i { width: 64px; height: 64px; }
   .song-title { font-size: 1.9em; font-weight: 800; letter-spacing: -1px; line-height: 1.15; }
-  .seek { height: 10px; cursor: default; }
-  .seek.can { cursor: pointer; }
+  .seek-wrap { position: relative; padding: 7px 0; }
+  .seek-wrap.can { cursor: pointer; }
+  .seek { height: 8px; }
+  /* where the song is: a round thumb in the accent */
+  .thumb { position: absolute; top: 50%; left: 0; width: 16px; height: 16px; border-radius: 999px; background: var(--accent);
+    transform: translate(-50%, -50%); box-shadow: 0 0 0 4px rgba(243, 138, 53, 0.22), 0 2px 8px rgba(0, 0, 0, 0.45); pointer-events: none; }
   .times { display: flex; justify-content: space-between; color: var(--muted); font-size: 0.85em; margin-top: 4px; font-variant-numeric: tabular-nums; }
-  .reacts button { font-size: 1.4em; padding: 8px 12px; }
+  .reacts { gap: 6px; }
+  .reacts button { padding: 8px 9px; }
+  .reacts svg { width: 26px; height: 26px; display: block; }
   .floats { position: absolute; inset: 0; pointer-events: none; overflow: hidden; border-radius: 22px; }
-  .float { position: absolute; bottom: 30%; font-size: 2em; pointer-events: none; animation: rise 2.6s ease-out forwards; }
+  .float { position: absolute; bottom: 30%; pointer-events: none; animation: rise 2.6s ease-out forwards; }
+  .float svg { width: 44px; height: 44px; display: block; filter: drop-shadow(0 6px 14px rgba(0, 0, 0, 0.4)); }
+  .float span { font-size: 2em; }
   @keyframes rise { 0% { transform: translateY(0) scale(0.8); opacity: 0; } 15% { opacity: 1; transform: translateY(-20px) scale(1.1); } 100% { transform: translateY(-180px) scale(1); opacity: 0; } }
   .sync { font-size: 0.82em; color: var(--muted); font-variant-numeric: tabular-nums; }
   .chips { display: flex; flex-wrap: wrap; gap: 8px; }
@@ -63,7 +71,10 @@
     <section id="off" class="hidden">
       <h1 class="page-title">No party on right now</h1>
       <p class="lead">Start one: everyone in it hears the same song at the same moment, on the apps and in browsers, with a queue everyone adds to.</p>
-      <div class="card stack" style="max-width:520px">
+      <div class="card hidden" id="no-host" style="max-width:520px">
+        <p class="muted" style="margin:0">The server's owner turned off hosting parties for you. When someone else starts one, it shows here and you can join it.</p>
+      </div>
+      <div class="card stack" id="start-card" style="max-width:520px">
         <label class="row" style="font-weight:600"><input type="checkbox" id="everyone"> Let everyone play, pause and skip</label>
         <p class="hint" style="margin:0">Otherwise only you (the host) do; everyone can add songs and react. You can change it later.</p>
         <div><button class="btn primary big" onclick="startParty()"><span data-icon="headphones"></span>Start a party</button></div>
@@ -136,6 +147,8 @@ async function boot() {
     return setTimeout(boot, 3000);
   }
   me = m.data;
+  show($('#start-card'), me.can.host);
+  show($('#no-host'), !me.can.host);
   $('#name').textContent = (me.server.name || 'Radiance Music Server');
   document.title = 'Listening party · ' + me.server.name;
   await syncClock();
@@ -286,8 +299,11 @@ function drawProgress() {
   if (!party || !party.on || !party.song) return;
   const length = party.song.duration_ms || 0;
   const at = Math.max(0, Math.min(position(), length || Infinity));
+  const pct = length ? (100 * at) / length + '%' : '0';
   const fill = $('#seek-fill');
-  if (fill) fill.style.width = length ? (100 * at) / length + '%' : '0';
+  if (fill) fill.style.width = pct;
+  const thumb = $('#seek-thumb');
+  if (thumb) thumb.style.left = pct;
   const t = $('#at');
   if (t) t.textContent = RMS.clock(at);
 }
@@ -314,12 +330,12 @@ function draw() {
         <span class="muted small">Hosted by ${esc(party.host.name)}</span></div>
       ${s ? `<div><div class="song-title">${esc(s.title)}</div><div class="muted">${esc(s.artist || 'Unknown artist')} · added by ${esc(s.added_by.name)}</div></div>`
           : `<div><div class="song-title">Nothing playing</div><div class="muted">Add a song: it starts at once.</div></div>`}
-      ${s ? `<div><div class="bar seek ${control ? 'can' : ''}" id="seek" onclick="seekTo(event)"><div id="seek-fill"></div></div>
+      ${s ? `<div><div class="seek-wrap ${control ? 'can' : ''}" id="seek" onclick="seekTo(event)"><div class="bar seek"><div id="seek-fill"></div></div><div class="thumb" id="seek-thumb"></div></div>
         <div class="times"><span id="at">0:00</span><span>${RMS.clock(s.duration_ms)}</span></div></div>` : ''}
       <div class="row">${controls}</div>
       <div class="row">${me_}</div>
       <div class="sync" id="sync"></div>
-      <div class="row reacts">${['🔥', '❤️', '😂', '👏', '🎉', '😮'].map((e) => `<button class="btn" onclick="react('${e}')" title="React">${e}</button>`).join('')}</div>
+      <div class="row reacts">${Object.entries(REACTIONS).map(([e, [name]]) => `<button class="btn" onclick="react('${e}')" title="${name}" aria-label="${name}">${reaction(e)}</button>`).join('')}</div>
     </div>`;
   RMS.hydrate($('#now'));
   drawProgress();
@@ -367,12 +383,25 @@ async function react(emoji) {
   if (!r.ok) toast(r.data.error, true);
 }
 
+// reactions as small soft pictures (no emoji font needed; owner: nothing spiky).
+// The API carries the emoji itself; one the page doesn't know shows as text.
+const FACE = '#FFC94D', INK = '#5A3A12';
+const REACTIONS = {
+  '🔥': ['Fire', '<path d="M12 21.5c-3.9 0-6.6-2.7-6.6-6.3 0-2.5 1.3-4.4 2.8-5.9.3 1.6 1.1 2.6 2.1 3-.4-3.1.9-6.2 3-8.2.5 2.4 1.9 4.2 3.3 5.8 1.2 1.4 1.9 3.1 1.9 5 0 3.9-2.7 6.6-6.5 6.6z" fill="#F38A35" stroke="#F38A35" stroke-width="1.8" stroke-linejoin="round"/><path d="M12 20.2c-1.8 0-3-1.2-3-2.9 0-1.5 1-2.6 2.2-3.5.1.9.6 1.5 1.3 1.7.1-1.2.6-2.1 1.4-2.8.6 1 1 2 1 3.3 0 2.5-1.2 4.2-2.9 4.2z" fill="#FFD27A" stroke="#FFD27A" stroke-width="1" stroke-linejoin="round"/>'],
+  '❤️': ['Love', '<path d="M19 14c1.5-1.5 3-3.2 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.8 0-3 .5-4.5 2-1.5-1.5-2.7-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4 3 5.5l7 7z" fill="#F2685B" stroke="#F2685B" stroke-width="1.6" stroke-linejoin="round"/><ellipse cx="7.3" cy="7.6" rx="1.6" ry="1.1" fill="#fff" opacity=".35" transform="rotate(-30 7.3 7.6)"/>'],
+  '😂': ['Laugh', `<circle cx="12" cy="12" r="10" fill="${FACE}"/><path d="M7.3 9.8q1.6-1.8 3.2 0M13.5 9.8q1.6-1.8 3.2 0" fill="none" stroke="${INK}" stroke-width="1.6" stroke-linecap="round"/><path d="M7 13.2h10a5 5 0 0 1-10 0z" fill="${INK}" stroke="${INK}" stroke-width="1.2" stroke-linejoin="round"/><ellipse cx="12" cy="16.7" rx="2.4" ry="1.2" fill="#F2685B"/>`],
+  '👏': ['Clap', '<rect x="5.5" y="6.5" width="7" height="13" rx="3.5" fill="#FFB774" transform="rotate(-16 9 13)"/><rect x="11.5" y="5.5" width="7" height="13" rx="3.5" fill="#F38A35" transform="rotate(16 15 12)"/><path d="M4.2 5.2q.6-1.5 2-2M19.8 3.2q1.3.5 1.8 1.9M20.8 8.1q.8.3 1.1 1" fill="none" stroke="#FFD27A" stroke-width="1.6" stroke-linecap="round"/>'],
+  '🎉': ['Party', '<ellipse cx="12" cy="9.6" rx="6.4" ry="7.4" fill="#E2558A"/><ellipse cx="9.6" cy="7" rx="1.5" ry="2.4" fill="#fff" opacity=".3" transform="rotate(20 9.6 7)"/><path d="M10.9 17.1h2.2l-1.1 1.5z" fill="#E2558A" stroke="#E2558A" stroke-width="1" stroke-linejoin="round"/><path d="M12 18.6c-1.4 1 1.4 1.8 0 3.2" fill="none" stroke="#F5F5F4" stroke-width="1.3" stroke-linecap="round" opacity=".75"/><circle cx="4" cy="5" r="1.2" fill="#FFD27A"/><circle cx="20.2" cy="4.2" r="1" fill="#F38A35"/><circle cx="19.6" cy="16.5" r="1.1" fill="#9BD39B"/>'],
+  '😮': ['Wow', `<circle cx="12" cy="12" r="10" fill="${FACE}"/><path d="M6.8 7.3q1.6-1.2 3.2-.6M14 6.7q1.6-.6 3.2.6" fill="none" stroke="${INK}" stroke-width="1.4" stroke-linecap="round"/><circle cx="8.7" cy="10.2" r="1.4" fill="${INK}"/><circle cx="15.3" cy="10.2" r="1.4" fill="${INK}"/><ellipse cx="12" cy="15.6" rx="2.4" ry="2.9" fill="${INK}"/>`],
+};
+const reaction = (emoji) => (REACTIONS[emoji] ? `<svg viewBox="0 0 24 24" aria-hidden="true">${REACTIONS[emoji][1]}</svg>` : `<span>${esc(emoji)}</span>`);
+
 function floatUp(emoji) {
   const host = $('#floats');
   if (!host) return;
   const el = document.createElement('span');
   el.className = 'float';
-  el.textContent = emoji;
+  el.innerHTML = reaction(emoji);
   el.style.left = 20 + Math.random() * 60 + '%';
   host.appendChild(el);
   setTimeout(() => el.remove(), 2700);

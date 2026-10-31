@@ -49,7 +49,8 @@ pub struct Config {
     pub domain: Option<String>,
     /// RMS_PUBLIC_URL: the address links use, when it's neither of the above.
     pub public_url: Option<String>,
-    /// RMS_SETUP_KEY: when set, the setup page asks for it (so nobody else claims a fresh server).
+    /// RMS_SETUP_KEY: the setup page asks for it, so nobody else claims a fresh server (owner,
+    /// 2026-11-01: required). None at the first start: the server makes one (setup-key.txt, the log).
     pub setup_key: Option<String>,
     /// RMS_THREADS: the cores the splitter may use (default: all of them, at the lowest priority).
     pub threads: usize,
@@ -160,11 +161,14 @@ pub fn broken(msg: impl Into<String>) -> ApiError {
 
 /// Opens the data folder and the database, and starts the helpers: the split
 /// worker (which first downloads the models), and the party's clock.
-pub fn open(cfg: Config) -> Result<Shared, String> {
+pub fn open(mut cfg: Config) -> Result<Shared, String> {
     for dir in [cfg.data.clone(), cfg.library(), cfg.models(), cfg.work(), cfg.data.join("logs")] {
         std::fs::create_dir_all(&dir).map_err(|e| format!("can't make {}: {e}", dir.display()))?;
     }
     let conn = db::open(&cfg.data.join("server.db"))?;
+    if db::owner(&conn).is_none() {
+        cfg.setup_key = Some(setup_key(&cfg)?);
+    }
     let app = Arc::new(App { cfg, db: Mutex::new(conn), splitter: split::Splitter::default(), party: party::Party::default() });
     // a crashed upload's leftovers
     if let Ok(dir) = std::fs::read_dir(app.cfg.work()) {
@@ -177,6 +181,32 @@ pub fn open(cfg: Config) -> Result<Shared, String> {
     tokio::spawn(split::worker(app.clone()));
     tokio::spawn(party::clock(app.clone()));
     Ok(app)
+}
+
+/// The key the setup page asks for: the one given when deploying (RMS_SETUP_KEY),
+/// else one made here once, readable like an invite code, kept in setup-key.txt
+/// and printed in the log (Hostinger: Docker Manager → your project → Logs).
+fn setup_key(cfg: &Config) -> Result<String, String> {
+    if let Some(k) = &cfg.setup_key {
+        log("waiting for setup: the setup page asks for the setup key given when deploying (RMS_SETUP_KEY)");
+        return Ok(k.clone());
+    }
+    let file = cfg.data.join("setup-key.txt");
+    let key = match std::fs::read_to_string(&file) {
+        Ok(k) if !k.trim().is_empty() => k.trim().to_string(),
+        _ => {
+            let k = auth::show_code(&auth::new_code());
+            std::fs::write(&file, format!("{k}\n")).map_err(|e| format!("can't keep the setup key in {}: {e}", file.display()))?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600));
+            }
+            k
+        }
+    };
+    log(&format!("waiting for setup. The setup key is {key} (also in {})", file.display()));
+    Ok(key)
 }
 
 /// Every address the server answers.
@@ -195,6 +225,7 @@ pub fn router(app: Shared) -> Router {
         .route("/api/invites", get(people::invites).post(people::invite))
         .route("/api/invites/{code}", axum::routing::delete(people::take_back))
         .route("/api/people", get(people::people))
+        .route("/api/people/{id}", axum::routing::patch(people::switches))
         .route("/api/people/{id}/revoke", post(people::revoke_person))
         .route("/api/devices/{id}/revoke", post(people::revoke_device))
         // the library

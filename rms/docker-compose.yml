@@ -7,8 +7,11 @@
 # RMS_DOMAIN (optional): your domain, pointed at this server (an A record).
 #   Caddy gets its certificate by itself and the server is on https.
 #   Without it, the server is on http, port 80; its page says how to add one.
-# RMS_SETUP_KEY (optional): the setup page asks for it, so nobody else can
-#   claim a fresh server before you open it.
+# RMS_SETUP_KEY: the setup page asks for it, so nobody else can claim your
+#   new server before you open it (owner, 2026-11-01: required). Type one when
+#   deploying. Left empty, the server makes one and shows it in its log
+#   (Hostinger: Docker Manager → your project → Logs) and in setup-key.txt in
+#   its data. After setup it isn't needed any more.
 
 name: radiance-music-server
 
@@ -18,7 +21,7 @@ services:
     restart: unless-stopped
     environment:
       RMS_DOMAIN: ${RMS_DOMAIN:-}
-      RMS_SETUP_KEY: ${RMS_SETUP_KEY:-}
+      RMS_SETUP_KEY: ${RMS_SETUP_KEY}
     volumes:
       # the library, server.db and the splitting models (downloaded at the first start)
       - rms-data:/data

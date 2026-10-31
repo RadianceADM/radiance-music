@@ -77,9 +77,11 @@ pub async fn party_page() -> Response {
 /// An invite's page: its code and QR for the apps, and a way to listen in this browser.
 pub async fn join_page(State(app): State<Shared>, headers: HeaderMap, Path(code): Path<String>) -> Response {
     let plain = auth::plain_code(&code);
-    let found: Option<(String, Option<i64>, Option<i64>, Option<i64>)> = app
+    let found: Option<(String, Option<i64>, Option<i64>, Option<i64>, i64)> = app
         .db()
-        .query_row("SELECT p.name, i.used_ms, i.revoked_ms, p.revoked_ms FROM invites i JOIN people p ON p.id = i.person_id WHERE i.code = ?1", params![plain], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
+        .query_row("SELECT p.name, i.used_ms, i.revoked_ms, p.revoked_ms, i.created_ms FROM invites i JOIN people p ON p.id = i.person_id WHERE i.code = ?1", params![plain], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+        })
         .optional()
         .ok()
         .flatten();
@@ -88,8 +90,9 @@ pub async fn join_page(State(app): State<Shared>, headers: HeaderMap, Path(code)
     let (state, who, problem) = match &found {
         None => ("bad", String::new(), "That invite code isn't right. Check the link, or ask the server's owner for a new one."),
         Some((_, Some(_), ..)) => ("used", String::new(), "This invite was used already: each one works once. Ask the server's owner for a new one."),
-        Some((_, _, Some(_), _)) | Some((.., Some(_))) => ("gone", String::new(), "The owner took this invite back. Ask them for a new one."),
-        Some((name, None, None, None)) => ("ok", name.clone(), ""),
+        Some((_, _, Some(_), ..)) | Some((_, _, _, Some(_), _)) => ("gone", String::new(), "The owner took this invite back. Ask them for a new one."),
+        Some((.., created)) if crate::now_ms() - created > crate::db::INVITE_MS => ("expired", String::new(), "This invite expired: invites last 7 days. Ask the server's owner for a new one."),
+        Some((name, None, None, None, _)) => ("ok", name.clone(), ""),
     };
     let html = JOIN
         .replace("{{SERVER}}", &escape(&server))

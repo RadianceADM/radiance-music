@@ -48,9 +48,11 @@
             <input id="owner-name" maxlength="40" autocomplete="name" placeholder="Bassi" required>
             <span class="hint" id="name-preview">Friends will see it as "Your name's server".</span>
           </label>
-          <label class="field hidden" id="key-field">Setup key
-            <input id="setup-key" autocomplete="off">
-            <span class="hint">The RMS_SETUP_KEY this server was started with.</span>
+          <label class="field" id="key-field">Setup key
+            <input id="setup-key" autocomplete="off" autocapitalize="characters" spellcheck="false" required>
+            <span class="hint">The key you typed when deploying. If you didn't type one: Hostinger → Docker Manager → your project → Logs,
+              or the file <span class="mono">setup-key.txt</span> in the server's data. (Set up with install.sh? It showed the key at the end.)
+              After setup, it isn't needed any more.</span>
           </label>
           <div class="error-text hidden" id="setup-error"></div>
           <div><button class="btn primary big" id="setup-go"><span data-icon="check"></span>Set up my server</button></div>
@@ -135,8 +137,9 @@
             <div class="row">
               <h2 class="section-title" style="margin:0"><span data-icon="music"></span>Library <span class="pill" id="count">0</span></h2>
               <div class="spacer"></div>
-              <button class="btn small" onclick="toggleUpload()"><span data-icon="upload"></span>Add a song</button>
+              <button class="btn small" id="add-song" onclick="toggleUpload()"><span data-icon="upload"></span>Add a song</button>
             </div>
+            <div id="switched-off"></div>
             <form id="upload" class="card stack hidden" onsubmit="upload(event)" style="background:var(--card)">
               <label class="field">The song <span class="hint">.opus, .flac or .m4a, named "Artist - Title" (or type them below)</span>
                 <input type="file" name="song" accept=".opus,.flac,.m4a" required></label>
@@ -160,6 +163,7 @@
 
           <div class="card stack">
             <h2 class="section-title"><span data-icon="split"></span>Split queue</h2>
+            <div id="next-turn" class="row"></div>
             <div id="queue" class="list"></div>
           </div>
         </div>
@@ -189,7 +193,6 @@ async function start() {
   $('#name').textContent = srv.server || 'Radiance Music Server';
   document.title = srv.server ? srv.server + ' · Radiance Music Server' : 'Radiance Music Server';
   if (srv.needs_setup) {
-    show($('#key-field'), srv.setup_key_needed);
     drawSplitter($('#setup-splitter'), true);
     timers.push(setInterval(refreshStatus, 2000));
     return view('setup');
@@ -224,14 +227,14 @@ async function setup(e) {
   const btn = $('#setup-go');
   btn.disabled = true;
   show($('#setup-error'), false);
-  const r = await api('/api/setup', { method: 'POST', body: { name: $('#owner-name').value, key: $('#setup-key').value || undefined, device_name: 'Web browser' }, auth: false });
+  const r = await api('/api/setup', { method: 'POST', body: { name: $('#owner-name').value, key: $('#setup-key').value, device_name: 'Web browser' }, auth: false });
   btn.disabled = false;
   if (!r.ok) {
     $('#setup-error').textContent = r.data.error || 'That didn\'t work. Try again.';
     return show($('#setup-error'));
   }
   RMS.setToken(r.data.token);
-  me = { person: r.data.person, device: r.data.device, server: r.data.server };
+  me = { person: r.data.person, device: r.data.device, server: r.data.server, can: { add: true, split: true, host: true } };
   $('#welcome-name').textContent = r.data.server.name;
   $('#name').textContent = r.data.server.name;
   $('#welcome-invite').innerHTML = inviteHtml(r.data.invite, 'Your join link');
@@ -247,7 +250,7 @@ function inviteHtml(inv, heading) {
         <div><div class="hint">Invite code</div><div class="code">${esc(inv.code)}</div></div>
         <input readonly value="${esc(inv.link)}" onclick="this.select()">
         <div class="row"><button class="btn small" type="button" data-link="${esc(inv.link)}" onclick="RMS.copy(this.dataset.link)"><span data-icon="copy"></span>Copy link</button></div>
-        <div class="hint">Works once, on one device. Send it only to ${esc(inv.person.name)}.</div>
+        <div class="hint">Works once, on one device, for ${inv.expires_in_days > 1 ? inv.expires_in_days + ' days' : 'a day'}. Send it only to ${esc(inv.person.name)}.</div>
       </div>
     </div>`;
 }
@@ -262,6 +265,11 @@ async function openDash() {
   timers = [];
   const owner = me.person.role === 'owner';
   document.querySelectorAll('.owner-only').forEach((el) => show(el, owner));
+  // what the owner lets this friend do
+  show($('#add-song'), me.can.add);
+  $('#switched-off').innerHTML = [!me.can.add && 'adding songs', !me.can.split && 'splitting songs'].filter(Boolean).length
+    ? `<div class="banner"><span>${RMS.icon('users')}</span><div class="small">The server's owner turned off ${[!me.can.add && 'adding songs', !me.can.split && 'splitting songs'].filter(Boolean).join(' and ')} for you. Ask them if you'd like it back on.</div></div>`
+    : '';
   $('#footer').innerHTML = `<span>Radiance Music Server ${esc(srv.version)}</span><span>·</span>
     <span>You're ${esc(me.person.name)}${owner ? ' (the owner)' : ''}, on ${esc(me.device.name)}</span>
     <button class="btn quiet small" onclick="signOut()"><span data-icon="log-out"></span>Sign out of this browser</button>`;
@@ -277,7 +285,8 @@ async function openDash() {
 // the address isn't private yet (http): how to add a domain
 function drawBanners() {
   let html = '';
-  if (!srv.https) {
+  // the owner's to do (friends can't change it)
+  if (!srv.https && me.person.role === 'owner') {
     const ip = (srv.address || '').replace(/^https?:\/\//, '');
     const suggest = srv.suggested_domain
       ? ` No domain? <span class="mono">${esc(srv.suggested_domain)}</span> points at this server for free: use it as RMS_DOMAIN.`
@@ -346,7 +355,7 @@ function drawLibrary() {
   if (!songs.length) {
     html = `<div class="empty"><span data-icon="music"></span><div>No songs yet.</div>
       <p class="small">Add one here, or copy your Music folder (the songs as the app saves them) into the server's library folder.</p>
-      <button class="btn primary small" onclick="toggleUpload(true)"><span data-icon="upload"></span>Add a song</button></div>`;
+      ${me.can.add ? '<button class="btn primary small" onclick="toggleUpload(true)"><span data-icon="upload"></span>Add a song</button>' : ''}</div>`;
   } else if (!list.length) {
     html = `<div class="empty"><span data-icon="search"></span><div>No songs match "${esc(q)}".</div>
       <button class="btn small" onclick="$('#search').value='';drawLibrary()"><span data-icon="x"></span>Clear the search</button></div>`;
@@ -355,7 +364,7 @@ function drawLibrary() {
       const badges = [s.split ? '<span class="pill on">Split</span>' : '', s.word_times ? '<span class="pill on">Word times</span>' : s.lyrics ? '<span class="pill">Lyrics</span>' : '', s.video ? '<span class="pill">Video</span>' : '']
         .filter(Boolean).join(' ');
       const art = s.cover ? `<img class="art" loading="lazy" decoding="async" src="${esc(RMS.fileUrl(s.cover))}" alt="">` : `<div class="art">${RMS.icon('music')}</div>`;
-      const action = s.split ? '' : queued.has(s.id)
+      const action = s.split || !me.can.split ? '' : queued.has(s.id)
         ? '<span class="pill on">In the queue</span>'
         : `<button class="btn small" onclick="split(${s.id})"><span data-icon="split"></span>Split</button>`;
       return `<div class="item">${art}<div class="grow"><div class="title">${esc(s.title)}</div>
@@ -396,6 +405,9 @@ async function loadQueue() {
   const busy = jobs.some((j) => ['splitting', 'timing'].includes(j.state));
   const owner = me && me.person.role === 'owner';
   const el = $('#queue');
+  // people take turns (owner, 2026-11-01): whose song is next
+  const next = r.data.next_turn;
+  $('#next-turn').innerHTML = next ? `<span class="pill on">${RMS.icon('users')} Next turn: ${esc(next.name)}</span> <span class="hint">Everyone takes turns, one song each.</span>` : '';
   if (!jobs.length) {
     el.innerHTML = `<div class="empty"><span data-icon="split"></span><div>Nothing to split.</div><p class="small">Pick Split on a song in the library: its parts and word times land beside it, for everyone.</p></div>`;
   } else {
@@ -458,22 +470,36 @@ async function loadPeople() {
   const friends = people.filter((x) => x.role !== 'owner');
   $('#people').innerHTML = friends.length ? friends.map((x) => {
     const devices = x.devices.filter((d) => !d.removed);
-    const dev = devices.map((d) => `<div class="row small muted" style="gap:6px">${RMS.icon('phone')} ${esc(d.name)} · seen ${RMS.ago(d.seen_ms)}
+    const dev = devices.map((d) => `<div class="row small muted" style="gap:6px;flex-wrap:nowrap">${RMS.icon('phone')} <span style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(d.name)} · seen ${RMS.ago(d.seen_ms)}</span>
         ${x.removed ? '' : `<button class="btn quiet small" onclick="removeDevice(${d.id}, '${esc(d.name)}')"><span data-icon="x"></span>Remove</button>`}</div>`).join('');
     return `<div class="item" style="align-items:flex-start"><div class="avatar">${RMS.initial(x.name)}</div><div class="grow">
       <div class="title">${esc(x.name)} ${x.removed ? '<span class="pill bad">Removed</span>' : ''}${!x.removed && !devices.length ? ' <span class="pill">Not joined yet</span>' : ''}</div>
-      ${dev}${x.open_invites && !x.removed ? `<div class="small muted">${x.open_invites} invite${x.open_invites > 1 ? 's' : ''} waiting</div>` : ''}</div>
-      ${x.removed ? '' : `<div class="row" style="gap:4px"><button class="btn quiet small" onclick="inviteAgain(${x.id})"><span data-icon="link"></span>New link</button>
-        <button class="btn danger small" onclick="removePerson(${x.id}, '${esc(x.name)}')"><span data-icon="user-x"></span>Remove</button></div>`}</div>`;
+      ${dev}${x.open_invites && !x.removed ? `<div class="small muted">${x.open_invites} invite${x.open_invites > 1 ? 's' : ''} waiting</div>` : ''}
+      ${!x.removed && !devices.length && !x.open_invites && x.expired_invites ? '<div class="small"><span class="pill bad">Invite expired</span> <span class="muted">Make a new link for them.</span></div>' : ''}
+      ${x.removed ? '' : `<div class="switches">${[['add', 'Can add songs'], ['split', 'Can split'], ['host', 'Can host a party']].map(([k, label]) =>
+        `<label class="switch"><input type="checkbox" ${x.can[k] ? 'checked' : ''} onchange="flip(${x.id}, '${k}', this)"><span class="knob"></span>${label}</label>`).join('')}</div>`}
+      ${x.removed ? '' : `<div class="row labels" style="gap:4px;margin-top:8px"><button class="btn quiet small" onclick="inviteAgain(${x.id})"><span data-icon="link"></span>New link</button>
+        <button class="btn danger small" onclick="removePerson(${x.id}, '${esc(x.name)}')"><span data-icon="user-x"></span>Remove ${esc(x.name)}</button></div>`}</div></div>`;
   }).join('') : `<div class="empty"><span data-icon="users"></span><div>No friends yet.</div><p class="small">Make an invite above for each friend.</p></div>`;
   const open = inv.ok ? inv.data.invites : [];
   $('#open-invites').innerHTML = open.length ? `<h3 style="margin-top:8px">Invites not used yet</h3><div class="list">${open.map((i) =>
-    `<div class="item"><div class="grow"><div class="title">${esc(i.person.name)} <span class="mono small">${esc(i.code)}</span></div><div class="meta">Made ${RMS.ago(i.created_ms)}</div></div>
+    `<div class="item"><div class="grow"><div class="title">${esc(i.person.name)} <span class="mono small">${esc(i.code)}</span></div><div class="meta">Made ${RMS.ago(i.created_ms)} · ${i.expires_in_days > 1 ? 'expires in ' + i.expires_in_days + ' days' : 'expires within a day'}</div></div>
      <button class="btn quiet small" onclick="showOpen('${esc(i.code)}')"><span data-icon="qr"></span>Show</button>
      <button class="btn quiet small" onclick="takeBack('${esc(i.code)}')"><span data-icon="x"></span>Take back</button></div>`).join('')}</div>` : '';
   window._open = open;
   RMS.hydrate($('#people'));
   RMS.hydrate($('#open-invites'));
+}
+
+// the owner's switches for a friend (all on at first)
+async function flip(id, what, box) {
+  const r = await api('/api/people/' + id, { method: 'PATCH', body: { ['can_' + what]: box.checked } });
+  if (!r.ok) {
+    box.checked = !box.checked;
+    return toast(r.data.error, true);
+  }
+  const words = { add: 'add songs', split: 'split songs', host: 'host a party' }[what];
+  toast(`${r.data.name} ${box.checked ? 'can' : "can't"} ${words} now.`);
 }
 
 function showOpen(code) {

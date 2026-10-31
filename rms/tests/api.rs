@@ -22,7 +22,7 @@ case "$1" in
     out="$3"; mkdir -p "$out"
     echo "progress 5"; sleep 0.2; echo "progress 50"; sleep 0.2
     for p in vocals music drums bass other; do head -c 4096 /dev/urandom > "$out/$p.ogg"; done
-    echo "args $*" > "$here/split-args.txt"
+    echo "args $*" >> "$here/split-args.txt"
     echo "progress 100"
     echo "files vocals.ogg music.ogg drums.ogg bass.ogg other.ogg" ;;
   */align.py)
@@ -74,7 +74,7 @@ impl Server {
 
     /// The owner set up: their browser's token.
     async fn setup(&self, name: &str) -> String {
-        let (s, v) = self.post("/api/setup", None, json!({ "name": name })).await;
+        let (s, v) = self.post("/api/setup", None, json!({ "name": name, "key": TEST_KEY })).await;
         assert_eq!(s, StatusCode::CREATED, "{v}");
         v["token"].as_str().unwrap().to_string()
     }
@@ -89,9 +89,17 @@ impl Server {
     }
 }
 
+/// The setup key the test servers are deployed with.
+const TEST_KEY: &str = "Our-Test-Key-1234";
+
 /// A fresh server on its own port and data folder. `python`: None for the
 /// stand-in splitter, or a path (one that isn't there: no splitter).
 async fn server(python: Option<&str>) -> Server {
+    server_with(python, Some(TEST_KEY)).await
+}
+
+/// …and its setup key from the deploy (None: the server makes one).
+async fn server_with(python: Option<&str>, setup_key: Option<&str>) -> Server {
     static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
     let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let dir = std::env::temp_dir().join(format!("rms-test-{}-{n}", std::process::id()));
@@ -113,7 +121,7 @@ async fn server(python: Option<&str>) -> Server {
         scripts,
         domain: None,
         public_url: None,
-        setup_key: None,
+        setup_key: setup_key.map(String::from),
         threads: 2,
     };
     let app = rms::open(cfg).unwrap();
@@ -172,9 +180,20 @@ async fn setup_invite_join_and_tokens() {
     assert!(page.text().await.unwrap().contains("Radiance Music Server"));
 
     // the setup page: a name is needed
-    let (st, _) = s.post("/api/setup", None, json!({ "name": "   " })).await;
+    let (st, _) = s.post("/api/setup", None, json!({ "name": "   ", "key": TEST_KEY })).await;
     assert_eq!(st, StatusCode::BAD_REQUEST);
-    let (st, setup) = s.post("/api/setup", None, json!({ "name": "Bassi" })).await;
+    // the setup key (owner, 2026-11-01): missing or wrong, refused, saying where to find it
+    assert_eq!(v["setup_key_needed"], true);
+    let (st, v) = s.post("/api/setup", None, json!({ "name": "Bassi" })).await;
+    assert_eq!(st, StatusCode::FORBIDDEN);
+    assert!(v["error"].as_str().unwrap().contains("Docker Manager"), "{v}");
+    let (st, v) = s.post("/api/setup", None, json!({ "name": "Bassi", "key": "Our-Test-Key-9999" })).await;
+    assert_eq!(st, StatusCode::FORBIDDEN);
+    assert!(v["error"].as_str().unwrap().contains("isn't right"), "{v}");
+    let (_, v) = s.get("/api/status", None).await;
+    assert_eq!(v["needs_setup"], true, "a wrong key sets nothing up");
+    // the right one, typed loosely (no dashes, small letters)
+    let (st, setup) = s.post("/api/setup", None, json!({ "name": "Bassi", "key": "ourtestkey1234" })).await;
     assert_eq!(st, StatusCode::CREATED);
     assert_eq!(setup["server"]["name"], "Bassi's server");
     let owner = setup["token"].as_str().unwrap().to_string();
@@ -182,8 +201,8 @@ async fn setup_invite_join_and_tokens() {
     let link = setup["invite"]["link"].as_str().unwrap();
     assert!(link.starts_with(&format!("{}/join/", s.base)), "{link}");
     assert!(setup["invite"]["qr_svg"].as_str().unwrap().starts_with("<svg"));
-    // only once
-    let (st, _) = s.post("/api/setup", None, json!({ "name": "Someone Else" })).await;
+    // only once (even with the key)
+    let (st, _) = s.post("/api/setup", None, json!({ "name": "Someone Else", "key": TEST_KEY })).await;
     assert_eq!(st, StatusCode::CONFLICT);
     let (_, v) = s.get("/api/status", None).await;
     assert_eq!(v["server"], "Bassi's server");
@@ -688,4 +707,172 @@ async fn listening_party() {
     let (st, p) = s.post("/api/party/end", Some(&owner), json!({})).await;
     assert_eq!(st, StatusCode::OK);
     assert_eq!(p["on"], false);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_setup_key_is_made_when_none_was_given() {
+    let s = server_with(None, None).await;
+    // made at the first start: readable like an invite code, on file
+    let file = s.dir.join("data/setup-key.txt");
+    let key = std::fs::read_to_string(&file).unwrap().trim().to_string();
+    assert_eq!(key.len(), 14, "{key}");
+    assert!(key.chars().all(|c| c == '-' || c.is_ascii_uppercase() || c.is_ascii_digit()), "{key}");
+    assert_eq!(&key[4..5], "-");
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(std::fs::metadata(&file).unwrap().permissions().mode() & 0o777, 0o600);
+    }
+    let (_, v) = s.get("/api/status", None).await;
+    assert_eq!(v["setup_key_needed"], true);
+    let (st, _) = s.post("/api/setup", None, json!({ "name": "Bassi", "key": "WRONG-WRONG-WRON" })).await;
+    assert_eq!(st, StatusCode::FORBIDDEN);
+    let (st, v) = s.post("/api/setup", None, json!({ "name": "Bassi", "key": key.to_lowercase() })).await;
+    assert_eq!(st, StatusCode::CREATED, "{v}");
+    // set up: no key any more (a restart makes none)
+    std::fs::remove_file(&file).unwrap();
+    let cfg = rms::Config {
+        data: s.dir.join("data"),
+        bind: "127.0.0.1:0".into(),
+        python: "/nowhere/python3".into(),
+        scripts: s.dir.join("scripts"),
+        domain: None,
+        public_url: None,
+        setup_key: None,
+        threads: 1,
+    };
+    let again = rms::open(cfg).unwrap();
+    assert!(again.cfg.setup_key.is_none());
+    assert!(!file.exists());
+    let (_, v) = s.get("/api/status", None).await;
+    assert_eq!(v["setup_key_needed"], false);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_owners_switches_for_a_friend() {
+    let s = server(None).await;
+    let owner = s.setup("Bassi").await;
+    let (mika, mika_id) = s.friend(&owner, "Mika").await;
+    put(&s.library(), "Gio - Seven.flac", &flac(4_000));
+    let (_, lib) = s.get("/api/library", Some(&mika)).await;
+    let song = lib["songs"][0]["id"].clone();
+    // all on at first
+    let (_, me) = s.get("/api/me", Some(&mika)).await;
+    assert_eq!(me["can"], json!({ "add": true, "split": true, "host": true }));
+    let patch = |token: String, body: Value| {
+        let http = s.http.clone();
+        let url = format!("{}/api/people/{mika_id}", s.base);
+        async move {
+            let res = http.patch(url).bearer_auth(token).json(&body).send().await.unwrap();
+            let st = res.status();
+            (st, res.json::<Value>().await.unwrap_or(Value::Null))
+        }
+    };
+    // only the owner flips them, and not their own
+    let (st, _) = patch(mika.clone(), json!({ "can_add": false })).await;
+    assert_eq!(st, StatusCode::FORBIDDEN);
+    let (_, me_owner) = s.get("/api/me", Some(&owner)).await;
+    let res = s.http.patch(format!("{}/api/people/{}", s.base, me_owner["person"]["id"])).bearer_auth(&owner).json(&json!({ "can_add": false })).send().await.unwrap();
+    assert_eq!(res.status(), StatusCode::FORBIDDEN);
+
+    let (st, v) = patch(owner.clone(), json!({ "can_add": false, "can_split": false, "can_host": false })).await;
+    assert_eq!(st, StatusCode::OK, "{v}");
+    assert_eq!(v["can"], json!({ "add": false, "split": false, "host": false }));
+    let (_, people) = s.get("/api/people", Some(&owner)).await;
+    assert_eq!(people["people"][1]["can"]["add"], false);
+    let (_, me) = s.get("/api/me", Some(&mika)).await;
+    assert_eq!(me["can"], json!({ "add": false, "split": false, "host": false }));
+    // each one off: a plain 403
+    let form = reqwest::multipart::Form::new().part("song", reqwest::multipart::Part::bytes(flac(3_000)).file_name("Hal - Eight.flac"));
+    let res = s.http.post(format!("{}/api/songs", s.base)).bearer_auth(&mika).multipart(form).send().await.unwrap();
+    assert_eq!(res.status(), StatusCode::FORBIDDEN);
+    let v: Value = res.json().await.unwrap();
+    assert_eq!(v["error"], "The server's owner (Bassi) turned off adding songs for you. Ask them if you'd like it back on.");
+    let (st, v) = s.post("/api/split", Some(&mika), json!({ "song": song })).await;
+    assert_eq!(st, StatusCode::FORBIDDEN);
+    assert!(v["error"].as_str().unwrap().contains("turned off splitting songs"), "{v}");
+    let (st, v) = s.post("/api/party/start", Some(&mika), json!({})).await;
+    assert_eq!(st, StatusCode::FORBIDDEN);
+    assert!(v["error"].as_str().unwrap().contains("turned off hosting parties"), "{v}");
+    // still: playing, and joining someone else's party
+    let (st, _) = s.get("/api/library", Some(&mika)).await;
+    assert_eq!(st, StatusCode::OK);
+    s.post("/api/party/start", Some(&owner), json!({})).await;
+    let (st, _) = s.post("/api/party/add", Some(&mika), json!({ "song": song })).await;
+    assert_eq!(st, StatusCode::OK);
+    // the owner is never switched off
+    let (st, _) = s.post("/api/split", Some(&owner), json!({ "song": song })).await;
+    assert!(st.is_success());
+    // back on
+    let (_, v) = patch(owner.clone(), json!({ "can_add": true })).await;
+    assert_eq!(v["can"], json!({ "add": true, "split": false, "host": false }));
+    let form = reqwest::multipart::Form::new().part("song", reqwest::multipart::Part::bytes(flac(3_000)).file_name("Hal - Eight.flac"));
+    let res = s.http.post(format!("{}/api/songs", s.base)).bearer_auth(&mika).multipart(form).send().await.unwrap();
+    assert_eq!(res.status(), StatusCode::CREATED);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_split_queue_takes_turns() {
+    let s = server(None).await;
+    let owner = s.setup("Bassi").await;
+    let (mika, _) = s.friend(&owner, "Mika").await;
+    for n in 1..=3 {
+        put(&s.library(), &format!("Owner - Song {n}.flac"), &flac(5_000));
+        put(&s.library(), &format!("Mika - Song {n}.flac"), &flac(5_000));
+    }
+    wait_for(&s, "/api/status", None, |v| v["models"]["state"] == "ready", 20).await;
+    // three each: Bassi asks first, then Mika
+    for (token, who) in [(&owner, "Owner"), (&mika, "Mika")] {
+        for n in 1..=3 {
+            let (st, v) = s.post("/api/split", Some(token), json!({ "song": format!("{who} - Song {n}.flac") })).await;
+            assert_eq!(st, StatusCode::CREATED, "{v}");
+        }
+    }
+    // Bassi's first is being split: the next turn is Mika's, then they take turns
+    let q = wait_for(&s, "/api/queue", Some(&mika), |q| q["jobs"].as_array().is_some_and(|j| j.iter().any(|j| j["state"] == "splitting")), 10).await;
+    let titles: Vec<String> = q["jobs"].as_array().unwrap().iter().filter(|j| j["state"] == "waiting").map(|j| format!("{} {}", j["song"]["artist"].as_str().unwrap(), j["song"]["title"].as_str().unwrap())).collect();
+    assert_eq!((q["jobs"][0]["song"]["artist"].as_str(), q["jobs"][0]["song"]["title"].as_str()), (Some("Owner"), Some("Song 1")), "{q}");
+    assert_eq!(q["next_turn"]["name"], "Mika", "{q}");
+    assert_eq!(titles, ["Mika Song 1", "Owner Song 2", "Mika Song 2", "Owner Song 3", "Mika Song 3"]);
+    assert_eq!(q["jobs"][1]["note"], "Next up.");
+    assert_eq!(q["jobs"][2]["note"], "Waiting: 1 song before it.");
+    wait_for(&s, "/api/queue", Some(&mika), |q| q["jobs"].as_array().is_some_and(|j| j.len() == 6 && j.iter().all(|j| j["state"] == "done")), 30).await;
+    // the order they were split in
+    let order: Vec<String> = std::fs::read_to_string(s.dir.join("split-args.txt"))
+        .unwrap()
+        .lines()
+        .map(|l| l.split("/library/").nth(1).unwrap().split(".flac").next().unwrap().to_string())
+        .collect();
+    assert_eq!(order, ["Owner - Song 1", "Mika - Song 1", "Owner - Song 2", "Mika - Song 2", "Owner - Song 3", "Mika - Song 3"]);
+    let (_, q) = s.get("/api/queue", Some(&mika)).await;
+    assert!(q["next_turn"].is_null());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn invites_expire_after_seven_days() {
+    let s = server(None).await;
+    let owner = s.setup("Bassi").await;
+    let (_, inv) = s.post("/api/invites", Some(&owner), json!({ "name": "Mika" })).await;
+    assert_eq!(inv["expires_in_days"], 7);
+    assert_eq!(inv["expires_ms"].as_i64().unwrap() - inv["created_ms"].as_i64().unwrap(), 7 * 24 * 3600 * 1000);
+    let mika_id = inv["person"]["id"].as_i64().unwrap();
+    // eight days later
+    let db = rusqlite::Connection::open(s.dir.join("data/server.db")).unwrap();
+    db.busy_timeout(Duration::from_secs(5)).unwrap();
+    db.execute("UPDATE invites SET created_ms = created_ms - 8 * 24 * 3600 * 1000 WHERE code = ?1", [inv["code"].as_str().unwrap().replace('-', "")]).unwrap();
+    let (st, v) = s.post("/api/join", None, json!({ "code": inv["code"] })).await;
+    assert_eq!(st, StatusCode::GONE);
+    assert!(v["error"].as_str().unwrap().contains("expired"), "{v}");
+    let page = s.http.get(format!("{}/join/{}", s.base, inv["code"].as_str().unwrap())).send().await.unwrap();
+    assert_eq!(page.status(), StatusCode::NOT_FOUND);
+    assert!(page.text().await.unwrap().contains("invites last 7 days"));
+    let (_, open) = s.get("/api/invites", Some(&owner)).await;
+    assert!(open["invites"].as_array().unwrap().iter().all(|i| i["person"]["id"] != mika_id));
+    let (_, people) = s.get("/api/people", Some(&owner)).await;
+    let mika = people["people"].as_array().unwrap().iter().find(|p| p["id"] == mika_id).unwrap().clone();
+    assert_eq!(mika["expired_invites"], 1);
+    assert_eq!(mika["open_invites"], 0);
+    // a new link for them works
+    let (_, again) = s.post("/api/invites", Some(&owner), json!({ "person": mika_id })).await;
+    let (st, _) = s.post("/api/join", None, json!({ "code": again["code"] })).await;
+    assert_eq!(st, StatusCode::CREATED);
 }

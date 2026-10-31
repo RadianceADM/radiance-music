@@ -11,7 +11,10 @@ CREATE TABLE IF NOT EXISTS people (
   name TEXT NOT NULL,
   role TEXT NOT NULL,              -- owner | friend
   created_ms INTEGER NOT NULL,
-  revoked_ms INTEGER
+  revoked_ms INTEGER,
+  can_add INTEGER NOT NULL DEFAULT 1,   -- the owner's switches for each friend
+  can_split INTEGER NOT NULL DEFAULT 1,
+  can_host INTEGER NOT NULL DEFAULT 1
 );
 CREATE TABLE IF NOT EXISTS invites (
   code TEXT PRIMARY KEY,           -- one-time, as typed without its dashes
@@ -60,8 +63,18 @@ pub fn open(path: &Path) -> Result<Connection, String> {
     conn.pragma_update(None, "foreign_keys", "ON").map_err(|e| e.to_string())?;
     conn.busy_timeout(std::time::Duration::from_secs(5)).map_err(|e| e.to_string())?;
     conn.execute_batch(SCHEMA).map_err(|e| format!("can't set up the database: {e}"))?;
+    // a database from 0.1.0: the friends' switches, on
+    for column in ["can_add", "can_split", "can_host"] {
+        let there: bool = conn.query_row("SELECT COUNT(*) FROM pragma_table_info('people') WHERE name = ?1", [column], |r| r.get::<_, i64>(0)).map(|n| n > 0).unwrap_or(true);
+        if !there {
+            conn.execute_batch(&format!("ALTER TABLE people ADD COLUMN {column} INTEGER NOT NULL DEFAULT 1")).map_err(|e| format!("can't update the database: {e}"))?;
+        }
+    }
     Ok(conn)
 }
+
+/// Invites last this long, unused.
+pub const INVITE_MS: i64 = 7 * 24 * 3600 * 1000;
 
 /// The owner (id, name), once the setup page has been filled in.
 pub fn owner(conn: &Connection) -> Option<(i64, String)> {
