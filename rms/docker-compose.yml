@@ -1,0 +1,47 @@
+# Radiance Music Server: your own server for Radiance Music.
+#
+# Hostinger's "Deploy on Hostinger" button opens this file by its address
+# alone, so everything is here: the server, its data volume, and Caddy in
+# front for https. Anywhere else: `docker compose up -d` next to this file.
+#
+# RMS_DOMAIN (optional): your domain, pointed at this server (an A record).
+#   Caddy gets its certificate by itself and the server is on https.
+#   Without it, the server is on http, port 80; its page says how to add one.
+# RMS_SETUP_KEY (optional): the setup page asks for it, so nobody else can
+#   claim a fresh server before you open it.
+
+name: radiance-music-server
+
+services:
+  rms:
+    image: ghcr.io/radianceadm/radiance-music-server:latest
+    restart: unless-stopped
+    environment:
+      RMS_DOMAIN: ${RMS_DOMAIN:-}
+      RMS_SETUP_KEY: ${RMS_SETUP_KEY:-}
+    volumes:
+      # the library, server.db and the splitting models (downloaded at the first start)
+      - rms-data:/data
+    expose:
+      - "8080"
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    depends_on:
+      - rms
+    # a domain: https (and http goes there); none: plain http on port 80
+    command: caddy reverse-proxy --from "${RMS_DOMAIN:-:80}" --to rms:8080
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      # its certificates, kept across restarts
+      - caddy-data:/data
+      - caddy-config:/config
+
+volumes:
+  rms-data:
+  caddy-data:
+  caddy-config:

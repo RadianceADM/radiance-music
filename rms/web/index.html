@@ -1,0 +1,578 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Radiance Music Server</title>
+<link rel="icon" href="/assets/logo.svg">
+<link rel="stylesheet" href="/assets/app.css">
+<script src="/assets/app.js"></script>
+</head>
+<body>
+<div class="glow"></div>
+<div class="shell">
+  <header class="top">
+    <img class="logo" src="/assets/logo.svg" alt="">
+    <div>
+      <div class="brand" id="name">Radiance Music Server</div>
+      <div class="sub">Radiance Music Server</div>
+    </div>
+    <div class="spacer"></div>
+    <div class="look"></div>
+  </header>
+
+  <main class="inset">
+    <!-- loading -->
+    <section id="loading" class="empty">
+      <span data-icon="loader" class="spin"></span>
+      <div>Opening your server…</div>
+    </section>
+
+    <!-- the server can't be reached -->
+    <section id="offline" class="hidden empty">
+      <span data-icon="server"></span>
+      <h2 class="section-title" style="justify-content:center">Can't reach the server</h2>
+      <p class="muted">Check that it's running (Hostinger: your VPS's Docker Manager), then try again.</p>
+      <button class="btn primary" onclick="start()"><span data-icon="refresh"></span>Try again</button>
+    </section>
+
+    <!-- first start: the owner's name -->
+    <section id="setup" class="hidden">
+      <h1 class="page-title">Set up your Radiance Music Server</h1>
+      <p class="lead">Your own server for Radiance Music. It splits songs for you (drums, bass, other, vocals, and every word's time),
+        keeps your library, and lets the friends you invite play from it, split on it and join your listening parties.
+        Nothing here is public: only people you invite can use it.</p>
+      <div class="grid">
+        <form class="card stack" id="setup-form" onsubmit="setup(event)">
+          <label class="field">Your name
+            <input id="owner-name" maxlength="40" autocomplete="name" placeholder="Bassi" required>
+            <span class="hint" id="name-preview">Friends will see it as "Your name's server".</span>
+          </label>
+          <label class="field hidden" id="key-field">Setup key
+            <input id="setup-key" autocomplete="off">
+            <span class="hint">The RMS_SETUP_KEY this server was started with.</span>
+          </label>
+          <div class="error-text hidden" id="setup-error"></div>
+          <div><button class="btn primary big" id="setup-go"><span data-icon="check"></span>Set up my server</button></div>
+        </form>
+        <div class="stack">
+          <div class="card" id="setup-splitter"></div>
+          <div class="card">
+            <h3>What happens next</h3>
+            <p class="muted small" style="margin:0">You get your own join link (and its QR) for Radiance Music on your phone and computer.
+              Then you invite friends one by one, each with a link of their own that works once. You can take any of it back.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- just set up: the owner's own join link -->
+    <section id="welcome" class="hidden">
+      <h1 class="page-title"><span id="welcome-name"></span> is ready</h1>
+      <p class="lead">This browser is now your server's page (keep it: it's how you invite friends).
+        Join from Radiance Music on your phone or computer with this link.</p>
+      <div class="grid">
+        <div class="card stack" id="welcome-invite"></div>
+        <div class="card stack">
+          <h3>In the Radiance Music app</h3>
+          <p class="muted" style="margin:0">Settings → Servers → <b>Join a server</b>, then scan this code or paste the link.</p>
+          <p class="muted small" style="margin:0">The link works once. For each of your other devices, make another from your server's page
+            (Your devices → Add one of my devices).</p>
+          <div><button class="btn primary" onclick="openDash()"><span data-icon="arrow"></span>Open my server's page</button></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- someone without a key -->
+    <section id="visitor" class="hidden empty">
+      <span data-icon="server"></span>
+      <h1 class="page-title" id="visitor-name"></h1>
+      <p class="lead" style="margin:0 auto 16px">It's private: only people its owner invites can use it.
+        Got an invite? Open its link (it looks like <span class="mono">…/join/ABCD-EFGH-JKMN</span>).</p>
+    </section>
+
+    <!-- this browser's key was removed -->
+    <section id="removed" class="hidden empty">
+      <span data-icon="user-x"></span>
+      <h2 class="section-title" style="justify-content:center">This browser was removed from the server</h2>
+      <p class="muted">Ask the server's owner for a new invite link.</p>
+      <button class="btn" onclick="RMS.setToken(''); start()"><span data-icon="log-out"></span>Forget this browser's key</button>
+    </section>
+
+    <!-- the server's page -->
+    <section id="dash" class="hidden">
+      <div id="banners"></div>
+      <div class="grid">
+        <div class="stack">
+          <div class="card" id="party-card"></div>
+          <div class="card hidden" id="splitter-card"></div>
+
+          <div class="card stack owner-only">
+            <h2 class="section-title"><span data-icon="user-plus"></span>Invite a friend</h2>
+            <form class="row" onsubmit="invite(event)">
+              <input id="friend-name" maxlength="40" placeholder="Your friend's name" style="flex:1;min-width:160px">
+              <button class="btn primary"><span data-icon="link"></span>Make an invite</button>
+            </form>
+            <p class="hint" style="margin:0">Each friend gets a link of their own. It works once; they can play, split songs and join your parties.</p>
+            <div id="invite-made" class="hidden"></div>
+          </div>
+
+          <div class="card stack owner-only">
+            <h2 class="section-title"><span data-icon="users"></span>People</h2>
+            <div id="people" class="list"></div>
+            <div id="open-invites"></div>
+          </div>
+
+          <div class="card stack">
+            <h2 class="section-title"><span data-icon="phone"></span>Your devices</h2>
+            <div id="my-devices" class="list"></div>
+            <div class="owner-only"><button class="btn small" onclick="inviteMe()"><span data-icon="plus"></span>Add one of my devices</button></div>
+          </div>
+        </div>
+
+        <div class="stack">
+          <div class="card stack">
+            <div class="row">
+              <h2 class="section-title" style="margin:0"><span data-icon="music"></span>Library <span class="pill" id="count">0</span></h2>
+              <div class="spacer"></div>
+              <button class="btn small" onclick="toggleUpload()"><span data-icon="upload"></span>Add a song</button>
+            </div>
+            <form id="upload" class="card stack hidden" onsubmit="upload(event)" style="background:var(--card)">
+              <label class="field">The song <span class="hint">.opus, .flac or .m4a, named "Artist - Title" (or type them below)</span>
+                <input type="file" name="song" accept=".opus,.flac,.m4a" required></label>
+              <div class="row">
+                <label class="field" style="flex:1;min-width:140px">Artist<input name="artist" placeholder="From the file's name"></label>
+                <label class="field" style="flex:1;min-width:140px">Title<input name="title" placeholder="From the file's name"></label>
+              </div>
+              <label class="field">Cover <span class="hint">(optional) .jpg</span><input type="file" name="cover" accept=".jpg,.jpeg"></label>
+              <label class="field">Lyrics <span class="hint">(optional) .lyrics.yaml or .lrc</span><input type="file" name="lyrics" accept=".yaml,.lrc,.txt"></label>
+              <label class="field">Music video <span class="hint">(optional) .mkv, .webm or .mp4</span><input type="file" name="video" accept=".mkv,.webm,.mp4"></label>
+              <div class="bar hidden" id="upload-bar"><div></div></div>
+              <div class="error-text hidden" id="upload-error"></div>
+              <div class="row">
+                <button class="btn primary" id="upload-go"><span data-icon="upload"></span>Upload</button>
+                <button class="btn quiet" type="button" onclick="toggleUpload(false)"><span data-icon="x"></span>Cancel</button>
+              </div>
+            </form>
+            <div class="row"><input type="search" id="search" placeholder="Search the library" oninput="drawLibrary()"></div>
+            <div id="library" class="list"></div>
+          </div>
+
+          <div class="card stack">
+            <h2 class="section-title"><span data-icon="split"></span>Split queue</h2>
+            <div id="queue" class="list"></div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer id="footer"></footer>
+</div>
+<audio id="preview" preload="none"></audio>
+
+<script>
+const { api, esc, toast, show, $ } = RMS;
+let srv = null, me = null, songs = [], jobs = [], party = null, timers = [];
+
+function view(id) {
+  ['loading', 'offline', 'setup', 'welcome', 'visitor', 'removed', 'dash'].forEach((v) => show($('#' + v), v === id));
+}
+
+async function start() {
+  view('loading');
+  timers.forEach(clearInterval);
+  timers = [];
+  const s = await api('/api/status', { auth: false });
+  if (s.status === 0) return view('offline');
+  srv = s.data;
+  $('#name').textContent = srv.server || 'Radiance Music Server';
+  document.title = srv.server ? srv.server + ' · Radiance Music Server' : 'Radiance Music Server';
+  if (srv.needs_setup) {
+    show($('#key-field'), srv.setup_key_needed);
+    drawSplitter($('#setup-splitter'), true);
+    timers.push(setInterval(refreshStatus, 2000));
+    return view('setup');
+  }
+  if (!RMS.token()) {
+    $('#visitor-name').textContent = 'This is ' + srv.server;
+    return view('visitor');
+  }
+  const m = await api('/api/me');
+  if (m.status === 401) return view('removed');
+  if (!m.ok) return view('offline');
+  me = m.data;
+  openDash();
+}
+
+async function refreshStatus() {
+  const s = await api('/api/status', { auth: false });
+  if (s.ok) {
+    srv = s.data;
+    drawSplitter($('#setup-splitter'), true);
+    drawSplitter($('#splitter-card'));
+  }
+}
+
+$('#owner-name').addEventListener('input', (e) => {
+  const n = e.target.value.trim();
+  $('#name-preview').textContent = 'Friends will see it as "' + (n || 'Your name') + "'s server\".";
+});
+
+async function setup(e) {
+  e.preventDefault();
+  const btn = $('#setup-go');
+  btn.disabled = true;
+  show($('#setup-error'), false);
+  const r = await api('/api/setup', { method: 'POST', body: { name: $('#owner-name').value, key: $('#setup-key').value || undefined, device_name: 'Web browser' }, auth: false });
+  btn.disabled = false;
+  if (!r.ok) {
+    $('#setup-error').textContent = r.data.error || 'That didn\'t work. Try again.';
+    return show($('#setup-error'));
+  }
+  RMS.setToken(r.data.token);
+  me = { person: r.data.person, device: r.data.device, server: r.data.server };
+  $('#welcome-name').textContent = r.data.server.name;
+  $('#name').textContent = r.data.server.name;
+  $('#welcome-invite').innerHTML = inviteHtml(r.data.invite, 'Your join link');
+  RMS.hydrate($('#welcome-invite'));
+  view('welcome');
+}
+
+function inviteHtml(inv, heading) {
+  return `<h3>${esc(heading)}</h3>
+    <div class="row" style="align-items:flex-start;gap:18px">
+      <div class="qr">${inv.qr_svg}</div>
+      <div class="stack" style="gap:10px;min-width:200px;flex:1">
+        <div><div class="hint">Invite code</div><div class="code">${esc(inv.code)}</div></div>
+        <input readonly value="${esc(inv.link)}" onclick="this.select()">
+        <div class="row"><button class="btn small" type="button" data-link="${esc(inv.link)}" onclick="RMS.copy(this.dataset.link)"><span data-icon="copy"></span>Copy link</button></div>
+        <div class="hint">Works once, on one device. Send it only to ${esc(inv.person.name)}.</div>
+      </div>
+    </div>`;
+}
+
+async function openDash() {
+  if (!me) {
+    const m = await api('/api/me');
+    if (!m.ok) return start();
+    me = m.data;
+  }
+  timers.forEach(clearInterval);
+  timers = [];
+  const owner = me.person.role === 'owner';
+  document.querySelectorAll('.owner-only').forEach((el) => show(el, owner));
+  $('#footer').innerHTML = `<span>Radiance Music Server ${esc(srv.version)}</span><span>·</span>
+    <span>You're ${esc(me.person.name)}${owner ? ' (the owner)' : ''}, on ${esc(me.device.name)}</span>
+    <button class="btn quiet small" onclick="signOut()"><span data-icon="log-out"></span>Sign out of this browser</button>`;
+  RMS.hydrate($('#footer'));
+  view('dash');
+  drawBanners();
+  await Promise.all([loadLibrary(), loadQueue(), loadParty(), owner ? loadPeople() : loadMyDevices()]);
+  timers.push(setInterval(loadQueue, 3000));
+  timers.push(setInterval(loadParty, 8000));
+  timers.push(setInterval(refreshStatus, 5000));
+}
+
+// the address isn't private yet (http): how to add a domain
+function drawBanners() {
+  let html = '';
+  if (!srv.https) {
+    const ip = (srv.address || '').replace(/^https?:\/\//, '');
+    const suggest = srv.suggested_domain
+      ? ` No domain? <span class="mono">${esc(srv.suggested_domain)}</span> points at this server for free: use it as RMS_DOMAIN.`
+      : '';
+    html += `<div class="banner warn"><span data-icon="globe"></span><div><b>Add a domain, so your server is private (https).</b>
+      <div class="small">You're on <span class="mono">${esc(srv.address)}</span>: the apps work, but what you send isn't encrypted.
+      Point a domain (or a subdomain, like music.example.com) at this server's address (an A record to <span class="mono">${esc(ip.split(':')[0])}</span>),
+      then set <span class="mono">RMS_DOMAIN</span> to it and redeploy (Hostinger: Docker Manager → your project → Environment). Caddy gets its certificate by itself.${suggest}</div></div></div>`;
+  }
+  $('#banners').innerHTML = html;
+  RMS.hydrate($('#banners'));
+}
+
+// the splitter: installed? its models downloaded (first start)?
+function drawSplitter(el, always = false) {
+  if (!el || !srv) return;
+  const sp = srv.splitter, m = srv.models;
+  const ready = sp.ready && m.state === 'ready';
+  show(el, always || !ready);
+  let body;
+  if (!sp.checked) body = `<div class="bar busy"><div></div></div><p class="muted small">Checking the splitter…</p>`;
+  else if (!sp.ready) body = `<p class="muted small" style="margin:0">${esc(sp.message)}</p>`;
+  else if (m.state === 'ready') body = `<p class="muted small" style="margin:0"><span class="pill good">Ready</span> Songs split here, one at a time, at the lowest priority.</p>`;
+  else if (m.state === 'failed') body = `<p class="error-text" style="margin:0">${esc(m.message)}</p>`;
+  else body = `<div class="bar"><div style="width:${Math.round(m.progress * 100)}%"></div></div>
+    <p class="muted small">${esc(m.message)} ${Math.round(m.progress * 100)} %. Only this once: about 1.3 GB, kept with your library.</p>`;
+  el.innerHTML = `<h3>${ready ? 'The splitter' : 'Getting the splitter ready'}</h3>${body}`;
+}
+
+async function loadParty() {
+  const r = await api('/api/party');
+  if (r.status === 401) return view('removed');
+  if (!r.ok) return;
+  party = r.data;
+  const el = $('#party-card');
+  let text;
+  if (!party.on) text = `<p class="muted" style="margin:0 0 12px">No party on. Start one: everyone in it hears the same song at the same moment, with a shared queue.</p>`;
+  else {
+    const n = party.members.length;
+    text = `<p style="margin:0 0 12px">${party.song ? `<b>${esc(party.song.title)}</b> <span class="muted">· ${esc(party.song.artist)}</span><br>` : ''}
+      <span class="muted small">Hosted by ${esc(party.host.name)} · ${n} listening${party.queue.length ? ' · ' + party.queue.length + ' in the queue' : ''}</span></p>`;
+  }
+  el.innerHTML = `<h2 class="section-title"><span data-icon="headphones"></span>Listening party ${party.on ? '<span class="pill on">On now</span>' : ''}</h2>${text}
+    <a class="btn primary" href="/party"><span data-icon="headphones"></span>${party.on ? 'Join the party' : 'Open the party'}</a>`;
+  RMS.hydrate(el);
+}
+
+async function loadLibrary() {
+  const r = await api('/api/library');
+  if (r.status === 401) return view('removed');
+  if (!r.ok) {
+    $('#library').innerHTML = `<div class="empty"><div class="error-text">${esc(r.data.error)}</div>
+      <button class="btn small" onclick="loadLibrary()"><span data-icon="refresh"></span>Try again</button></div>`;
+    return RMS.hydrate($('#library'));
+  }
+  songs = r.data.songs;
+  $('#count').textContent = songs.length;
+  drawLibrary();
+}
+
+function drawLibrary() {
+  const q = $('#search').value.trim().toLowerCase();
+  const list = q ? songs.filter((s) => (s.artist + ' ' + s.title).toLowerCase().includes(q)) : songs;
+  const queued = new Set(jobs.filter((j) => ['waiting', 'splitting', 'timing'].includes(j.state)).map((j) => j.song.id));
+  let html;
+  if (!songs.length) {
+    html = `<div class="empty"><span data-icon="music"></span><div>No songs yet.</div>
+      <p class="small">Add one here, or copy your Music folder (the songs as the app saves them) into the server's library folder.</p>
+      <button class="btn primary small" onclick="toggleUpload(true)"><span data-icon="upload"></span>Add a song</button></div>`;
+  } else if (!list.length) {
+    html = `<div class="empty"><span data-icon="search"></span><div>No songs match "${esc(q)}".</div>
+      <button class="btn small" onclick="$('#search').value='';drawLibrary()"><span data-icon="x"></span>Clear the search</button></div>`;
+  } else {
+    html = list.slice(0, 300).map((s) => {
+      const badges = [s.split ? '<span class="pill on">Split</span>' : '', s.word_times ? '<span class="pill on">Word times</span>' : s.lyrics ? '<span class="pill">Lyrics</span>' : '', s.video ? '<span class="pill">Video</span>' : '']
+        .filter(Boolean).join(' ');
+      const art = s.cover ? `<img class="art" loading="lazy" decoding="async" src="${esc(RMS.fileUrl(s.cover))}" alt="">` : `<div class="art">${RMS.icon('music')}</div>`;
+      const action = s.split ? '' : queued.has(s.id)
+        ? '<span class="pill on">In the queue</span>'
+        : `<button class="btn small" onclick="split(${s.id})"><span data-icon="split"></span>Split</button>`;
+      return `<div class="item">${art}<div class="grow"><div class="title">${esc(s.title)}</div>
+        <div class="meta">${esc(s.artist || 'Unknown artist')}${s.duration_ms ? ' · ' + RMS.clock(s.duration_ms) : ''}${s.added_by ? ' · added by ' + esc(s.added_by.name) : ''}</div>
+        <div class="row" style="gap:4px;margin-top:2px">${badges}</div></div>
+        <button class="btn small round" title="Play" onclick="preview(this, '${esc(s.url)}')"><span data-icon="play"></span></button>${action}</div>`;
+    }).join('');
+    if (list.length > 300) html += `<div class="empty small">And ${list.length - 300} more: search to find them.</div>`;
+  }
+  $('#library').innerHTML = html;
+  RMS.hydrate($('#library'));
+}
+
+function preview(btn, url) {
+  const a = $('#preview');
+  const same = a.dataset.url === url && !a.paused;
+  document.querySelectorAll('#library .btn.round').forEach((b) => (b.innerHTML = RMS.icon('play')));
+  if (same) return a.pause();
+  a.dataset.url = url;
+  a.src = RMS.fileUrl(url);
+  a.play().catch(() => toast("This browser can't play that file.", true));
+  btn.innerHTML = RMS.icon('pause');
+}
+
+async function split(id) {
+  const r = await api('/api/split', { method: 'POST', body: { song: id } });
+  if (!r.ok) return toast(r.data.error, true);
+  toast(r.data.already_split ? 'It was split already.' : r.data.queued ? 'In the queue: it splits on the server.' : 'It\'s in the queue already.');
+  await loadQueue();
+}
+
+async function loadQueue() {
+  const r = await api('/api/queue');
+  if (r.status === 401) return view('removed');
+  if (!r.ok) return;
+  const wasBusy = jobs.some((j) => ['splitting', 'timing'].includes(j.state));
+  jobs = r.data.jobs;
+  const busy = jobs.some((j) => ['splitting', 'timing'].includes(j.state));
+  const owner = me && me.person.role === 'owner';
+  const el = $('#queue');
+  if (!jobs.length) {
+    el.innerHTML = `<div class="empty"><span data-icon="split"></span><div>Nothing to split.</div><p class="small">Pick Split on a song in the library: its parts and word times land beside it, for everyone.</p></div>`;
+  } else {
+    el.innerHTML = jobs.map((j) => {
+      const running = ['splitting', 'timing'].includes(j.state);
+      const pill = { waiting: '<span class="pill">Waiting</span>', splitting: '<span class="pill on">Splitting</span>', timing: '<span class="pill on">Timing words</span>', done: '<span class="pill good">Done</span>', failed: '<span class="pill bad">Didn\'t split</span>' }[j.state] || '';
+      const mine = owner || (j.asked_by && me && j.asked_by.id === me.person.id);
+      const out = (j.state === 'waiting' || running) && mine ? `<button class="btn quiet small" onclick="unqueue(${j.id})"><span data-icon="x"></span>Take out</button>` : '';
+      return `<div class="item"><div class="grow"><div class="title">${esc(j.song.title)} <span class="muted" style="font-weight:400">· ${esc(j.song.artist)}</span></div>
+        <div class="meta">${pill} ${esc(j.note)}${j.asked_by ? ' · asked by ' + esc(j.asked_by.name) : ''}</div>
+        ${running ? `<div class="bar" style="margin-top:6px"><div style="width:${Math.round(j.progress * 100)}%"></div></div>` : ''}</div>${out}</div>`;
+    }).join('');
+  }
+  RMS.hydrate(el);
+  if (wasBusy && !busy) loadLibrary();
+  else drawLibrary();
+}
+
+async function unqueue(id) {
+  const r = await api('/api/queue/' + id, { method: 'DELETE' });
+  if (!r.ok) return toast(r.data.error, true);
+  toast('Taken out of the queue.');
+  loadQueue();
+}
+
+async function invite(e) {
+  e.preventDefault();
+  const name = $('#friend-name').value.trim();
+  if (!name) return toast("Type your friend's name first.", true);
+  const r = await api('/api/invites', { method: 'POST', body: { name } });
+  if (!r.ok) return toast(r.data.error, true);
+  $('#friend-name').value = '';
+  showInvite(r.data, 'An invite for ' + r.data.person.name);
+  loadPeople();
+}
+
+async function inviteMe() {
+  const r = await api('/api/invites', { method: 'POST', body: { person: me.person.id } });
+  if (!r.ok) return toast(r.data.error, true);
+  showInvite(r.data, 'A link for one of your devices');
+  loadPeople();
+}
+
+function showInvite(inv, heading) {
+  const el = $('#invite-made');
+  el.innerHTML = inviteHtml(inv, heading) + `<p class="hint">In Radiance Music: Settings → Servers → Join a server, then scan the code or paste the link.</p>
+    <button class="btn small" onclick="show($('#invite-made'), false)"><span data-icon="check"></span>Done</button>`;
+  RMS.hydrate(el);
+  show(el);
+  el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+async function loadPeople() {
+  const [p, inv] = await Promise.all([api('/api/people'), api('/api/invites')]);
+  if (p.status === 401) return view('removed');
+  if (!p.ok) return;
+  const people = p.data.people;
+  const self = people.find((x) => x.id === me.person.id);
+  drawDevices(self ? self.devices : []);
+  const friends = people.filter((x) => x.role !== 'owner');
+  $('#people').innerHTML = friends.length ? friends.map((x) => {
+    const devices = x.devices.filter((d) => !d.removed);
+    const dev = devices.map((d) => `<div class="row small muted" style="gap:6px">${RMS.icon('phone')} ${esc(d.name)} · seen ${RMS.ago(d.seen_ms)}
+        ${x.removed ? '' : `<button class="btn quiet small" onclick="removeDevice(${d.id}, '${esc(d.name)}')"><span data-icon="x"></span>Remove</button>`}</div>`).join('');
+    return `<div class="item" style="align-items:flex-start"><div class="avatar">${RMS.initial(x.name)}</div><div class="grow">
+      <div class="title">${esc(x.name)} ${x.removed ? '<span class="pill bad">Removed</span>' : ''}${!x.removed && !devices.length ? ' <span class="pill">Not joined yet</span>' : ''}</div>
+      ${dev}${x.open_invites && !x.removed ? `<div class="small muted">${x.open_invites} invite${x.open_invites > 1 ? 's' : ''} waiting</div>` : ''}</div>
+      ${x.removed ? '' : `<div class="row" style="gap:4px"><button class="btn quiet small" onclick="inviteAgain(${x.id})"><span data-icon="link"></span>New link</button>
+        <button class="btn danger small" onclick="removePerson(${x.id}, '${esc(x.name)}')"><span data-icon="user-x"></span>Remove</button></div>`}</div>`;
+  }).join('') : `<div class="empty"><span data-icon="users"></span><div>No friends yet.</div><p class="small">Make an invite above for each friend.</p></div>`;
+  const open = inv.ok ? inv.data.invites : [];
+  $('#open-invites').innerHTML = open.length ? `<h3 style="margin-top:8px">Invites not used yet</h3><div class="list">${open.map((i) =>
+    `<div class="item"><div class="grow"><div class="title">${esc(i.person.name)} <span class="mono small">${esc(i.code)}</span></div><div class="meta">Made ${RMS.ago(i.created_ms)}</div></div>
+     <button class="btn quiet small" onclick="showOpen('${esc(i.code)}')"><span data-icon="qr"></span>Show</button>
+     <button class="btn quiet small" onclick="takeBack('${esc(i.code)}')"><span data-icon="x"></span>Take back</button></div>`).join('')}</div>` : '';
+  window._open = open;
+  RMS.hydrate($('#people'));
+  RMS.hydrate($('#open-invites'));
+}
+
+function showOpen(code) {
+  const i = (window._open || []).find((x) => x.code === code);
+  if (i) showInvite(i, 'The invite for ' + i.person.name);
+}
+
+async function inviteAgain(id) {
+  const r = await api('/api/invites', { method: 'POST', body: { person: id } });
+  if (!r.ok) return toast(r.data.error, true);
+  showInvite(r.data, 'A new link for ' + r.data.person.name);
+  loadPeople();
+}
+
+async function takeBack(code) {
+  const r = await api('/api/invites/' + encodeURIComponent(code), { method: 'DELETE' });
+  if (!r.ok) return toast(r.data.error, true);
+  toast('Invite taken back: its link no longer works.');
+  loadPeople();
+}
+
+async function removePerson(id, name) {
+  if (!confirm(`Remove ${name}? Their devices stop working at once. The songs they added stay.`)) return;
+  const r = await api(`/api/people/${id}/revoke`, { method: 'POST', body: {} });
+  if (!r.ok) return toast(r.data.error, true);
+  toast(name + ' was removed.');
+  loadPeople();
+}
+
+async function removeDevice(id, name) {
+  if (!confirm(`Remove ${name}? It stops working at once.`)) return;
+  const r = await api(`/api/devices/${id}/revoke`, { method: 'POST', body: {} });
+  if (!r.ok) return toast(r.data.error, true);
+  toast(name + ' was removed.');
+  me.person.role === 'owner' ? loadPeople() : loadMyDevices();
+}
+
+async function loadMyDevices() {
+  // a friend sees only their own (the owner's list comes with People)
+  drawDevices([{ id: me.device.id, name: me.device.name, seen_ms: Date.now(), removed: false }]);
+}
+
+function drawDevices(devices) {
+  const live = devices.filter((d) => !d.removed);
+  $('#my-devices').innerHTML = live.map((d) => `<div class="item"><div class="art" style="width:38px;height:38px">${RMS.icon('phone')}</div>
+    <div class="grow"><div class="title">${esc(d.name)}${d.id === me.device.id ? ' <span class="pill on">This browser</span>' : ''}</div><div class="meta">Seen ${RMS.ago(d.seen_ms)}</div></div>
+    ${d.id === me.device.id ? '' : `<button class="btn quiet small" onclick="removeDevice(${d.id}, '${esc(d.name)}')"><span data-icon="x"></span>Remove</button>`}</div>`).join('');
+  RMS.hydrate($('#my-devices'));
+}
+
+async function signOut() {
+  const r = await api(`/api/devices/${me.device.id}/revoke`, { method: 'POST', body: {} });
+  if (!r.ok && r.status !== 401) return toast(r.data.error, true);
+  RMS.setToken('');
+  me = null;
+  toast('Signed out: this browser\'s key no longer works.');
+  start();
+}
+
+function toggleUpload(on) {
+  const f = $('#upload');
+  show(f, on === undefined ? f.classList.contains('hidden') : on);
+  show($('#upload-error'), false);
+}
+
+function upload(e) {
+  e.preventDefault();
+  const form = $('#upload');
+  const data = new FormData(form);
+  for (const k of ['cover', 'lyrics', 'video']) if (!data.get(k) || !data.get(k).size) data.delete(k);
+  const bar = $('#upload-bar');
+  show(bar);
+  show($('#upload-error'), false);
+  $('#upload-go').disabled = true;
+  const xhr = new XMLHttpRequest();
+  xhr.open('POST', '/api/songs');
+  xhr.setRequestHeader('Authorization', 'Bearer ' + RMS.token());
+  xhr.upload.onprogress = (ev) => ev.lengthComputable && (bar.firstElementChild.style.width = Math.round((100 * ev.loaded) / ev.total) + '%');
+  xhr.onloadend = () => {
+    $('#upload-go').disabled = false;
+    show(bar, false);
+    bar.firstElementChild.style.width = '0';
+    let res = {};
+    try { res = JSON.parse(xhr.responseText); } catch (_) {}
+    if (xhr.status === 0) res.error = "The upload didn't reach the server. Check your connection and try again.";
+    if (xhr.status >= 400 || xhr.status === 0) {
+      $('#upload-error').textContent = res.error || 'The upload didn\'t work.';
+      return show($('#upload-error'));
+    }
+    const name = res.song ? res.song.artist + ' - ' + res.song.title : 'the song';
+    toast(res.skipped ? `${name} is in the library already${res.extras.length ? ': kept the ' + res.extras.join(', ') + ' it lacked' : ''}.` : `Added ${name}. Split it to get its parts.`);
+    form.reset();
+    toggleUpload(false);
+    loadLibrary();
+  };
+  xhr.send(data);
+}
+
+document.addEventListener('DOMContentLoaded', start);
+</script>
+</body>
+</html>

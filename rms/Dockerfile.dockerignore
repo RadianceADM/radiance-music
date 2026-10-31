@@ -1,0 +1,7 @@
+# The image is built from the repository's root (docker build -f rms/Dockerfile .):
+# only the server and the app's two splitter scripts go in.
+*
+!rms/
+!server/split.py
+!server/align.py
+rms/target/

@@ -1,0 +1,428 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Listening party · Radiance Music Server</title>
+<link rel="icon" href="/assets/logo.svg">
+<link rel="stylesheet" href="/assets/app.css">
+<script src="/assets/app.js"></script>
+<style>
+  .now { display: grid; grid-template-columns: minmax(160px, 260px) 1fr; gap: 24px; align-items: center; position: relative; }
+  @media (max-width: 640px) { .now { grid-template-columns: 1fr; } .now .cover { max-width: 260px; margin: 0 auto; } }
+  .cover { width: 100%; aspect-ratio: 1; border-radius: 22px; object-fit: cover; background: rgba(255, 255, 255, 0.06);
+    box-shadow: 0 18px 40px rgba(0, 0, 0, 0.5), 0 0 60px rgba(243, 138, 53, 0.15); display: grid; place-items: center; color: var(--muted); }
+  .cover .i { width: 64px; height: 64px; }
+  .song-title { font-size: 1.9em; font-weight: 800; letter-spacing: -1px; line-height: 1.15; }
+  .seek { height: 10px; cursor: default; }
+  .seek.can { cursor: pointer; }
+  .times { display: flex; justify-content: space-between; color: var(--muted); font-size: 0.85em; margin-top: 4px; font-variant-numeric: tabular-nums; }
+  .reacts button { font-size: 1.4em; padding: 8px 12px; }
+  .floats { position: absolute; inset: 0; pointer-events: none; overflow: hidden; border-radius: 22px; }
+  .float { position: absolute; bottom: 30%; font-size: 2em; pointer-events: none; animation: rise 2.6s ease-out forwards; }
+  @keyframes rise { 0% { transform: translateY(0) scale(0.8); opacity: 0; } 15% { opacity: 1; transform: translateY(-20px) scale(1.1); } 100% { transform: translateY(-180px) scale(1); opacity: 0; } }
+  .sync { font-size: 0.82em; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; }
+  .chip { display: inline-flex; align-items: center; gap: 8px; background: var(--card-2); border-radius: 999px; padding: 4px 12px 4px 4px; font-weight: 600; }
+  .chip .avatar { width: 28px; height: 28px; font-size: 0.85em; }
+</style>
+</head>
+<body>
+<div class="glow"></div>
+<div class="shell">
+  <header class="top">
+    <img class="logo" src="/assets/logo.svg" alt="">
+    <div>
+      <div class="brand" id="name">Listening party</div>
+      <div class="sub">Listening party · Radiance Music Server</div>
+    </div>
+    <div class="spacer"></div>
+    <a class="btn quiet small" href="/"><span data-icon="server"></span>Server's page</a>
+    <div class="look"></div>
+  </header>
+
+  <main class="inset">
+    <div id="banner"></div>
+
+    <section id="loading" class="empty"><span data-icon="loader" class="spin"></span><div>Joining the party…</div></section>
+
+    <section id="need-key" class="hidden empty">
+      <span data-icon="link"></span>
+      <h1 class="page-title">Open your invite link first</h1>
+      <p class="lead" style="margin:0 auto">This page plays the server's listening party in your browser. It uses the key from your invite:
+        open the invite link the server's owner sent you, and pick "Join in this browser".</p>
+    </section>
+
+    <section id="removed" class="hidden empty">
+      <span data-icon="user-x"></span>
+      <h1 class="page-title">This browser was removed from the server</h1>
+      <p class="lead" style="margin:0 auto 16px">Ask the server's owner for a new invite link.</p>
+      <button class="btn" onclick="RMS.setToken(''); location.reload()"><span data-icon="log-out"></span>Forget this browser's key</button>
+    </section>
+
+    <section id="off" class="hidden">
+      <h1 class="page-title">No party on right now</h1>
+      <p class="lead">Start one: everyone in it hears the same song at the same moment, on the apps and in browsers, with a queue everyone adds to.</p>
+      <div class="card stack" style="max-width:520px">
+        <label class="row" style="font-weight:600"><input type="checkbox" id="everyone"> Let everyone play, pause and skip</label>
+        <p class="hint" style="margin:0">Otherwise only you (the host) do; everyone can add songs and react. You can change it later.</p>
+        <div><button class="btn primary big" onclick="startParty()"><span data-icon="headphones"></span>Start a party</button></div>
+      </div>
+    </section>
+
+    <section id="on" class="hidden stack">
+      <div style="position:relative"><div class="card now" id="now"></div><div class="floats" id="floats"></div></div>
+      <div class="grid">
+        <div class="stack">
+          <div class="card stack">
+            <h2 class="section-title"><span data-icon="music"></span>Up next</h2>
+            <div id="queue" class="list"></div>
+          </div>
+          <div class="card stack">
+            <h2 class="section-title"><span data-icon="plus"></span>Add a song</h2>
+            <input type="search" id="search" placeholder="Search the server's library" oninput="drawSearch()">
+            <div id="results" class="list"></div>
+          </div>
+        </div>
+        <div class="stack">
+          <div class="card stack">
+            <h2 class="section-title"><span data-icon="users"></span>Listening</h2>
+            <div id="members" class="chips"></div>
+          </div>
+          <div class="card stack" id="host-card"></div>
+        </div>
+      </div>
+    </section>
+  </main>
+</div>
+<script>
+const { api, esc, toast, show, $ } = RMS;
+const audio = new Audio();
+audio.preload = 'auto';
+let me = null, party = null, offset = 0, rtt = null, ws = null, listening = false, songKey = null;
+let library = [], startTimer = null, lastReaction = 0, backoff = 1000;
+
+// the server's clock: a few pings, the quickest one's offset wins (NTP-style)
+const localNow = () => performance.timeOrigin + performance.now();
+const serverNow = () => localNow() + offset;
+async function syncClock() {
+  let best = null;
+  for (let i = 0; i < 8; i++) {
+    try {
+      const t0 = localNow();
+      const r = await fetch('/api/time', { cache: 'no-store' });
+      const j = await r.json();
+      const t1 = localNow();
+      if (!best || t1 - t0 < best.rtt) best = { rtt: t1 - t0, off: j.now_ms - (t0 + t1) / 2 };
+    } catch (_) {}
+  }
+  if (best) { offset = best.off; rtt = best.rtt; }
+}
+
+function view(id) {
+  ['loading', 'need-key', 'removed', 'off', 'on'].forEach((v) => show($('#' + v), v === id));
+}
+
+function banner(text) {
+  $('#banner').innerHTML = text ? `<div class="banner bad">${RMS.icon('refresh', 'spin')}<div>${esc(text)}</div></div>` : '';
+}
+
+async function boot() {
+  if (!RMS.token()) return view('need-key');
+  const m = await api('/api/me');
+  if (m.status === 401) return view('removed');
+  if (!m.ok) {
+    banner(m.data.error);
+    return setTimeout(boot, 3000);
+  }
+  me = m.data;
+  $('#name').textContent = (me.server.name || 'Radiance Music Server');
+  document.title = 'Listening party · ' + me.server.name;
+  await syncClock();
+  setInterval(syncClock, 60000);
+  loadLibrary();
+  connect();
+  setInterval(tick, 250);
+}
+
+function connect() {
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  ws = new WebSocket(`${proto}//${location.host}/api/party/ws?t=${encodeURIComponent(RMS.token())}`);
+  ws.onopen = () => { backoff = 1000; banner(null); };
+  ws.onmessage = (ev) => {
+    const m = JSON.parse(ev.data);
+    if (m.type === 'state') apply(m);
+    else if (m.type === 'removed') { listening = false; audio.pause(); view('removed'); }
+  };
+  ws.onclose = async () => {
+    if (!$('#removed').classList.contains('hidden')) return;
+    banner('Lost the party: joining again…');
+    const r = await api('/api/me');
+    if (r.status === 401) { audio.pause(); return view('removed'); }
+    setTimeout(connect, backoff);
+    backoff = Math.min(backoff * 2, 15000);
+  };
+}
+
+const isHost = () => party && party.on && party.host.id === me.person.id;
+const canControl = () => party && party.on && (isHost() || party.everyone_controls);
+
+function apply(s) {
+  const fresh = s.reactions || [];
+  party = s;
+  if (!s.on) {
+    listening = false;
+    audio.pause();
+    songKey = null;
+    return view('off');
+  }
+  view('on');
+  // reactions that came since the last state float up
+  fresh.filter((r) => r.at_server_ms > lastReaction).forEach((r) => floatUp(r.emoji));
+  if (fresh.length) lastReaction = Math.max(lastReaction, ...fresh.map((r) => r.at_server_ms));
+  const key = s.song ? s.song.entry : null;
+  if (key !== songKey) {
+    songKey = key;
+    clearTimeout(startTimer);
+    startTimer = null;
+    if (s.song) {
+      audio.src = RMS.fileUrl(s.song.url);
+      audio.load();
+      if ('mediaSession' in navigator) {
+        navigator.mediaSession.metadata = new MediaMetadata({ title: s.song.title, artist: s.song.artist, artwork: s.song.cover ? [{ src: RMS.fileUrl(s.song.cover) }] : [] });
+      }
+    } else {
+      audio.removeAttribute('src');
+      audio.load();
+    }
+  } else {
+    clearTimeout(startTimer);
+    startTimer = null;
+  }
+  draw();
+  tick();
+}
+
+// kept in time: the place everyone is at, from the server's clock; small
+// playbackRate nudges keep it within ~100 ms, a big gap is a jump
+function tick() {
+  drawProgress();
+  if (!listening || !party || !party.on || !party.song) {
+    if (!audio.paused) audio.pause();
+    return;
+  }
+  const want = party.playing ? (serverNow() - party.started_at_server_ms) / 1000 : party.paused_at_ms / 1000;
+  const length = (party.song.duration_ms || 0) / 1000;
+  if (!party.playing) {
+    if (!audio.paused) audio.pause();
+    if (audio.readyState >= 1 && Math.abs(audio.currentTime - want) > 0.3) audio.currentTime = want;
+    return sync('Paused by ' + (isHost() ? 'you' : 'the host'));
+  }
+  if (want < 0) {
+    // it starts in a moment: ready at 0, started right on time
+    if (!audio.paused) audio.pause();
+    if (audio.readyState >= 1 && audio.currentTime > 0.05) audio.currentTime = 0;
+    if (!startTimer) {
+      startTimer = setTimeout(() => {
+        startTimer = null;
+        audio.currentTime = Math.max(0, (serverNow() - party.started_at_server_ms) / 1000);
+        audio.playbackRate = 1;
+        audio.play().catch(blocked);
+      }, -want * 1000);
+    }
+    return sync('Starting…');
+  }
+  if (length && want > length) {
+    if (!audio.paused) audio.pause();
+    return sync('Next song in a moment…');
+  }
+  if (audio.paused) {
+    if (audio.readyState >= 1) audio.currentTime = want;
+    audio.play().catch(blocked);
+    return sync('Catching up…');
+  }
+  if (audio.seeking || audio.readyState < 3) return sync('Loading…');
+  const drift = audio.currentTime - want;
+  if (Math.abs(drift) > 1) {
+    audio.currentTime = want + 0.05;
+    audio.playbackRate = 1;
+  } else if (Math.abs(drift) > 0.025) {
+    audio.playbackRate = Math.min(1.06, Math.max(0.94, 1 - drift * 0.6));
+  } else {
+    audio.playbackRate = 1;
+  }
+  const ms = Math.round(drift * 1000);
+  sync(Math.abs(ms) <= 100 ? `In time with the party (${ms >= 0 ? '+' : ''}${ms} ms)` : `Catching up (${ms >= 0 ? '+' : ''}${ms} ms)`);
+}
+
+function blocked() {
+  // the browser wants a tap before it plays
+  listening = false;
+  draw();
+}
+
+function sync(text) {
+  const el = $('#sync');
+  if (el) el.textContent = text + (rtt != null ? ` · clock ±${Math.max(1, Math.round(rtt / 2))} ms` : '');
+}
+
+function listen(on) {
+  listening = on;
+  if (on) {
+    // a tap: the browser may play now
+    audio.play().then(() => tick()).catch(() => tick());
+  } else {
+    audio.pause();
+  }
+  draw();
+}
+
+function position() {
+  if (!party || !party.song) return 0;
+  return party.playing ? serverNow() - party.started_at_server_ms : party.paused_at_ms;
+}
+
+function drawProgress() {
+  if (!party || !party.on || !party.song) return;
+  const length = party.song.duration_ms || 0;
+  const at = Math.max(0, Math.min(position(), length || Infinity));
+  const fill = $('#seek-fill');
+  if (fill) fill.style.width = length ? (100 * at) / length + '%' : '0';
+  const t = $('#at');
+  if (t) t.textContent = RMS.clock(at);
+}
+
+function draw() {
+  if (!party || !party.on) return;
+  const s = party.song;
+  const control = canControl();
+  const art = s && s.cover ? `<img class="cover" src="${esc(RMS.fileUrl(s.cover))}" alt="">` : `<div class="cover">${RMS.icon('music')}</div>`;
+  const playBtn = party.playing
+    ? `<button class="btn big" onclick="act('pause')"><span data-icon="pause"></span>Pause</button>`
+    : `<button class="btn big" onclick="act('play')" ${!s && !party.queue.length ? 'disabled' : ''}><span data-icon="play"></span>Play</button>`;
+  const controls = control
+    ? `${playBtn}<button class="btn big" onclick="act('skip')" ${!s ? 'disabled' : ''}><span data-icon="skip"></span>Skip</button>`
+    : `<span class="muted small">${esc(party.host.name)} (the host) plays, pauses and skips.</span>`;
+  const me_ = listening
+    ? `<button class="btn" onclick="listen(false)"><span data-icon="pause"></span>Stop listening here</button>
+       <label class="row small muted">${RMS.icon('volume')}<input type="range" min="0" max="1" step="0.05" value="${audio.volume}" oninput="audio.volume=this.value"></label>`
+    : `<button class="btn primary big" onclick="listen(true)"><span data-icon="headphones"></span>Listen here</button>
+       <span class="hint">Your browser needs a tap before it plays sound.</span>`;
+  $('#now').innerHTML = `${art}
+    <div class="stack" style="gap:12px;min-width:0">
+      <div>${party.playing ? '<span class="pill on">Playing</span>' : s ? '<span class="pill">Paused</span>' : '<span class="pill">Quiet</span>'}
+        <span class="muted small">Hosted by ${esc(party.host.name)}</span></div>
+      ${s ? `<div><div class="song-title">${esc(s.title)}</div><div class="muted">${esc(s.artist || 'Unknown artist')} · added by ${esc(s.added_by.name)}</div></div>`
+          : `<div><div class="song-title">Nothing playing</div><div class="muted">Add a song: it starts at once.</div></div>`}
+      ${s ? `<div><div class="bar seek ${control ? 'can' : ''}" id="seek" onclick="seekTo(event)"><div id="seek-fill"></div></div>
+        <div class="times"><span id="at">0:00</span><span>${RMS.clock(s.duration_ms)}</span></div></div>` : ''}
+      <div class="row">${controls}</div>
+      <div class="row">${me_}</div>
+      <div class="sync" id="sync"></div>
+      <div class="row reacts">${['🔥', '❤️', '😂', '👏', '🎉', '😮'].map((e) => `<button class="btn" onclick="react('${e}')" title="React">${e}</button>`).join('')}</div>
+    </div>`;
+  RMS.hydrate($('#now'));
+  drawProgress();
+
+  $('#queue').innerHTML = party.queue.length ? party.queue.map((e, i) => {
+    const mine = e.added_by.id === me.person.id;
+    const tools = (control ? `<button class="btn quiet small" title="Earlier" onclick="act('reorder',{entry:${e.entry},to:${Math.max(0, i - 1)}})" ${i === 0 ? 'disabled' : ''}><span data-icon="up"></span>Up</button>
+        <button class="btn quiet small" title="Later" onclick="act('reorder',{entry:${e.entry},to:${i + 1}})" ${i === party.queue.length - 1 ? 'disabled' : ''}><span data-icon="down"></span>Down</button>` : '') +
+      (control || mine ? `<button class="btn quiet small" onclick="act('remove',{entry:${e.entry}})"><span data-icon="x"></span>Remove</button>` : '');
+    return `<div class="item">${e.cover ? `<img class="art" src="${esc(RMS.fileUrl(e.cover))}" alt="">` : `<div class="art">${RMS.icon('music')}</div>`}
+      <div class="grow"><div class="title">${esc(e.title)}</div><div class="meta">${esc(e.artist)} · added by ${esc(e.added_by.name)}</div></div>${tools}</div>`;
+  }).join('') : `<div class="empty"><span data-icon="music"></span><div>The queue is empty.</div><p class="small">Add a song below: anyone in the party can.</p></div>`;
+  RMS.hydrate($('#queue'));
+
+  $('#members').innerHTML = party.members.length ? party.members.map((m) =>
+    `<span class="chip"><span class="avatar">${RMS.initial(m.name)}</span>${esc(m.name)}${m.host ? ' <span class="pill on">Host</span>' : ''}</span>`).join('')
+    : '<span class="muted small">Nobody is listening right now.</span>';
+
+  const owner = me.person.role === 'owner';
+  const host = $('#host-card');
+  show(host, isHost() || owner);
+  host.innerHTML = `<h2 class="section-title"><span data-icon="headphones"></span>${isHost() ? "You're the host" : 'Your server'}</h2>
+    ${isHost() ? `<p class="muted small" style="margin:0">${party.everyone_controls ? 'Everyone can play, pause and skip.' : 'Only you play, pause and skip.'}</p>
+      <div><button class="btn" onclick="act('allow',{everyone:${!party.everyone_controls}})"><span data-icon="users"></span>${party.everyone_controls ? 'Only I control it' : 'Let everyone control it'}</button></div>` : ''}
+    <div><button class="btn danger" onclick="endParty()"><span data-icon="x-circle"></span>End the party</button></div>`;
+  RMS.hydrate(host);
+  drawSearch();
+}
+
+async function act(action, extra = {}) {
+  const r = await api('/api/party/control', { method: 'POST', body: { action, ...extra } });
+  if (!r.ok) return toast(r.data.error, true);
+  apply(r.data);
+}
+
+function seekTo(e) {
+  if (!canControl() || !party.song || !party.song.duration_ms) return;
+  const box = $('#seek').getBoundingClientRect();
+  const at = Math.round(((e.clientX - box.left) / box.width) * party.song.duration_ms);
+  act('seek', { position_ms: Math.max(0, at) });
+}
+
+async function react(emoji) {
+  const r = await api('/api/party/react', { method: 'POST', body: { emoji } });
+  if (!r.ok) toast(r.data.error, true);
+}
+
+function floatUp(emoji) {
+  const host = $('#floats');
+  if (!host) return;
+  const el = document.createElement('span');
+  el.className = 'float';
+  el.textContent = emoji;
+  el.style.left = 20 + Math.random() * 60 + '%';
+  host.appendChild(el);
+  setTimeout(() => el.remove(), 2700);
+}
+
+async function startParty() {
+  const r = await api('/api/party/start', { method: 'POST', body: { everyone_controls: $('#everyone').checked } });
+  if (!r.ok) return toast(r.data.error, true);
+  toast("The party is on. Add a song: it starts at once.");
+  apply(r.data);
+}
+
+async function endParty() {
+  if (!confirm('End the party for everyone?')) return;
+  const r = await api('/api/party/end', { method: 'POST', body: {} });
+  if (!r.ok) return toast(r.data.error, true);
+  apply(r.data);
+}
+
+async function loadLibrary() {
+  const r = await api('/api/library');
+  if (r.ok) {
+    library = r.data.songs;
+    drawSearch();
+  }
+}
+
+function drawSearch() {
+  const el = $('#results');
+  if (!el) return;
+  const q = ($('#search').value || '').trim().toLowerCase();
+  const list = (q ? library.filter((s) => (s.artist + ' ' + s.title).toLowerCase().includes(q)) : library).slice(0, 30);
+  el.innerHTML = !library.length
+    ? `<div class="empty"><span data-icon="music"></span><div>The library is empty.</div><p class="small">Add songs from the server's page first.</p></div>`
+    : !list.length
+      ? `<div class="empty"><span data-icon="search"></span><div>No songs match "${esc(q)}".</div></div>`
+      : list.map((s) => `<div class="item">${s.cover ? `<img class="art" loading="lazy" decoding="async" src="${esc(RMS.fileUrl(s.cover))}" alt="">` : `<div class="art">${RMS.icon('music')}</div>`}
+          <div class="grow"><div class="title">${esc(s.title)}</div><div class="meta">${esc(s.artist)}${s.duration_ms ? ' · ' + RMS.clock(s.duration_ms) : ''}</div></div>
+          <button class="btn small" onclick="addSong(${s.id})"><span data-icon="plus"></span>Add</button></div>`).join('');
+  RMS.hydrate(el);
+}
+
+async function addSong(id) {
+  const r = await api('/api/party/add', { method: 'POST', body: { song: id } });
+  if (!r.ok) return toast(r.data.error, true);
+  toast('Added to the queue.');
+  apply(r.data);
+}
+
+document.addEventListener('DOMContentLoaded', boot);
+</script>
+</body>
+</html>
