@@ -29,7 +29,8 @@ services:
       - "8080"
 
   caddy:
-    image: caddy:2
+    # the full name, so Podman finds it as Docker does
+    image: docker.io/library/caddy:2
     restart: unless-stopped
     depends_on:
       - rms
