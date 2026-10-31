@@ -145,6 +145,8 @@ pub fn installed(threads: u32) -> Option<LocalSplitter> {
 
 /// The scripts written again when this app's are newer (worker thread).
 pub fn refresh_scripts() {
+    // a fresh install has no data folder yet (the first split can come before anything else)
+    let _ = fs::create_dir_all(home());
     for (name, text) in [("split.py", SPLIT_PY), ("align.py", ALIGN_PY)] {
         let p = home().join(name);
         if fs::read_to_string(&p).ok().as_deref() != Some(text) {

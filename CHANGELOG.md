@@ -9,6 +9,11 @@
   bigger for it (about 860 MB).
 - On Windows, the programs the app runs (yt-dlp, the splitter) open no console windows, and
   splitting runs at idle priority, so the music and the rest of the PC go first.
+- **Lossless songs play on Windows:** the Internet Archive's FLAC files failed there with a
+  certificate error (Windows' own player couldn't check the Archive's servers). They now come
+  through the app's own relay, as YouTube songs already did.
+- A song split right after installing, before anything else, failed ("can't open split.py"):
+  the app's data folder wasn't made yet. It is now, first.
 
 ## v0.7.11 — 2026-10-31
 

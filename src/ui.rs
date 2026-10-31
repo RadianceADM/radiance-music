@@ -2623,8 +2623,17 @@ impl Ui {
             return Some(gio::File::for_path(f).uri().to_string());
         }
         match t.source {
-            Source::Archive => Some(t.id.clone()),
+            Source::Archive => Some(self.web_uri(&t.id)),
             Source::YouTube => self.fresh_stream(&t.id).map(|s| s.0),
+        }
+    }
+
+    /// An Internet Archive file's address for the player: as it is, except on Windows,
+    /// where it goes through the relay (GStreamer's TLS there can't check the Archive).
+    fn web_uri(&self, url: &str) -> String {
+        match &self.relay {
+            Some(relay) if cfg!(windows) => relay.add_web(url),
+            _ => url.to_string(),
         }
     }
 
@@ -4894,7 +4903,8 @@ impl Ui {
         } else if let Some(file) = &t.file {
             self.start(&gio::File::for_path(file).uri(), gen);
         } else if t.source == Source::Archive {
-            self.start(&t.id, gen);
+            let uri = self.web_uri(&t.id);
+            self.start(&uri, gen);
         } else if let Some((uri, kbps)) = self.fresh_stream(&t.id) {
             self.kbps.set(kbps);
             self.start(&uri, gen);

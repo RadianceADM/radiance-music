@@ -99,7 +99,8 @@ fn probe(query: &str) -> glib::ExitCode {
     }
     let mut tries = vec![];
     if let Some(t) = found.first() {
-        tries.push((t.id.clone(), t.clone()));
+        // as the app plays it: on Windows through the relay (see relay::add_web)
+        tries.push((if cfg!(windows) { relay.add_web(&t.id) } else { t.id.clone() }, t.clone()));
     }
     if let Some(t) = yt.first() {
         let at = Instant::now();
@@ -125,7 +126,11 @@ fn probe(query: &str) -> glib::ExitCode {
                 _ => println!("  {what}: timed out"),
             }
         };
-        println!("{}: {}", t.title, if uri.starts_with("http://127.0.0.1") { "YouTube via the relay" } else { "Internet Archive" });
+        println!("{}: {}", t.title, match (t.source, uri.starts_with("http://127.0.0.1")) {
+            (track::Source::Archive, true) => "Internet Archive via the relay",
+            (track::Source::Archive, false) => "Internet Archive",
+            _ => "YouTube via the relay",
+        });
         let at = Instant::now();
         let _ = playbin.set_state(gst::State::Playing);
         wait("start", at);

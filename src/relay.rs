@@ -5,12 +5,18 @@
 //! the player's) is slowed to a crawl or refused. So the player asks this relay
 //! (http://127.0.0.1:<port>/<n>) like any web server, and the relay fetches the
 //! stream from YouTube in 1 MB pieces the fast way. Seeking works too.
+//!
+//! On Windows it also carries Internet Archive files (`add_web`: ordinary Range
+//! requests): GStreamer's own TLS there (GnuTLS) can't check the Archive's
+//! certificate on a fresh Windows (its root comes from Windows only on demand), so
+//! the player asks the relay over plain local HTTP and the app's own HTTPS fetches.
 
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::{Arc, Mutex};
 use std::thread;
+use ureq::ResponseExt;
 
 use crate::net;
 
@@ -21,8 +27,11 @@ const PIECE: u64 = 1 << 20;
 
 struct Upstream {
     url: String,
+    /// 0: not known yet (a web file: learned at the first request)
     size: u64,
     mime: String,
+    /// YouTube's way: the part wanted in the address (&range=), not a Range header
+    in_address: bool,
 }
 
 #[derive(Clone)]
@@ -63,8 +72,35 @@ impl Relay {
             let oldest = *streams.keys().min().unwrap();
             streams.remove(&oldest);
         }
-        streams.insert(n, Upstream { url, size, mime });
+        streams.insert(n, Upstream { url, size, mime, in_address: true });
         format!("http://127.0.0.1:{}/{n}", self.port)
+    }
+
+    /// A file on the web served with ordinary Range requests (the Internet Archive),
+    /// through the relay: its local address. Its size is learned at the first request.
+    pub fn add_web(&self, url: &str) -> String {
+        let mut next = self.next.lock().unwrap();
+        let n = *next;
+        *next += 1;
+        let mut streams = self.streams.lock().unwrap();
+        if streams.len() > 16 {
+            let oldest = *streams.keys().min().unwrap();
+            streams.remove(&oldest);
+        }
+        let mime = if url.to_lowercase().ends_with(".flac") { "audio/flac" } else { "application/octet-stream" };
+        streams.insert(n, Upstream { url: url.to_string(), size: 0, mime: mime.into(), in_address: false });
+        format!("http://127.0.0.1:{}/{n}", self.port)
+    }
+
+    /// A web file's size, from a one-byte Range request ("Content-Range: bytes 0-0/SIZE"),
+    /// and where it really is: the Internet Archive redirects every request to one of
+    /// its servers, so the pieces after go straight there (a seek: one trip, not two).
+    fn learn_size(url: &str) -> Option<(u64, String)> {
+        let resp = net::agent().get(url).header("Range", "bytes=0-0").call().ok()?;
+        let at = resp.get_uri().to_string();
+        let total = resp.headers().get("content-range").and_then(|v| v.to_str().ok()?.rsplit('/').next()?.trim().parse().ok());
+        let size = total.or_else(|| resp.headers().get("content-length")?.to_str().ok()?.parse().ok())?;
+        Some((size, at))
     }
 
     fn serve(&self, conn: TcpStream) -> std::io::Result<()> {
@@ -87,10 +123,18 @@ impl Relay {
         let mut parts = first.split_whitespace();
         let (method, path) = (parts.next().unwrap_or(""), parts.next().unwrap_or(""));
         let n: u64 = path.trim_start_matches('/').parse().unwrap_or(0);
-        let (url, size, mime) = match self.streams.lock().unwrap().get(&n) {
-            Some(u) => (u.url.clone(), u.size, u.mime.clone()),
+        let (mut url, mut size, mime, in_address) = match self.streams.lock().unwrap().get(&n) {
+            Some(u) => (u.url.clone(), u.size, u.mime.clone(), u.in_address),
             None => return out.write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"),
         };
+        if size == 0 {
+            // a web file's size, learned once (here, off the window's thread)
+            (size, url) = Self::learn_size(&url).filter(|(s, _)| *s > 0).ok_or_else(|| std::io::Error::other("no size"))?;
+            if let Some(u) = self.streams.lock().unwrap().get_mut(&n) {
+                u.size = size;
+                u.url = url.clone();
+            }
+        }
         let (start, end) = match range {
             Some((s, e)) => (s, e.unwrap_or(size - 1).min(size - 1)),
             None => (0, size - 1),
@@ -124,10 +168,12 @@ impl Relay {
             let last = (pos + piece - 1).min(end);
             piece = (piece * 2).min(PIECE);
             let asked = std::time::Instant::now();
-            let mut resp = net::agent()
-                .get(&format!("{url}&range={pos}-{last}"))
-                .call()
-                .map_err(|e| std::io::Error::other(e.to_string()))?;
+            let req = if in_address {
+                net::agent().get(&format!("{url}&range={pos}-{last}"))
+            } else {
+                net::agent().get(&url).header("Range", &format!("bytes={pos}-{last}"))
+            };
+            let mut resp = req.call().map_err(|e| std::io::Error::other(e.to_string()))?;
             if std::env::var_os("RADIANCE_DEBUG").is_some() {
                 eprintln!("[relay] {pos}-{last}: answered in {:.2}s", asked.elapsed().as_secs_f64());
             }
