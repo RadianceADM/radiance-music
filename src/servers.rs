@@ -26,27 +26,65 @@ use crate::track::{file_name, Source, Track};
 /// A server this computer joined: where it is, its key for this computer, and its name.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Joined {
-    /// "https://music.example.com" or "http://203.0.113.5:8080" (no slash at the end).
+    /// Where it is now: "https://music.example.com" or "http://203.0.113.5:8080" (no slash at the end).
     pub address: String,
     pub token: String,
     /// "Bassi's server" (from /api/status).
     pub name: String,
+    /// The server's own id (made at its first start, never changed): the same
+    /// server at a new address is the same server (None: not heard yet).
+    pub id: Option<String>,
+    /// Where it was when this computer joined it. Its songs keep this address
+    /// in their ids, so their keys (liked songs, history, playlists, what's
+    /// cached) stay the same when the server moves; what's fetched goes to
+    /// `address` (see `here`).
+    pub first: String,
 }
 
 impl Joined {
+    /// A server just joined at `address`.
+    pub fn new(address: &str, token: &str, name: &str, id: Option<String>) -> Joined {
+        Joined { address: address.to_string(), token: token.to_string(), name: name.to_string(), id, first: address.to_string() }
+    }
+
     pub fn to_json(&self) -> Value {
-        json!({ "address": self.address, "token": self.token, "name": self.name })
+        json!({ "address": self.address, "token": self.token, "name": self.name, "id": self.id, "first_address": self.first })
     }
 
     pub fn from_json(v: &Value) -> Option<Joined> {
         let s = |k: &str| v[k].as_str().map(|x| x.trim().to_string()).filter(|x| !x.is_empty());
-        Some(Joined { address: origin(&s("address")?), token: s("token")?, name: s("name").unwrap_or_else(|| "A Radiance Music Server".into()) })
+        let address = origin(&s("address")?);
+        Some(Joined {
+            first: s("first_address").map(|f| origin(&f)).unwrap_or_else(|| address.clone()),
+            address,
+            token: s("token")?,
+            name: s("name").unwrap_or_else(|| "A Radiance Music Server".into()),
+            id: s("id"),
+        })
     }
 
-    /// The party's WebSocket address (ws:// or wss://, with the key).
-    pub fn socket_url(&self) -> String {
+    /// One of its addresses (a song's id: at the address first joined) where it is now.
+    pub fn here(&self, url: &str) -> String {
+        match url.strip_prefix(&self.first) {
+            Some(rest) if self.first != self.address && rest.starts_with('/') => format!("{}{rest}", self.address),
+            _ => url.to_string(),
+        }
+    }
+
+    /// Its WebSocket at `path` (ws:// or wss://, with the key).
+    fn socket(&self, path: &str) -> String {
         let rest = self.address.strip_prefix("https://").map(|h| format!("wss://{h}")).or_else(|| self.address.strip_prefix("http://").map(|h| format!("ws://{h}"))).unwrap_or_else(|| self.address.clone());
-        format!("{rest}/api/party/ws?t={}", self.token)
+        format!("{rest}{path}?t={}", self.token)
+    }
+
+    /// The party's WebSocket address.
+    pub fn socket_url(&self) -> String {
+        self.socket("/api/party/ws")
+    }
+
+    /// Its change events' WebSocket address (/api/events: no polling).
+    pub fn events_url(&self) -> String {
+        self.socket("/api/events")
     }
 }
 
@@ -60,10 +98,10 @@ pub fn set_joined(list: &[Joined]) {
     }
 }
 
-/// The joined server an address is on (its address starts with the server's).
+/// The joined server an address is on (it starts with the server's address, now or when first joined).
 pub fn of_url(url: &str) -> Option<Joined> {
     let joined = JOINED.read().ok()?;
-    joined.iter().find(|s| url.starts_with(&format!("{}/", s.address))).cloned()
+    joined.iter().find(|s| url.starts_with(&format!("{}/", s.address)) || url.starts_with(&format!("{}/", s.first))).cloned()
 }
 
 /// The joined server a song is from.
@@ -75,7 +113,7 @@ pub fn of_track(t: &Track) -> Option<Joined> {
 /// player and cover downloads need it; any other address as it is.
 pub fn signed(url: &str) -> String {
     match of_url(url) {
-        Some(s) => with_token(url, &s.token),
+        Some(s) => with_token(&s.here(url), &s.token),
         None => url.to_string(),
     }
 }
@@ -214,18 +252,55 @@ pub fn status(address: &str) -> Result<Value, Failure> {
     answer(agent().get(&format!("{address}/api/status")).call())
 }
 
-/// Joins a server with an invite's code: this computer gets its own key there.
-/// `device`: the name the server's owner sees for it (the computer's name).
-pub fn join(address: &str, code: &str, device: &str) -> Result<Joined, String> {
-    let plain = |f: Failure| f.words("The server");
-    let about = status(address).map_err(plain)?;
+/// Joins a server with an invite's code (its status read first): this
+/// computer gets its own key there. `device`: the name the server's owner sees
+/// for it (the computer's name).
+fn join_with(address: &str, code: &str, device: &str, about: &Value) -> Result<Joined, String> {
     if about["needs_setup"].as_bool() == Some(true) {
         return Err("That server isn't set up yet: its owner opens its page first and types their name.".into());
     }
-    let said = answer(agent().post(&format!("{address}/api/join")).send_json(json!({ "code": code, "device_name": device }))).map_err(plain)?;
-    let token = said["token"].as_str().filter(|t| !t.is_empty()).ok_or("The server didn't give this computer a key. Try again in a moment.")?.to_string();
-    let name = about["server"].as_str().or(said["server"]["name"].as_str()).unwrap_or("A Radiance Music Server").to_string();
-    Ok(Joined { address: address.to_string(), token, name })
+    let said = answer(agent().post(&format!("{address}/api/join")).send_json(json!({ "code": code, "device_name": device }))).map_err(|f| f.words("The server"))?;
+    let token = said["token"].as_str().filter(|t| !t.is_empty()).ok_or("The server didn't give this computer a key. Try again in a moment.")?;
+    let name = about["server"].as_str().or(said["server"]["name"].as_str()).unwrap_or("A Radiance Music Server");
+    let id = about["id"].as_str().or(said["server"]["id"].as_str()).map(String::from);
+    Ok(Joined::new(address, token, name, id))
+}
+
+/// Joins with an invite, or (the server's id is one already joined, at another
+/// address) moves that server here: its key still works there, so the invite
+/// isn't used; else the invite gives this computer a new key. Either way it's
+/// the same server, its songs' keys unchanged. (the server, the one it was)
+pub fn join_or_move(address: &str, code: &str, device: &str, joined: &[Joined]) -> Result<(Joined, Option<Joined>), String> {
+    let about = status(address).map_err(|f| f.words("The server"))?;
+    let id = about["id"].as_str();
+    // (one joined before servers said their id: asked for it at its own address)
+    let same = |s: &&Joined| id.is_some() && (s.id.as_deref() == id || (s.id.is_none() && s.address != address && status(&s.address).ok().is_some_and(|v| v["id"].as_str() == id)));
+    let Some(was) = joined.iter().find(same) else {
+        return join_with(address, code, device, &about).map(|j| (j, None));
+    };
+    if was.address == address {
+        return Err(format!("This computer is on {} already.", was.name));
+    }
+    let moved = Joined { address: address.to_string(), name: about["server"].as_str().unwrap_or(&was.name).to_string(), id: id.map(String::from), ..was.clone() };
+    if me(&moved).is_ok() {
+        return Ok((moved, Some(was.clone())));
+    }
+    let fresh = join_with(address, code, device, &about)?;
+    Ok((Joined { token: fresh.token, ..moved }, Some(was.clone())))
+}
+
+/// Where a joined server says it is now, when that's somewhere else and the
+/// same server (its id) answers there with this computer's key (a domain
+/// added, say); None: where it was (worker thread).
+pub fn moved(server: &Joined) -> Option<String> {
+    let id = server.id.as_deref()?;
+    let now = origin(status(&server.address).ok()?["address"].as_str()?);
+    if now == server.address || !now.starts_with("http") {
+        return None;
+    }
+    let there = status(&now).ok()?;
+    let same = there["id"].as_str() == Some(id) && me(&Joined { address: now.clone(), ..server.clone() }).is_ok();
+    same.then_some(now)
 }
 
 /// Who this computer is on a server, and what its owner lets you do there.
@@ -235,8 +310,9 @@ pub struct Me {
     pub name: String,
     pub owner: bool,
     pub device: i64,
-    /// The server's name now (its owner may have been renamed).
+    /// The server's name now (its owner may have been renamed), and its own id.
     pub server: String,
+    pub server_id: Option<String>,
     pub can_add: bool,
     pub can_split: bool,
     pub can_host: bool,
@@ -249,6 +325,7 @@ pub fn parse_me(v: &Value) -> Me {
         owner: v["person"]["role"].as_str() == Some("owner"),
         device: v["device"]["id"].as_i64().unwrap_or(0),
         server: v["server"]["name"].as_str().unwrap_or_default().to_string(),
+        server_id: v["server"]["id"].as_str().map(String::from),
         can_add: v["can"]["add"].as_bool().unwrap_or(false),
         can_split: v["can"]["split"].as_bool().unwrap_or(false),
         can_host: v["can"]["host"].as_bool().unwrap_or(false),
@@ -290,35 +367,35 @@ pub struct Song {
 }
 
 pub fn parse_library(v: &Value) -> Vec<Song> {
-    let list = v["songs"].as_array().cloned().unwrap_or_default();
-    list.iter()
-        .filter_map(|s| {
-            let text = |k: &str| s[k].as_str().unwrap_or_default().to_string();
-            let files = s["files"]
-                .as_object()
-                .map(|o| {
-                    o.iter()
-                        .filter_map(|(kind, f)| Some((kind.clone(), File { name: f["name"].as_str()?.to_string(), size: f["size"].as_u64().unwrap_or(0), url: f["url"].as_str()?.to_string() })))
-                        .collect()
-                })
-                .unwrap_or_default();
-            Some(Song {
-                id: s["id"].as_i64()?,
-                artist: text("artist"),
-                title: text("title"),
-                file: text("file"),
-                url: s["url"].as_str()?.to_string(),
-                duration_ms: s["duration_ms"].as_i64(),
-                split: s["split"].as_bool().unwrap_or(false),
-                parts: s["parts"].as_array().map(|p| p.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default(),
-                lyrics: s["lyrics"].as_bool().unwrap_or(false),
-                word_times: s["word_times"].as_bool().unwrap_or(false),
-                cover: s["cover"].as_str().map(String::from),
-                files,
-                added_by: s["added_by"]["name"].as_str().map(String::from),
-            })
+    v["songs"].as_array().map(|list| list.iter().filter_map(parse_song).collect()).unwrap_or_default()
+}
+
+/// One song as the API sends it (an entry of /api/library, or /api/songs/ID).
+pub fn parse_song(s: &Value) -> Option<Song> {
+    let text = |k: &str| s[k].as_str().unwrap_or_default().to_string();
+    let files = s["files"]
+        .as_object()
+        .map(|o| {
+            o.iter()
+                .filter_map(|(kind, f)| Some((kind.clone(), File { name: f["name"].as_str()?.to_string(), size: f["size"].as_u64().unwrap_or(0), url: f["url"].as_str()?.to_string() })))
+                .collect()
         })
-        .collect()
+        .unwrap_or_default();
+    Some(Song {
+        id: s["id"].as_i64()?,
+        artist: text("artist"),
+        title: text("title"),
+        file: text("file"),
+        url: s["url"].as_str()?.to_string(),
+        duration_ms: s["duration_ms"].as_i64(),
+        split: s["split"].as_bool().unwrap_or(false),
+        parts: s["parts"].as_array().map(|p| p.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default(),
+        lyrics: s["lyrics"].as_bool().unwrap_or(false),
+        word_times: s["word_times"].as_bool().unwrap_or(false),
+        cover: s["cover"].as_str().map(String::from),
+        files,
+        added_by: s["added_by"]["name"].as_str().map(String::from),
+    })
 }
 
 impl Song {
@@ -328,12 +405,13 @@ impl Song {
         let ext = self.file.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase()).unwrap_or_default();
         Track {
             source: Source::Server,
-            id: format!("{}{}", server.address, self.url),
+            // (at the address first joined: see Joined::first)
+            id: format!("{}{}", server.first, self.url),
             title: if self.title.is_empty() { self.file.clone() } else { self.title.clone() },
             artist: self.artist.clone(),
             album: String::new(),
             seconds: (self.duration_ms.unwrap_or(0).max(0) / 1000) as u32,
-            art: self.cover.as_ref().map(|c| format!("{}{c}", server.address)).unwrap_or_default(),
+            art: self.cover.as_ref().map(|c| format!("{}{c}", server.first)).unwrap_or_default(),
             format: match ext.as_str() {
                 "flac" => "FLAC".into(),
                 "m4a" => "AAC".into(),
@@ -358,6 +436,24 @@ pub fn library(server: &Joined) -> Result<Vec<Song>, Failure> {
     Ok(songs)
 }
 
+/// One of a server's songs as it is now (GET /api/songs/ID), kept with the rest as fetched.
+pub fn song(server: &Joined, id: i64) -> Result<Song, Failure> {
+    let song = parse_song(&get(server, &format!("/api/songs/{id}"))?).ok_or(Failure { status: 500, said: "The server's answer wasn't a song.".into() })?;
+    keep(server, &song);
+    Ok(song)
+}
+
+/// A song as it is now, in its server's list as fetched.
+fn keep(server: &Joined, song: &Song) {
+    if let Ok(mut l) = LIBRARIES.lock() {
+        let list = l.get_or_insert_with(HashMap::new).entry(server.address.clone()).or_default();
+        match list.iter_mut().find(|s| s.id == song.id) {
+            Some(s) => *s = song.clone(),
+            None => list.push(song.clone()),
+        }
+    }
+}
+
 /// A server's songs as last fetched (none yet: empty).
 pub fn cached(address: &str) -> Vec<Song> {
     LIBRARIES.lock().ok().and_then(|l| l.as_ref()?.get(address).cloned()).unwrap_or_default()
@@ -366,7 +462,7 @@ pub fn cached(address: &str) -> Vec<Song> {
 /// A song from a server, as last fetched.
 pub fn song_of(t: &Track) -> Option<(Joined, Song)> {
     let server = of_track(t)?;
-    let song = cached(&server.address).into_iter().find(|s| format!("{}{}", server.address, s.url) == t.id)?;
+    let song = cached(&server.address).into_iter().find(|s| format!("{}{}", server.first, s.url) == t.id)?;
     Some((server, song))
 }
 
@@ -420,7 +516,11 @@ pub fn lyrics_text(t: &Track) -> Option<(bool, String)> {
 /// A file's name from its address on the server ("/files/Artist%20-%20Title.opus" → "Artist - Title.opus").
 pub fn name_of(url: &str) -> String {
     let path = url.split('?').next().unwrap_or(url);
-    let enc = path.rsplit_once("/files/").map(|(_, n)| n).unwrap_or(path);
+    decode(path.rsplit_once("/files/").map(|(_, n)| n).unwrap_or(path))
+}
+
+/// "%20" and the like, as the characters they stand for.
+fn decode(enc: &str) -> String {
     let bytes = enc.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;
@@ -471,8 +571,12 @@ fn download(server: &Joined, f: &File, to: &Path) -> Result<(), String> {
 /// The song's path.
 pub fn save(t: &Track, dir: &Path) -> Result<String, String> {
     let server = of_track(t).ok_or("This song's server isn't joined anymore, so it can't be saved from there.")?;
-    let songs = library(&server).map_err(|f| f.words(&server.name))?;
-    let song = songs.into_iter().find(|s| format!("{}{}", server.address, s.url) == t.id).ok_or_else(|| format!("“{}” isn't on {} anymore.", t.title, server.name))?;
+    let gone = || format!("“{}” isn't on {} anymore.", t.title, server.name);
+    // the song as it is now: by its id (its library not fetched yet: the whole list, once)
+    let song = match song_of(t) {
+        Some((_, s)) => song(&server, s.id).map_err(|f| if f.status == 404 { gone() } else { f.words(&server.name) })?,
+        None => library(&server).map_err(|f| f.words(&server.name))?.into_iter().find(|s| format!("{}{}", server.first, s.url) == t.id).ok_or_else(gone)?,
+    };
     let own = song.files.get("song").cloned().unwrap_or(File { name: song.file.clone(), size: 0, url: song.url.clone() });
     let (stem, ext) = own.name.rsplit_once('.').map(|(s, e)| (file_name(s), e.to_ascii_lowercase())).ok_or("the song's file has no type")?;
     let path = dir.join(format!("{stem}.{ext}"));
@@ -500,42 +604,69 @@ pub struct Added {
     /// The server had it already (same artist and title): only the extras it lacked went.
     pub skipped: bool,
     pub extras: Vec<String>,
+    /// The song there, as it is now (its id: its parts go to it next).
+    pub song: Option<Song>,
+    /// Its parts that went with it (drums, bass…: none when it had them, or this computer hasn't).
+    pub parts: Vec<String>,
 }
 
-/// One form field of a multipart upload: (name, file name, bytes) or (name, text).
+/// One form field of a multipart upload: a file (sent from the disk, a piece at a time), or text.
 enum Field {
-    File(&'static str, String, Vec<u8>),
+    File(&'static str, String, std::path::PathBuf),
     Text(&'static str, String),
 }
 
-fn multipart(fields: &[Field], boundary: &str) -> Vec<u8> {
-    let mut body = vec![];
+/// A multipart body read from its pieces in turn (a big part is never held in memory), and its length.
+fn multipart(fields: &[Field], boundary: &str) -> std::io::Result<(Box<dyn Read + Send>, u64)> {
+    let mut pieces: Vec<Box<dyn Read + Send>> = vec![];
+    let mut length = 0u64;
+    let text = |s: String, pieces: &mut Vec<Box<dyn Read + Send>>, length: &mut u64| {
+        *length += s.len() as u64;
+        pieces.push(Box::new(std::io::Cursor::new(s.into_bytes())));
+    };
     for f in fields {
-        body.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
         match f {
-            Field::File(name, file, bytes) => {
+            Field::File(name, file, path) => {
                 let file = file.replace(['"', '\r', '\n'], "_");
-                body.extend_from_slice(format!("Content-Disposition: form-data; name=\"{name}\"; filename=\"{file}\"\r\nContent-Type: application/octet-stream\r\n\r\n").as_bytes());
-                body.extend_from_slice(bytes);
+                text(format!("--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"; filename=\"{file}\"\r\nContent-Type: application/octet-stream\r\n\r\n"), &mut pieces, &mut length);
+                let opened = std::fs::File::open(path)?;
+                let size = opened.metadata()?.len();
+                pieces.push(Box::new(opened.take(size)));
+                length += size;
+                text("\r\n".into(), &mut pieces, &mut length);
             }
-            Field::Text(name, text) => {
-                body.extend_from_slice(format!("Content-Disposition: form-data; name=\"{name}\"\r\n\r\n").as_bytes());
-                body.extend_from_slice(text.as_bytes());
-            }
+            Field::Text(name, value) => text(format!("--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"\r\n\r\n{value}\r\n"), &mut pieces, &mut length),
         }
-        body.extend_from_slice(b"\r\n");
     }
-    body.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
-    body
+    text(format!("--{boundary}--\r\n"), &mut pieces, &mut length);
+    let body = pieces.into_iter().fold(Box::new(std::io::empty()) as Box<dyn Read + Send>, |a, b| Box::new(a.chain(b)));
+    Ok((body, length))
+}
+
+/// POSTs a multipart form to `path` (a big upload: ten minutes at most).
+fn send_form(server: &Joined, path: &str, fields: &[Field]) -> Result<Value, Failure> {
+    let boundary = format!("radiance-music-{:016x}", now_ms().to_bits() ^ 0x5eed_cafe);
+    let (body, length) = multipart(fields, &boundary).map_err(|e| Failure { status: 0, said: e.to_string() })?;
+    answer(
+        agent()
+            .post(&format!("{}{path}", server.address))
+            .header("Authorization", &bearer(&server.token))
+            .header("Content-Type", &format!("multipart/form-data; boundary={boundary}"))
+            .header("Content-Length", &length.to_string())
+            .config()
+            .timeout_global(Some(Duration::from_secs(600)))
+            .build()
+            .send(ureq::SendBody::from_owned_reader(body)),
+    )
 }
 
 /// Adds one of your saved songs to a server (POST /api/songs; worker thread):
-/// its file, with its cover and lyrics when it has them.
+/// its file, with its cover and lyrics when it has them; then its parts, when
+/// this computer has them and the server's copy hasn't (see upload_parts).
 pub fn upload(server: &Joined, t: &Track) -> Result<Added, String> {
     let file = t.file.as_deref().filter(|f| Path::new(f).exists()).ok_or("Only saved songs can go to a server: like it first, so it's saved.")?;
-    let song = std::fs::read(file).map_err(|e| e.to_string())?;
     let name = Path::new(file).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "song".into());
-    let mut fields = vec![Field::File("song", name, song), Field::Text("artist", t.artist.clone()), Field::Text("title", t.title.clone())];
+    let mut fields = vec![Field::File("song", name, file.into()), Field::Text("artist", t.artist.clone()), Field::Text("title", t.title.clone())];
     if t.seconds > 0 {
         fields.push(Field::Text("seconds", t.seconds.to_string()));
     }
@@ -544,24 +675,63 @@ pub fn upload(server: &Joined, t: &Track) -> Result<Added, String> {
             continue;
         }
         let p = crate::library::beside(file, ext);
-        if let Ok(bytes) = std::fs::read(&p) {
-            fields.push(Field::File(kind, p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(), bytes));
+        if p.exists() {
+            fields.push(Field::File(kind, p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(), p));
         }
     }
-    let boundary = format!("radiance-music-{:016x}", now_ms().to_bits() ^ 0x5eed_cafe);
-    let body = multipart(&fields, &boundary);
-    let said = answer(
-        agent()
-            .post(&format!("{}/api/songs", server.address))
-            .header("Authorization", &bearer(&server.token))
-            .header("Content-Type", &format!("multipart/form-data; boundary={boundary}"))
-            .config()
-            .timeout_global(Some(Duration::from_secs(600)))
-            .build()
-            .send(&body[..]),
-    )
-    .map_err(|f| f.words(&server.name))?;
-    Ok(Added { skipped: said["skipped"].as_bool().unwrap_or(false), extras: said["extras"].as_array().map(|e| e.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default() })
+    let said = send_form(server, "/api/songs", &fields).map_err(|f| f.words(&server.name))?;
+    let song = parse_song(&said["song"]);
+    if let Some(s) = &song {
+        keep(server, s);
+    }
+    let mut added = Added { skipped: said["skipped"].as_bool().unwrap_or(false), extras: said["extras"].as_array().map(|e| e.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default(), song, parts: vec![] };
+    // its parts too, when they're here and not there
+    if let Some(s) = added.song.clone().filter(|s| !s.split) {
+        if let Ok((parts, now)) = upload_parts(server, s.id, t) {
+            added.parts = parts;
+            added.song = now.or(added.song);
+        }
+    }
+    Ok(added)
+}
+
+/// The parts a song split on this computer has to send (drums, bass, other and vocals, all four, and music).
+pub fn parts_here(t: &Track) -> Vec<(&'static str, std::path::PathBuf)> {
+    let have: Vec<(&'static str, std::path::PathBuf)> = crate::split::PARTS.iter().copied().chain(["music"]).filter_map(|p| crate::split::ready_part(t, p).map(|f| (p, f))).collect();
+    let four = crate::split::PARTS.iter().all(|p| have.iter().any(|(h, _)| h == p));
+    if four { have } else { vec![] }
+}
+
+/// A song split on this computer brings its parts to the server's copy (POST
+/// /api/songs/ID/parts; worker thread), with its lyrics when every word is
+/// timed (the server keeps them if its own aren't). The server skips parts it
+/// has. (the parts it took, the song as it is now)
+pub fn upload_parts(server: &Joined, id: i64, t: &Track) -> Result<(Vec<String>, Option<Song>), String> {
+    let parts = parts_here(t);
+    if parts.is_empty() {
+        return Err("This computer hasn't split it.".into());
+    }
+    let mut fields: Vec<Field> = parts.into_iter().map(|(p, f)| (p, format!("{p}.{}", f.extension().and_then(|e| e.to_str()).unwrap_or("ogg")), f)).map(|(p, n, f)| Field::File(p, n, f)).collect();
+    if let Some(y) = t.file.as_deref().map(|f| crate::library::beside(f, "lyrics.yaml")).filter(|y| std::fs::read_to_string(y).is_ok_and(|text| text.contains("\n    words:"))) {
+        fields.push(Field::File("lyrics", "lyrics.lyrics.yaml".into(), y));
+    }
+    let said = send_form(server, &format!("/api/songs/{id}/parts"), &fields).map_err(|f| f.words(&server.name))?;
+    let now = parse_song(&said["song"]);
+    if let Some(s) = &now {
+        keep(server, s);
+    }
+    Ok((said["added"].as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default(), now))
+}
+
+/// The song on a server that's this one (a server's own song; else the same
+/// artist and title, as the server matches them), from its songs as fetched.
+pub fn copy_on(server: &Joined, t: &Track) -> Option<Song> {
+    let list = cached(&server.address);
+    if let Some(s) = song_of(t).filter(|(s, _)| s.address == server.address).map(|(_, s)| s) {
+        return Some(s);
+    }
+    let same = |a: &str, b: &str| a.trim().to_lowercase() == b.trim().to_lowercase();
+    list.into_iter().find(|s| same(&s.artist, &t.artist) && same(&s.title, &t.title))
 }
 
 /// A song in a server's split queue.
@@ -607,7 +777,6 @@ pub enum Asked {
     Queued(Job),
 }
 
-/// Asks a server to split one of its songs (POST /api/split; worker thread).
 /// Leaving `server`: this computer's key stops working there (as the phone does), so
 /// it leaves the owner's People list too. (The owner's last device can't: 409.)
 pub fn leave(server: &Joined) -> Result<(), Failure> {
@@ -615,6 +784,7 @@ pub fn leave(server: &Joined) -> Result<(), Failure> {
     post(server, &format!("/api/devices/{}/revoke", me.device), &json!({})).map(|_| ())
 }
 
+/// Asks a server to split one of its songs (POST /api/split; worker thread).
 pub fn split(server: &Joined, t: &Track) -> Result<Asked, Failure> {
     let said = post(server, "/api/split", &json!({ "song": song_ref(t) }))?;
     parse_asked(&said).ok_or(Failure { status: 500, said: "The server's answer didn't say where the song is in its queue.".into() })
@@ -685,12 +855,12 @@ impl Entry {
         let ext = self.url.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase()).unwrap_or_default();
         Track {
             source: Source::Server,
-            id: format!("{}{}", server.address, self.url),
+            id: format!("{}{}", server.first, self.url),
             title: self.title.clone(),
             artist: self.artist.clone(),
             album: String::new(),
             seconds: (self.duration_ms.unwrap_or(0.0).max(0.0) / 1000.0) as u32,
-            art: self.cover.as_ref().map(|c| format!("{}{c}", server.address)).unwrap_or_default(),
+            art: self.cover.as_ref().map(|c| format!("{}{c}", server.first)).unwrap_or_default(),
             format: if ext == "flac" { "FLAC".into() } else if ext == "m4a" { "AAC".into() } else { "Opus".into() },
             file: None,
             video: false,
@@ -873,20 +1043,51 @@ pub fn step(drift: f64) -> Step {
     }
 }
 
-/// What the party's WebSocket says.
+/// What a server's WebSockets say: the party's (/api/party/ws) and its change events (/api/events).
 #[derive(Clone, Debug)]
 pub enum Live {
+    /// The party as it is now.
     State(Value),
-    /// This device was removed from the server (the party goes with it).
+    /// This device was removed from the server (the line ends).
     Removed(String),
     /// The line dropped (it joins again by itself).
     Lost,
     Back,
+    /// The events line is open: the server's own id and name.
+    Hello(Option<String>, String),
+    /// Its songs or their parts changed: fetch them again.
+    Library,
+    /// Its split queue, as GET /api/queue sends it.
+    Queue(Value),
+    /// Your switches changed (or you were removed): ask /api/me again.
+    Me,
+    /// A party started or ended there: ask /api/party again.
+    Party,
 }
 
-/// The party's WebSocket, on its own thread: every state the server sends
-/// goes to `tx`; a dropped line joins again (1, 2, 4… up to 15 s apart).
-/// Dropped: the thread closes the line and ends.
+/// A WebSocket's message, as the app takes it.
+fn party_message(v: Value) -> Option<Live> {
+    match v["type"].as_str()? {
+        "state" => Some(Live::State(v)),
+        "removed" => Some(Live::Removed(v["error"].as_str().unwrap_or("This device was removed from the server.").to_string())),
+        _ => None,
+    }
+}
+
+pub fn event_message(v: Value) -> Option<Live> {
+    match v["type"].as_str()? {
+        "hello" => Some(Live::Hello(v["server"]["id"].as_str().map(String::from), v["server"]["name"].as_str().unwrap_or_default().to_string())),
+        "library" => Some(Live::Library),
+        "queue" => Some(Live::Queue(v)),
+        "me" => Some(Live::Me),
+        "party" => Some(Live::Party),
+        _ => None,
+    }
+}
+
+/// A WebSocket on its own thread: what the server sends goes to `tx`; a
+/// dropped line joins again (1, 2, 4… up to 15 s apart). Dropped: the thread
+/// closes the line and ends.
 pub struct Socket {
     stop: Arc<AtomicBool>,
 }
@@ -897,10 +1098,20 @@ impl Drop for Socket {
     }
 }
 
+/// The party's WebSocket.
 pub fn listen(server: &Joined, tx: async_channel::Sender<Live>) -> Socket {
+    socket(server.socket_url(), tx, party_message)
+}
+
+/// The server's change events (/api/events): no polling while it's open.
+pub fn events(server: &Joined, tx: async_channel::Sender<Live>) -> Socket {
+    socket(server.events_url(), tx, event_message)
+}
+
+fn socket(url: String, tx: async_channel::Sender<Live>, read: fn(Value) -> Option<Live>) -> Socket {
     let stop = Arc::new(AtomicBool::new(false));
-    let (url, flag) = (server.socket_url(), stop.clone());
-    let _ = std::thread::Builder::new().name("party".into()).spawn(move || {
+    let flag = stop.clone();
+    let _ = std::thread::Builder::new().name("rms-socket".into()).spawn(move || {
         use tungstenite::stream::MaybeTlsStream;
         use tungstenite::{Error, Message};
         let mut wait = 1u64;
@@ -908,6 +1119,11 @@ pub fn listen(server: &Joined, tx: async_channel::Sender<Live>) -> Socket {
         while !flag.load(Ordering::Relaxed) {
             let mut socket = match tungstenite::connect(url.as_str()) {
                 Ok((s, _)) => s,
+                // its key doesn't work there anymore: no use trying again
+                Err(Error::Http(r)) if r.status().as_u16() == 401 => {
+                    let _ = tx.send_blocking(Live::Removed("This computer isn't joined to the server anymore.".into()));
+                    return;
+                }
                 Err(_) => {
                     if !lost {
                         lost = true;
@@ -947,18 +1163,10 @@ pub fn listen(server: &Joined, tx: async_channel::Sender<Live>) -> Socket {
                 }
                 match socket.read() {
                     Ok(Message::Text(text)) => {
-                        let v: Value = serde_json::from_str(text.as_str()).unwrap_or(Value::Null);
-                        match v["type"].as_str() {
-                            Some("state") => {
-                                if tx.send_blocking(Live::State(v)).is_err() {
-                                    return;
-                                }
-                            }
-                            Some("removed") => {
-                                let _ = tx.send_blocking(Live::Removed(v["error"].as_str().unwrap_or("This device was removed from the server.").to_string()));
-                                return;
-                            }
-                            _ => {}
+                        let Some(live) = read(serde_json::from_str(text.as_str()).unwrap_or(Value::Null)) else { continue };
+                        let removed = matches!(live, Live::Removed(_));
+                        if tx.send_blocking(live).is_err() || removed {
+                            return;
                         }
                     }
                     Ok(Message::Close(_)) => break,
@@ -976,6 +1184,17 @@ pub fn listen(server: &Joined, tx: async_channel::Sender<Live>) -> Socket {
         }
     });
     Socket { stop }
+}
+
+/// The invite link in an "Open in Radiance Music" link from a server's join
+/// page (radiancemusic://join?u=https%3A%2F%2Fmusic.example.com%2Fjoin%2FABCD-…).
+pub fn invite_in_app_link(uri: &str) -> Option<String> {
+    let uri = uri.trim();
+    let rest = uri.get(..14).filter(|s| s.eq_ignore_ascii_case("radiancemusic:")).map(|_| &uri[14..])?;
+    let query = rest.trim_start_matches('/').strip_prefix("join").and_then(|r| r.trim_start_matches('/').strip_prefix('?'))?;
+    let link = decode(query.split('&').find_map(|kv| kv.strip_prefix("u="))?);
+    parse_invite(&link).ok()?;
+    Some(link)
 }
 
 /// The reactions the server's party page draws (its own pictures: no emoji
@@ -1002,7 +1221,7 @@ mod tests {
     static JOINED_TESTS: Mutex<()> = Mutex::new(());
 
     fn server() -> Joined {
-        Joined { address: "https://music.example.com".into(), token: "ab12".into(), name: "Bassi's server".into() }
+        Joined::new("https://music.example.com", "ab12", "Bassi's server", Some("srv-1".into()))
     }
 
     #[test]
@@ -1018,7 +1237,7 @@ mod tests {
         assert_eq!(origin("http://127.0.0.1:80"), "http://127.0.0.1");
         assert_eq!(origin("https://music.example.com:8443/x"), "https://music.example.com:8443");
         assert_eq!(origin("http://[::1]:18321/"), "http://[::1]:18321");
-        let local = Joined { address: origin("http://127.0.0.1:18321/"), token: "k".into(), name: "x".into() };
+        let local = Joined::new(&origin("http://127.0.0.1:18321/"), "k", "x", None);
         let song = &parse_library(&json!({ "songs": [{ "id": 1, "title": "Evening Glow", "url": "/files/Ana%20-%20Evening%20Glow.flac", "file": "Ana - Evening Glow.flac", "files": {} }] }))[0];
         assert_eq!(song.track(&local).key(), "rms:ca419abfd9ba52f1");
         assert!(parse_invite("https://music.example.com/join/AB").is_err());
@@ -1117,7 +1336,7 @@ mod tests {
     fn the_split_request_and_its_turn() {
         // the song by its id once the library is fetched, else by its file's name
         let _turn = JOINED_TESTS.lock().unwrap_or_else(|e| e.into_inner());
-        let s = Joined { address: "http://127.0.0.1:9".into(), ..server() };
+        let s = Joined::new("http://127.0.0.1:9", "ab12", "Bassi's server", None);
         set_joined(std::slice::from_ref(&s));
         let songs = parse_library(&json!({ "songs": [{ "id": 9, "title": "A", "url": "/files/A%20-%20B.opus", "file": "A - B.opus", "files": {} }] }));
         let t = songs[0].track(&s);
@@ -1223,7 +1442,7 @@ mod tests {
             let keyed = headers.lines().any(|l| l.trim().eq_ignore_ascii_case("authorization: Bearer tok-123"));
             let sent: Value = serde_json::from_str(body).unwrap_or(Value::Null);
             match (method, path) {
-                ("GET", "/api/status") => (200, r#"{"server":"Bassi's server","needs_setup":false}"#.into()),
+                ("GET", "/api/status") => (200, r#"{"server":"Bassi's server","id":"srv-1","needs_setup":false}"#.into()),
                 ("POST", "/api/join") if sent == json!({ "code": "ABCDEFGHJKMN", "device_name": "laptop" }) => {
                     (201, r#"{"token":"tok-123","person":{"id":3,"name":"Ana","role":"friend"},"device":{"id":7,"name":"laptop"},"server":{"name":"Bassi's server"}}"#.into())
                 }
@@ -1233,8 +1452,11 @@ mod tests {
             }
         });
         let (at, code) = parse_invite(&format!("{address}/join/ABCD-EFGH-JKMN")).unwrap();
-        let joined = join(&at, &code, "laptop").unwrap();
-        assert_eq!(joined, Joined { address: address.clone(), token: "tok-123".into(), name: "Bassi's server".into() });
+        let (joined, moved) = join_or_move(&at, &code, "laptop", &[]).unwrap();
+        assert_eq!(moved, None);
+        // its own id kept (the same server at a new address is the same server)
+        assert_eq!(joined, Joined::new(&address, "tok-123", "Bassi's server", Some("srv-1".into())));
+        assert_eq!(Joined::from_json(&joined.to_json()), Some(joined.clone()));
         let who = me(&joined).unwrap();
         assert_eq!((who.name.as_str(), who.can_split, who.can_host), ("Ana", true, false));
         // a 403 comes back as the server's own words
@@ -1253,13 +1475,116 @@ mod tests {
         assert!(gone.unreachable());
     }
 
+    /// A folder of its own for a test's files (under TMPDIR), empty.
+    fn scratch(name: &str) -> std::path::PathBuf {
+        let d = std::env::temp_dir().join(format!("radiance-music-test-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
     #[test]
     fn a_multipart_upload() {
-        let body = multipart(&[Field::File("song", "A \"x\".opus".into(), b"OPUS".to_vec()), Field::Text("title", "A".into())], "B0");
-        let text = String::from_utf8(body).unwrap();
+        let d = scratch("multipart");
+        let song = d.join("A.opus");
+        std::fs::write(&song, b"OPUS").unwrap();
+        let (mut body, length) = multipart(&[Field::File("song", "A \"x\".opus".into(), song), Field::Text("title", "A".into())], "B0").unwrap();
+        let mut text = String::new();
+        body.read_to_string(&mut text).unwrap();
         assert_eq!(
             text,
             "--B0\r\nContent-Disposition: form-data; name=\"song\"; filename=\"A _x_.opus\"\r\nContent-Type: application/octet-stream\r\n\r\nOPUS\r\n--B0\r\nContent-Disposition: form-data; name=\"title\"\r\n\r\nA\r\n--B0--\r\n"
         );
+        assert_eq!(length, text.len() as u64);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn a_split_songs_parts_go_to_the_servers_copy() {
+        // a saved song with its four parts and music beside it, and its word-timed lyrics
+        let d = scratch("parts");
+        let song = d.join("Ana - Evening Glow.flac");
+        std::fs::write(&song, b"FLAC").unwrap();
+        for p in ["drums", "bass", "other", "vocals", "music"] {
+            std::fs::write(d.join(format!("Ana - Evening Glow.{p}.ogg")), format!("OGG {p}")).unwrap();
+        }
+        std::fs::write(d.join("Ana - Evening Glow.lyrics.yaml"), "lines:\n  - text: hi\n    words:\n      - text: hi\n").unwrap();
+        let t = Track { source: Source::Archive, id: "x".into(), title: "Evening Glow".into(), artist: "Ana".into(), album: String::new(), seconds: 30, art: String::new(), format: String::new(), file: Some(song.display().to_string()), video: false, genres: None };
+        assert_eq!(parts_here(&t).iter().map(|(p, _)| *p).collect::<Vec<_>>(), ["drums", "bass", "other", "vocals", "music"]);
+        let (address, seen) = stand_in(1, |method, path, headers, body| {
+            let keyed = headers.contains("Bearer ab12");
+            let whole = ["drums", "bass", "other", "vocals", "music"].iter().all(|p| body.contains(&format!("name=\"{p}\"; filename=\"{p}.ogg\"\r\nContent-Type: application/octet-stream\r\n\r\nOGG {p}\r\n")));
+            match (method, path) {
+                ("POST", "/api/songs/7/parts") if keyed && whole && body.contains("name=\"lyrics\"") => {
+                    (201, r#"{"added":["drums","bass","other","vocals","music"],"skipped":[],"lyrics":true,"song":{"id":7,"title":"Evening Glow","artist":"Ana","file":"Ana - Evening Glow.flac","url":"/files/Ana%20-%20Evening%20Glow.flac","split":true,"files":{}}}"#.into())
+                }
+                _ => (400, r#"{"error":"not as expected"}"#.into()),
+            }
+        });
+        let s = Joined::new(&address, "ab12", "Bassi's server", None);
+        let (added, now) = upload_parts(&s, 7, &t).unwrap();
+        assert_eq!(added, ["drums", "bass", "other", "vocals", "music"]);
+        assert!(now.unwrap().split);
+        // (sent with its length, a piece at a time: the stand-in read exactly that much)
+        assert_eq!(seen.join().unwrap().len(), 1);
+        // a song not split here has none to send
+        std::fs::remove_file(d.join("Ana - Evening Glow.bass.ogg")).unwrap();
+        assert!(parts_here(&t).is_empty());
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn the_same_server_at_a_new_address() {
+        let _turn = JOINED_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+        // joined at its address without a domain; it has one now (the same id answers there)
+        let was = Joined::new("http://203.0.113.5:8080", "ab12", "Bassi's server", Some("srv-1".into()));
+        let songs = parse_library(&json!({ "songs": [{ "id": 4, "title": "Para Sa Streets", "artist": "Hev Abi", "file": "x.opus", "url": "/files/x.opus", "files": {} }] }));
+        let before = songs[0].track(&was);
+        let (address, seen) = stand_in(2, |method, path, headers, _| match (method, path) {
+            ("GET", "/api/status") => (200, r#"{"server":"Bassi's server","id":"srv-1","needs_setup":false}"#.into()),
+            ("GET", "/api/me") if headers.contains("Bearer ab12") => (200, r#"{"person":{"id":3,"name":"Ana","role":"friend"},"device":{"id":7},"server":{"name":"Bassi's server","id":"srv-1"},"can":{}}"#.into()),
+            _ => (500, "{}".into()),
+        });
+        let (now, from) = join_or_move(&address, "ABCDEFGHJKMN", "laptop", std::slice::from_ref(&was)).unwrap();
+        // the same server, moved: its key still works there, so the invite wasn't used
+        assert_eq!(from, Some(was.clone()));
+        assert_eq!((now.address.as_str(), now.token.as_str(), now.first.as_str()), (address.as_str(), "ab12", "http://203.0.113.5:8080"));
+        assert_eq!(seen.join().unwrap().iter().map(|s| s.0.as_str()).collect::<Vec<_>>(), ["GET /api/status", "GET /api/me"]);
+        // its songs keep their keys (liked, history, playlists); what's fetched goes to the new address
+        let after = songs[0].track(&now);
+        assert_eq!(after.key(), before.key());
+        set_joined(std::slice::from_ref(&now));
+        assert_eq!(signed(&after.id), format!("{address}/files/x.opus?t=ab12"));
+        assert_eq!(signed(&after.art), after.art); // (no cover: nothing to sign)
+        assert_eq!(of_track(&before).map(|s| s.address), Some(address.clone()));
+        set_joined(&[]);
+        // a server that isn't there: no join, no move, its words
+        assert!(join_or_move("http://127.0.0.1:9", "X", "laptop", &[]).unwrap_err().contains("isn't answering"));
+    }
+
+    #[test]
+    fn an_invite_from_the_join_pages_button() {
+        // the server's join page: radiancemusic://join?u= and the invite link, as encodeURIComponent writes it
+        let link = "radiancemusic://join?u=https%3A%2F%2Fmusic.example.com%2Fjoin%2FABCD-EFGH-JKMN";
+        assert_eq!(invite_in_app_link(link).as_deref(), Some("https://music.example.com/join/ABCD-EFGH-JKMN"));
+        assert_eq!(invite_in_app_link("RadianceMusic://join/?u=http%3A%2F%2F127.0.0.1%3A18321%2Fjoin%2FDWWY-VAYM-94EE").as_deref(), Some("http://127.0.0.1:18321/join/DWWY-VAYM-94EE"));
+        assert_eq!(invite_in_app_link("radiancemusic://join?u=https%3A%2F%2Fmusic.example.com%2F"), None);
+        assert_eq!(invite_in_app_link("radiancemusic://party?u=x"), None);
+        assert_eq!(invite_in_app_link("https://music.example.com/join/ABCD-EFGH-JKMN"), None);
+    }
+
+    #[test]
+    fn the_events_line() {
+        let s = server();
+        assert_eq!(s.events_url(), "wss://music.example.com/api/events?t=ab12");
+        assert!(matches!(event_message(json!({ "type": "hello", "server": { "id": "srv-1", "name": "Bassi's server" } })), Some(Live::Hello(Some(id), name)) if id == "srv-1" && name == "Bassi's server"));
+        assert!(matches!(event_message(json!({ "type": "library" })), Some(Live::Library)));
+        assert!(matches!(event_message(json!({ "type": "me" })), Some(Live::Me)));
+        let Some(Live::Queue(v)) = event_message(json!({ "type": "queue", "next_turn": { "id": 1, "name": "Bassi" }, "jobs": [{ "id": 3, "song": { "id": 9 }, "state": "waiting", "note": "Next up." }] })) else { panic!("not the queue") };
+        let q = parse_queue(&v);
+        assert_eq!((q.ahead(3), q.next_turn.as_deref()), (Some(0), Some("Bassi")));
+        assert!(matches!(event_message(json!({ "type": "party", "on": true, "host": "Bassi" })), Some(Live::Party)));
+        assert!(event_message(json!({ "type": "something new" })).is_none());
+        assert!(matches!(party_message(json!({ "type": "removed", "error": "gone" })), Some(Live::Removed(e)) if e == "gone"));
     }
 }

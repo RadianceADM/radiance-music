@@ -22,8 +22,9 @@ pub(super) const CSS: &str = "
 const PAST_THE_SPOT: f64 = 1.0;
 /// The party's place is checked this often (its clock offset once a minute).
 const PARTY_CHECK: Duration = Duration::from_secs(1);
-/// A server's split queue is asked this often while one of your songs is in it.
-const QUEUE_CHECK: Duration = Duration::from_secs(3);
+/// Only when a server's events line (/api/events) is down: its split queue (your
+/// songs in it) and the page shown are asked again this often.
+const FALLBACK: Duration = Duration::from_secs(30);
 /// The page's server is asked about its party this often (not joined: no WebSocket).
 const PARTY_LOOK: Duration = Duration::from_secs(10);
 
@@ -38,6 +39,10 @@ pub(super) struct Known {
     /// Its party, as last asked (not joined).
     party: Option<Party>,
     fetching: bool,
+    /// Asked for again while fetching (an event came): once more when it's done.
+    again: bool,
+    /// Its events line (/api/events) is open: no asking again and again.
+    live: bool,
 }
 
 /// One of your songs being split on a server: in the split card until it's done.
@@ -102,7 +107,10 @@ pub(super) struct Rms {
     away: RefCell<Vec<Away>>,
     pub(super) away_line: gtk::Label,
     pub(super) away_bar: gtk::ProgressBar,
-    asking: Cell<bool>,
+    /// Each joined server's events line (by its address).
+    lines: RefCell<HashMap<String, servers::Socket>>,
+    /// The slow asking-again for servers whose events line is down (once started, it runs on).
+    fallback: Cell<bool>,
     /// Server songs whose parts are being fetched for the Mixer (their keys).
     fetching_parts: RefCell<HashSet<String>>,
     party: RefCell<Option<InParty>>,
@@ -127,7 +135,8 @@ impl Default for Rms {
             away: RefCell::default(),
             away_line: gtk::Label::builder().xalign(0.0).wrap(true).wrap_mode(gtk::pango::WrapMode::WordChar).css_classes(["dim-label", "caption"]).visible(false).build(),
             away_bar: gtk::ProgressBar::builder().show_text(true).visible(false).margin_top(4).css_classes(["split-bar"]).build(),
-            asking: Cell::new(false),
+            lines: RefCell::default(),
+            fallback: Cell::new(false),
             fetching_parts: RefCell::default(),
             party: RefCell::default(),
             party_gen: Cell::new(0),
@@ -207,14 +216,152 @@ impl Ui {
     }
 
     /// At the start: the joined servers to the worker threads, their pages in
-    /// the sidebar, and what each lets you do (asked quietly).
+    /// the sidebar, what each lets you do (asked quietly), their events lines,
+    /// and whether one has moved (a domain added: it says where it is now).
     pub(super) fn start_servers(self: &Rc<Self>) {
         let list = self.settings.borrow().servers.clone();
         servers::set_joined(&list);
         self.render_server_nav();
         for s in list {
             self.fetch_server(&s);
+            self.open_line(&s);
+            let (me, was) = (Rc::downgrade(self), s.clone());
+            bg(move || servers::moved(&s), move |now| {
+                if let (Some(me), Some(address)) = (me.upgrade(), now) {
+                    let moved = Joined { address, ..was.clone() };
+                    me.server_moved(&was, &moved);
+                }
+            });
         }
+        self.start_fallback();
+    }
+
+    /// A server's events line (/api/events): what changes there is told, nothing is asked again and again.
+    pub(super) fn open_line(self: &Rc<Self>, server: &Joined) {
+        if self.rms.lines.borrow().contains_key(&server.address) {
+            return;
+        }
+        let (tx, rx) = async_channel::unbounded::<Live>();
+        let socket = servers::events(server, tx);
+        self.rms.lines.borrow_mut().insert(server.address.clone(), socket);
+        let (me, address) = (Rc::downgrade(self), server.address.clone());
+        glib::spawn_future_local(async move {
+            while let Ok(live) = rx.recv().await {
+                let Some(me) = me.upgrade() else { break };
+                me.server_news(&address, live);
+            }
+        });
+    }
+
+    fn close_line(&self, address: &str) {
+        self.rms.lines.borrow_mut().remove(address); // (its thread closes the line)
+        self.know(address, |k| k.live = false);
+    }
+
+    /// What a server's events line said.
+    fn server_news(self: &Rc<Self>, address: &str, live: Live) {
+        let Some(server) = self.joined(address) else { return };
+        match live {
+            Live::Hello(id, name) => {
+                self.know(address, |k| k.live = true);
+                // its id (an older join didn't keep it) and its name, as it says now
+                let renamed = !name.is_empty() && name != server.name;
+                if (id.is_some() && server.id.is_none()) || renamed {
+                    if let Some(s) = self.settings.borrow_mut().servers.iter_mut().find(|s| s.address == address) {
+                        s.id = s.id.clone().or(id);
+                        if renamed {
+                            s.name = name;
+                        }
+                    }
+                    settings::save(&self.settings.borrow());
+                    servers::set_joined(&self.settings.borrow().servers);
+                    if renamed {
+                        self.render_server_nav();
+                    }
+                }
+            }
+            Live::Library | Live::Me => self.fetch_server(&server),
+            Live::Party => self.ask_party(&server),
+            Live::Queue(v) => self.queue_news(&server, &servers::parse_queue(&v)),
+            Live::Back => {
+                self.know(address, |k| k.live = true);
+                self.fetch_server(&server); // what changed while it was down
+            }
+            Live::Lost => self.know(address, |k| k.live = false),
+            Live::Removed(_) => {
+                self.close_line(address);
+                self.fetch_server(&server); // (it says so, in plain words, on its page)
+            }
+            Live::State(_) => {}
+        }
+    }
+
+    /// Every FALLBACK, for servers whose events line is down: your songs in
+    /// their split queues, and the page shown, asked again.
+    fn start_fallback(self: &Rc<Self>) {
+        if self.rms.fallback.replace(true) {
+            return;
+        }
+        let me = Rc::downgrade(self);
+        glib::timeout_add_local(FALLBACK, move || {
+            let Some(me) = me.upgrade() else { return glib::ControlFlow::Break };
+            let shown = me.rms.shown.borrow().clone().filter(|_| me.stack.visible_child_name().as_deref() == Some("server"));
+            for s in me.settings.borrow().servers.clone() {
+                if me.known(&s.address, |k| k.live) {
+                    continue;
+                }
+                if me.rms.away.borrow().iter().any(|a| a.server.address == s.address) {
+                    me.ask_queue(&s);
+                }
+                if shown.as_deref() == Some(s.address.as_str()) {
+                    me.fetch_server(&s);
+                }
+            }
+            glib::ControlFlow::Continue
+        });
+    }
+
+    /// A server's split queue, asked once (your songs in it: where they are).
+    fn ask_queue(self: &Rc<Self>, server: &Joined) {
+        let (me, s) = (Rc::downgrade(self), server.clone());
+        bg(move || servers::queue(&s), {
+            let server = server.clone();
+            move |q| {
+                if let (Some(me), Ok(q)) = (me.upgrade(), q) {
+                    me.queue_news(&server, &q);
+                }
+            }
+        });
+    }
+
+    /// The same server (its id) at a new address: kept as it was (its key, its
+    /// songs' keys), at the new address; its line, its page and your songs in
+    /// its queue go with it.
+    pub(super) fn server_moved(self: &Rc<Self>, was: &Joined, now: &Joined) {
+        crate::log::note(&format!("{} moved from {} to {}", now.name, was.address, now.address));
+        if self.rms.party.borrow().as_ref().is_some_and(|p| p.server.address == was.address) {
+            self.leave_party(true);
+        }
+        if let Some(s) = self.settings.borrow_mut().servers.iter_mut().find(|s| s.address == was.address) {
+            *s = now.clone();
+        }
+        settings::save(&self.settings.borrow());
+        servers::set_joined(&self.settings.borrow().servers);
+        self.close_line(&was.address);
+        let known = self.rms.known.borrow_mut().remove(&was.address);
+        if let Some(k) = known {
+            self.rms.known.borrow_mut().insert(now.address.clone(), k);
+        }
+        for a in self.rms.away.borrow_mut().iter_mut().filter(|a| a.server.address == was.address) {
+            a.server = now.clone();
+        }
+        if self.rms.shown.borrow().as_deref() == Some(was.address.as_str()) {
+            self.rms.shown.replace(Some(now.address.clone()));
+        }
+        self.render_server_nav();
+        self.open_line(now);
+        self.fetch_server(now);
+        self.toast(&format!("{} is at {} now: the same server, your songs from it as they were", now.name, now.address));
     }
 
     /// The sidebar: each joined server under Library (after Genres), named as it's called.
@@ -244,6 +391,7 @@ impl Ui {
     /// Asks a server who this computer is there, its songs and its party (worker thread).
     fn fetch_server(self: &Rc<Self>, server: &Joined) {
         if self.known(&server.address, |k| k.fetching) {
+            self.know(&server.address, |k| k.again = true); // once more when this one's done
             return;
         }
         self.know(&server.address, |k| k.fetching = true);
@@ -260,10 +408,21 @@ impl Ui {
             },
             {
                 let address = server.address.clone();
-                move |(who, songs, party)| {
+                move |(who, songs, party): (Result<Me, Failure>, Option<Result<Vec<Song>, Failure>>, Option<Result<Party, Failure>>)| {
                     let Some(me) = me.upgrade() else { return };
+                    // its id, for an older join that didn't keep it
+                    let id = who.as_ref().ok().and_then(|m| m.server_id.clone());
+                    if let Some(id) = id {
+                        let learnt = me.settings.borrow_mut().servers.iter_mut().find(|s| s.address == address && s.id.is_none()).map(|s| s.id = Some(id)).is_some();
+                        if learnt {
+                            settings::save(&me.settings.borrow());
+                            servers::set_joined(&me.settings.borrow().servers);
+                        }
+                    }
+                    let again = me.known(&address, |k| k.again);
                     me.know(&address, |k| {
                         k.fetching = false;
+                        k.again = false;
                         k.problem = None;
                         match who {
                             Ok(m) => k.me = Some(m),
@@ -282,14 +441,47 @@ impl Ui {
                         me.render_server();
                     }
                     me.update_voice_status(); // a server's song playing: its parts, its split button
+                    if let (true, Some(s)) = (again, me.joined(&address)) {
+                        me.fetch_server(&s);
+                    }
                 }
             },
         );
     }
 
+    /// One song as it is now (GET /api/songs/ID: its parts came, say), not the whole list again.
+    fn refresh_song(self: &Rc<Self>, server: &Joined, id: i64) {
+        let (me, s) = (Rc::downgrade(self), server.clone());
+        bg(move || servers::song(&s, id), {
+            let address = server.address.clone();
+            move |song: Result<Song, Failure>| {
+                let (Some(me), Ok(song)) = (me.upgrade(), song) else { return };
+                me.know(&address, |k| {
+                    if let Some(list) = k.songs.as_mut() {
+                        match list.iter_mut().find(|s| s.id == song.id) {
+                            Some(s) => *s = song,
+                            None => list.push(song),
+                        }
+                    }
+                });
+                if me.rms.shown.borrow().as_deref() == Some(address.as_str()) {
+                    me.render_server();
+                }
+                me.update_voice_status();
+                me.refresh_split_marks();
+            }
+        });
+    }
+
     // ------------------------------------------------------------------ Servers… (the menu)
 
     pub(super) fn servers_dialog(self: &Rc<Self>) {
+        self.servers_dialog_with(None);
+    }
+
+    /// Servers…, its invite link filled in when one came (an "Open in Radiance
+    /// Music" link from a server's join page): one click on Join.
+    pub(super) fn servers_dialog_with(self: &Rc<Self>, link: Option<&str>) {
         let dialog = adw::Dialog::builder().title("Servers").content_width(480).build();
         let view = adw::ToolbarView::new();
         view.add_top_bar(&adw::HeaderBar::new());
@@ -388,14 +580,26 @@ impl Ui {
                 note.set_text("Joining…");
                 let device = glib::host_name().to_string();
                 let (mw, ew, nw, jw, f) = (Rc::downgrade(&me), entry.downgrade(), note.downgrade(), join.downgrade(), f.clone());
-                bg(move || servers::join(&address, &code, &device), move |done| {
+                // (a server already joined, at another address: it moves here)
+                let joined = me.settings.borrow().servers.clone();
+                bg(move || servers::join_or_move(&address, &code, &device, &joined), move |done| {
                     let Some(me) = mw.upgrade() else { return };
                     if let Some(j) = jw.upgrade() {
                         j.set_sensitive(true);
                     }
                     let note = nw.upgrade();
                     match done {
-                        Ok(joined) => {
+                        Ok((now, Some(was))) => {
+                            if let Some(e) = ew.upgrade() {
+                                e.set_text("");
+                            }
+                            if let Some(n) = &note {
+                                n.set_text(&format!("{} moved to {}: the same server, your songs from it as they were.", now.name, now.address));
+                            }
+                            me.server_moved(&was, &now);
+                            f();
+                        }
+                        Ok((joined, None)) => {
                             crate::log::note(&format!("joined {} ({})", joined.name, joined.address));
                             if let Some(e) = ew.upgrade() {
                                 e.set_text("");
@@ -408,6 +612,7 @@ impl Ui {
                             servers::set_joined(&me.settings.borrow().servers);
                             me.render_server_nav();
                             me.fetch_server(&joined);
+                            me.open_line(&joined);
                             f();
                             me.toast(&format!("Joined {}", joined.name));
                         }
@@ -426,6 +631,10 @@ impl Ui {
         join.connect_clicked(move |_| g());
         entry.connect_entry_activated(move |_| go());
         dialog.present(Some(&self.window));
+        if let Some(l) = link {
+            entry.set_text(l);
+            join.grab_focus();
+        }
     }
 
     /// A joined server in Servers…: its name and state; opened, what you can do there; Open and Leave.
@@ -521,6 +730,7 @@ impl Ui {
         self.settings.borrow_mut().servers.retain(|x| x.address != s.address);
         settings::save(&self.settings.borrow());
         servers::set_joined(&self.settings.borrow().servers);
+        self.close_line(&s.address);
         self.rms.known.borrow_mut().remove(&s.address);
         self.rms.away.borrow_mut().retain(|a| a.server.address != s.address);
         crate::log::note(&format!("left {} ({})", s.name, s.address));
@@ -720,6 +930,29 @@ impl Ui {
         self.rms.search.set_visible(songs.is_some_and(|n| n > 0));
     }
 
+    /// A radiancemusic://join?u=… link (a server's "Open in Radiance Music"):
+    /// the window, and Servers… with its invite filled in (once the start is
+    /// over: not under the sunrise).
+    pub fn open_app_link(self: &Rc<Self>, uri: &str) {
+        let Some(link) = servers::invite_in_app_link(uri) else {
+            self.window.present();
+            self.toast("That link isn't a Radiance Music Server invite. Ask the server's owner for a new one.");
+            return;
+        };
+        crate::log::note("opened with a server's invite link");
+        let me = Rc::downgrade(self);
+        glib::timeout_add_local(Duration::from_millis(250), move || {
+            let Some(me) = me.upgrade() else { return glib::ControlFlow::Break };
+            if me.starting.get() || me.setup_holding.get() {
+                return glib::ControlFlow::Continue;
+            }
+            me.window.set_visible(true);
+            me.window.present();
+            me.servers_dialog_with(Some(&link));
+            glib::ControlFlow::Break
+        });
+    }
+
     /// Screenshots: the first joined server's party joined, once its page has come.
     pub fn shot_party(self: &Rc<Self>) {
         let me = Rc::downgrade(self);
@@ -822,7 +1055,9 @@ impl Ui {
             match asked {
                 Ok(Asked::Split) => {
                     me.toast(&format!("“{}” is split on {} already: its parts are there for everyone", track.title, server.name));
-                    me.fetch_server(&server);
+                    if let Some((_, song)) = servers::song_of(&track) {
+                        me.refresh_song(&server, song.id);
+                    }
                 }
                 Ok(Asked::Queued(job)) => {
                     crate::log::note(&format!("asked {} to split “{}”", server.name, track.title));
@@ -838,38 +1073,26 @@ impl Ui {
     }
 
     /// Follows your songs in the servers' split queues (every few seconds while there are any).
+    /// Your songs in a server's split queue are followed by its events line (its
+    /// queue is pushed as it changes); asked once now, so the card has the place at
+    /// once (and again only by the fallback, while that line is down).
     fn follow_away(self: &Rc<Self>) {
-        if self.rms.asking.replace(true) {
-            return;
+        let mut asked: Vec<Joined> = vec![];
+        for a in self.rms.away.borrow().iter() {
+            if !asked.iter().any(|s| s.address == a.server.address) {
+                asked.push(a.server.clone());
+            }
         }
-        let me = Rc::downgrade(self);
-        glib::timeout_add_local(QUEUE_CHECK, move || {
-            let Some(me) = me.upgrade() else { return glib::ControlFlow::Break };
-            let mut asked: Vec<Joined> = vec![];
-            for a in me.rms.away.borrow().iter() {
-                if !asked.iter().any(|s| s.address == a.server.address) {
-                    asked.push(a.server.clone());
-                }
-            }
-            if asked.is_empty() {
-                me.rms.asking.set(false);
-                return glib::ControlFlow::Break;
-            }
-            for s in asked {
-                let w = Rc::downgrade(&me);
-                let s2 = s.clone();
-                bg(move || servers::queue(&s2), move |q| {
-                    if let (Some(me), Ok(q)) = (w.upgrade(), q) {
-                        me.queue_news(&s, &q);
-                    }
-                });
-            }
-            glib::ControlFlow::Continue
-        });
+        for s in asked {
+            self.ask_queue(&s);
+        }
     }
 
     /// A server's split queue, as it is now: where your songs are, and those that are done.
     fn queue_news(self: &Rc<Self>, server: &Joined, q: &servers::Queue) {
+        if !self.rms.away.borrow().iter().any(|a| a.server.address == server.address) {
+            return; // none of yours there
+        }
         let mut done = vec![];
         self.rms.away.borrow_mut().retain_mut(|a| {
             if a.server.address != server.address {
@@ -902,7 +1125,10 @@ impl Ui {
                 Some(j) if j.state == "failed" => self.toast(&format!("{}: {}", server.name, j.note)),
                 _ => self.toast(&format!("“{}” was taken out of {}'s split queue", t.title, server.name)),
             }
-            self.fetch_server(server);
+            // the song as it is now (its parts), not the whole list
+            if let Some((_, song)) = servers::song_of(&t) {
+                self.refresh_song(server, song.id);
+            }
         }
         self.update_voice_status();
         self.refresh_split_marks();
@@ -960,20 +1186,56 @@ impl Ui {
             let (server, title) = (server.clone(), t.title.clone());
             move |added: Result<servers::Added, String>| {
                 let Some(me) = me.upgrade() else { return };
+                // what went: its extras, its parts (when this computer had split it)
+                let went = |a: &servers::Added| {
+                    let mut w: Vec<&str> = a.extras.iter().map(String::as_str).collect();
+                    if !a.parts.is_empty() {
+                        w.push("parts");
+                    }
+                    and_list(&w)
+                };
                 match added {
-                    Ok(a) if a.skipped && a.extras.is_empty() => me.toast(&format!("{} has “{title}” already", server.name)),
-                    Ok(a) if a.skipped => me.toast(&format!("{} had “{title}” already; its {} went with it", server.name, and_list(&a.extras.iter().map(String::as_str).collect::<Vec<_>>()))),
-                    Ok(_) => {
-                        crate::log::note(&format!("added “{title}” to {}", server.name));
-                        me.toast(&format!("“{title}” is on {} now, for everyone there", server.name));
+                    Ok(a) if a.skipped && a.extras.is_empty() && a.parts.is_empty() => me.toast(&format!("{} has “{title}” already", server.name)),
+                    Ok(a) if a.skipped => me.toast(&format!("{} had “{title}” already; its {} went with it", server.name, went(&a))),
+                    Ok(a) => {
+                        crate::log::note(&format!("added “{title}” to {}{}", server.name, if a.parts.is_empty() { "" } else { " with its parts" }));
+                        me.toast(&if a.parts.is_empty() { format!("“{title}” is on {} now, for everyone there", server.name) } else { format!("“{title}” is on {} now with its parts, for everyone there", server.name) });
                     }
                     Err(e) => me.toast(&e),
                 }
-                if me.rms.known.borrow().contains_key(&server.address) {
+                // (with its events line open, the server says so itself)
+                if me.rms.known.borrow().contains_key(&server.address) && !me.known(&server.address, |k| k.live) {
                     me.fetch_server(&server);
                 }
             }
         });
+    }
+
+    /// A song just split on this computer: its parts go to a server's copy of it
+    /// that has none (a server's own song, or one of yours added there), for
+    /// everyone there. Servers that don't let you add songs are left alone.
+    pub(super) fn share_parts(self: &Rc<Self>, t: &Track) {
+        for s in self.settings.borrow().servers.clone() {
+            if self.known(&s.address, |k| k.me.as_ref().is_some_and(|m| !m.can_add)) {
+                continue;
+            }
+            let Some(copy) = servers::copy_on(&s, t).filter(|c| !c.split) else { continue };
+            let (me, song, server) = (Rc::downgrade(self), t.clone(), s.clone());
+            bg(move || servers::upload_parts(&server, copy.id, &song), {
+                let (title, s) = (t.title.clone(), s.clone());
+                move |went: Result<(Vec<String>, Option<Song>), String>| {
+                    let Some(me) = me.upgrade() else { return };
+                    match went {
+                        Ok((parts, _)) if !parts.is_empty() => {
+                            crate::log::note(&format!("the parts of “{title}” went to {}", s.name));
+                            me.toast(&format!("“{title}”'s parts are on {} now, for everyone there", s.name));
+                        }
+                        Ok(_) => {}
+                        Err(e) => crate::log::note(&format!("the parts of “{title}” didn't go to {}: {e}", s.name)),
+                    }
+                }
+            });
+        }
     }
 
     /// The servers a saved song of yours can go to (from its menu): joined ones that let you add songs.
@@ -1030,23 +1292,29 @@ impl Ui {
                 me.rms.watching.set(false);
                 return glib::ControlFlow::Break;
             };
-            if me.in_party_on(&address) {
-                return glib::ControlFlow::Continue; // its WebSocket says
+            // (in it, its WebSocket says; its events line says when one starts or ends)
+            if me.in_party_on(&address) || me.known(&address, |k| k.live) {
+                return glib::ControlFlow::Continue;
             }
             if let Some(s) = me.joined(&address) {
-                let w = Rc::downgrade(&me);
-                bg(move || servers::party(&s), move |p| {
-                    let (Some(me), Ok(p)) = (w.upgrade(), p) else { return };
-                    let changed = me.known(&address, |k| k.party.as_ref() != Some(&p));
-                    if changed {
-                        me.know(&address, |k| k.party = Some(p));
-                        if me.rms.shown.borrow().as_deref() == Some(address.as_str()) {
-                            me.render_party_card();
-                        }
-                    }
-                });
+                me.ask_party(&s);
             }
             glib::ControlFlow::Continue
+        });
+    }
+
+    /// A server's party asked for (not joined: the card says what's on).
+    fn ask_party(self: &Rc<Self>, server: &Joined) {
+        let (w, s, address) = (Rc::downgrade(self), server.clone(), server.address.clone());
+        bg(move || servers::party(&s), move |p| {
+            let (Some(me), Ok(p)) = (w.upgrade(), p) else { return };
+            let changed = me.known(&address, |k| k.party.as_ref() != Some(&p));
+            if changed {
+                me.know(&address, |k| k.party = Some(p));
+                if me.rms.shown.borrow().as_deref() == Some(address.as_str()) {
+                    me.render_party_card();
+                }
+            }
         });
     }
 
@@ -1549,6 +1817,8 @@ impl Ui {
                 }
                 self.show_sync();
             }
+            // (the events line's: not on the party's)
+            Live::Hello(..) | Live::Library | Live::Queue(_) | Live::Me | Live::Party => {}
         }
     }
 

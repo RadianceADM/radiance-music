@@ -2,8 +2,9 @@
 Type=Application
 Name=Radiance Music
 Comment=Search any song and play it: lossless first, with lyrics, album art and your EQ
-Exec=radiance-music
+Exec=radiance-music %u
 Icon=io.github.radianceadm.Music
 Categories=AudioVideo;Audio;Player;GTK;
 Keywords=music;player;lyrics;lossless;flac;youtube;
 StartupNotify=true
+MimeType=x-scheme-handler/radiancemusic;

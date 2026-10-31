@@ -404,10 +404,14 @@ fn probe_server(args: &[String]) -> glib::ExitCode {
                 return glib::ExitCode::FAILURE;
             }
         };
-        match servers::join(&address, &code, &glib::host_name()) {
-            Ok(j) => {
-                println!("joined {} at {}", j.name, j.address);
-                s.servers.retain(|x| x.address != j.address);
+        match servers::join_or_move(&address, &code, &glib::host_name(), &s.servers) {
+            Ok((j, was)) => {
+                match &was {
+                    Some(w) => println!("{} moved from {} to {} (the same server: id {:?}; its songs keep {})", j.name, w.address, j.address, j.id, j.first),
+                    None => println!("joined {} at {} (id {:?})", j.name, j.address, j.id),
+                }
+                let gone = was.map(|w| w.address).unwrap_or_else(|| j.address.clone());
+                s.servers.retain(|x| x.address != gone);
                 s.servers.push(j);
                 settings::save(&s);
             }
@@ -429,11 +433,11 @@ fn probe_server(args: &[String]) -> glib::ExitCode {
                 continue;
             }
         };
-        println!("  you: {} ({}), device {}; can add {}, split {}, host {}", who.name, if who.owner { "owner" } else { "friend" }, who.device, who.can_add, who.can_split, who.can_host);
+        println!("  you: {} ({}), device {}; can add {}, split {}, host {}; the server's id {:?}", who.name, if who.owner { "owner" } else { "friend" }, who.device, who.can_add, who.can_split, who.can_host, who.server_id);
         let songs = servers::library(server).unwrap_or_default();
         for song in &songs {
             let t = song.track(server);
-            println!("  song {}: {} – {} ({}s, {}, parts: {}, lyrics {}, cover {})", song.id, t.artist, t.title, t.seconds, t.format, servers::mix_parts(&t).join("/"), song.lyrics, song.cover.is_some());
+            println!("  song {}: {} – {} ({}s, {}, parts: {}, lyrics {}, cover {}, key {})", song.id, t.artist, t.title, t.seconds, t.format, servers::mix_parts(&t).join("/"), song.lyrics, song.cover.is_some(), t.key());
         }
         let find = || songs.iter().find(|x| x.title.to_lowercase().contains(&title)).map(|x| x.track(server));
         if want("split") {
@@ -459,7 +463,7 @@ fn probe_server(args: &[String]) -> glib::ExitCode {
             let (artist, name) = stem.split_once(" - ").map(|(a, b)| (a.to_string(), b.to_string())).unwrap_or((String::new(), stem.clone()));
             let t = track::Track { source: track::Source::Archive, id: file.clone(), title: name, artist, album: String::new(), seconds: 0, art: String::new(), format: String::new(), file: Some(file), video: false, genres: None };
             match servers::upload(server, &t) {
-                Ok(a) => println!("  add: {} (extras: {})", if a.skipped { "it was there already" } else { "added" }, a.extras.join(", ")),
+                Ok(a) => println!("  add: {} (extras: {}; parts: {}; split there now: {:?})", if a.skipped { "it was there already" } else { "added" }, a.extras.join(", "), a.parts.join(", "), a.song.map(|s| s.split)),
                 Err(e) => println!("  add: {e}"),
             }
         }
@@ -516,6 +520,25 @@ fn probe_server(args: &[String]) -> glib::ExitCode {
             continue;
         };
         println!("  clock: the server is {offset:+.1} ms from this computer (round trip {rtt:.1} ms)");
+        if want("events") {
+            // the events line for a while (RADIANCE_EVENTS_S, default 8): what it says as things change
+            let secs: u64 = std::env::var("RADIANCE_EVENTS_S").ok().and_then(|s| s.parse().ok()).unwrap_or(8);
+            let (tx, rx) = async_channel::unbounded();
+            let line = servers::events(server, tx);
+            let until = std::time::Instant::now() + std::time::Duration::from_secs(secs);
+            while std::time::Instant::now() < until {
+                match rx.try_recv() {
+                    Ok(servers::Live::Queue(v)) => {
+                        let q = servers::parse_queue(&v);
+                        println!("  events: queue: {}", q.jobs.iter().map(|j| format!("“{}” {} (line {:?})", j.title, j.state, q.ahead(j.id))).collect::<Vec<_>>().join(", "));
+                    }
+                    Ok(other) => println!("  events: {other:?}"),
+                    Err(async_channel::TryRecvError::Empty) => std::thread::sleep(std::time::Duration::from_millis(50)),
+                    Err(_) => break,
+                }
+            }
+            drop(line);
+        }
         if want("party") {
             let p = servers::party(server).ok().filter(|p| p.on).or_else(|| servers::party_start(server, false).ok());
             if p.as_ref().is_some_and(|p| p.song.is_none() && p.queue.is_empty()) {
@@ -920,27 +943,27 @@ mod one_copy {
 
     use gtk::glib;
 
-    const ASK: &str = "radiance-music show";
-    const SHOWN: &str = "radiance-music shown";
+    use super::asking::{ask_line, heard, SHOWN};
 
     fn port_file() -> std::path::PathBuf {
         glib::user_data_dir().join("radiance-music").join("running.port")
     }
 
-    /// Another copy runs and was asked to show its window (then this one quits).
-    pub fn ask_the_other() -> bool {
+    /// Another copy runs and was asked to show its window, and to open `link`
+    /// (a radiancemusic:// link) when there is one (then this one quits).
+    pub fn ask_the_other(link: Option<&str>) -> bool {
         let Some(port) = std::fs::read_to_string(port_file()).ok().and_then(|s| s.trim().parse::<u16>().ok()) else { return false };
         let Ok(mut s) = TcpStream::connect_timeout(&([127, 0, 0, 1], port).into(), Duration::from_millis(500)) else { return false };
         let _ = s.set_read_timeout(Some(Duration::from_secs(3)));
-        if s.write_all(format!("{ASK}\n").as_bytes()).is_err() {
+        if s.write_all(ask_line(link).as_bytes()).is_err() {
             return false;
         }
         let mut answer = String::new();
         BufReader::new(s).read_line(&mut answer).is_ok() && answer.trim() == SHOWN
     }
 
-    /// This is the copy: the next ones are heard (`show` runs on the window's thread).
-    pub fn listen(show: fn()) {
+    /// This is the copy: the next ones are heard (`show` runs on the window's thread, with their link).
+    pub fn listen(show: fn(Option<String>)) {
         let Ok(listener) = TcpListener::bind("127.0.0.1:0") else { return };
         let Ok(addr) = listener.local_addr() else { return };
         let file = port_file();
@@ -952,24 +975,80 @@ mod one_copy {
             for conn in listener.incoming().flatten() {
                 let _ = conn.set_read_timeout(Some(Duration::from_secs(2)));
                 let mut line = String::new();
-                if BufReader::new(&conn).read_line(&mut line).is_ok() && line.trim() == ASK {
+                if let Some(link) = BufReader::new(&conn).read_line(&mut line).ok().and_then(|_| heard(&line)) {
                     let _ = (&conn).write_all(format!("{SHOWN}\n").as_bytes());
-                    glib::MainContext::default().invoke(show);
+                    glib::MainContext::default().invoke(move || show(link));
                 }
             }
         });
     }
 }
 
-/// The app's window, shown again (asked by a second copy, see one_copy).
+/// What one copy says to another on Windows (see one_copy): show your window,
+/// and open this link (a radiancemusic:// link it was opened with) when there is one.
+#[cfg(any(windows, test))]
+mod asking {
+    const ASK: &str = "radiance-music show";
+    const OPEN: &str = "radiance-music open ";
+    /// The running copy's answer.
+    #[cfg(windows)]
+    pub const SHOWN: &str = "radiance-music shown";
+
+    /// The line a second copy sends (a link: one line, no line breaks in it).
+    pub fn ask_line(link: Option<&str>) -> String {
+        match link.map(|l| l.replace(['\r', '\n'], "")) {
+            Some(l) => format!("{OPEN}{l}\n"),
+            None => format!("{ASK}\n"),
+        }
+    }
+
+    /// What the running copy heard: Some(link or None) when it's a copy asking; None: anything else.
+    pub fn heard(line: &str) -> Option<Option<String>> {
+        let line = line.trim();
+        if line == ASK {
+            return Some(None);
+        }
+        let link = line.strip_prefix(OPEN.trim_end())?.trim();
+        Some(Some(link.to_string()).filter(|l| !l.is_empty()))
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn a_second_copy_asks_and_brings_its_link() {
+            assert_eq!(heard(&ask_line(None)), Some(None));
+            let link = "radiancemusic://join?u=https%3A%2F%2Fmusic.example.com%2Fjoin%2FABCD-EFGH-JKMN";
+            assert_eq!(heard(&ask_line(Some(link))), Some(Some(link.to_string())));
+            // (an older copy's ask still works; a link can't break the line)
+            assert_eq!(heard("radiance-music show\r\n"), Some(None));
+            assert_eq!(ask_line(Some("a\nb")), "radiance-music open ab\n");
+            assert_eq!(heard("GET / HTTP/1.1"), None);
+            assert_eq!(heard("radiance-music open "), Some(None));
+        }
+    }
+}
+
+/// The app's window, shown again (asked by a second copy, see one_copy), and
+/// the link it brought opened (as GApplication's "open" does on Linux).
 #[cfg(windows)]
-fn show_window() {
-    if let Some(app) = gtk::gio::Application::default().and_downcast::<gtk::Application>() {
-        if let Some(w) = app.windows().first() {
+fn show_window(link: Option<String>) {
+    use gtk::gio::prelude::*;
+    if let Some(app) = gtk::gio::Application::default() {
+        if let Some(w) = app.downcast_ref::<gtk::Application>().and_then(|a| a.windows().first().cloned()) {
             w.set_visible(true);
             w.present();
         }
+        if let Some(l) = link {
+            app.open(&[gtk::gio::File::for_uri(&l)], "");
+        }
     }
+}
+
+/// A radiancemusic:// link the app was started with (a server's "Open in Radiance Music").
+fn app_link(args: &[String]) -> Option<String> {
+    args.get(1).filter(|a| a.get(..14).is_some_and(|s| s.eq_ignore_ascii_case("radiancemusic:"))).cloned()
 }
 
 fn main() -> glib::ExitCode {
@@ -1117,9 +1196,10 @@ fn main() -> glib::ExitCode {
     // no sound at all; it never saves where you are and never splits.
     let shot = std::env::var("RADIANCE_SHOT").ok();
     // Windows: opened again, the copy that runs shows its window and this one goes
+    let link = app_link(&args);
     #[cfg(windows)]
     if shot.is_none() {
-        if one_copy::ask_the_other() {
+        if one_copy::ask_the_other(link.as_deref()) {
             return glib::ExitCode::SUCCESS;
         }
         one_copy::listen(show_window);
@@ -1132,10 +1212,13 @@ fn main() -> glib::ExitCode {
     }
     let wait = std::env::var("RADIANCE_SHOT_WAIT").ok().and_then(|s| s.parse().ok()).unwrap_or(8u64).min(18);
     update::wait_for_old(); // just updated: the old copy closes first
-    let mut builder = adw::Application::builder().application_id(APP_ID);
+    // HANDLES_OPEN: a radiancemusic:// link (registered in the .desktop file; on Windows by the
+    // installer) comes as "open", to the copy running (on Linux through D-Bus; see one_copy)
+    let mut flags = gtk::gio::ApplicationFlags::HANDLES_OPEN;
     if shot.is_some() {
-        builder = builder.flags(gtk::gio::ApplicationFlags::NON_UNIQUE);
+        flags |= gtk::gio::ApplicationFlags::NON_UNIQUE;
     }
+    let builder = adw::Application::builder().application_id(APP_ID).flags(flags);
     let app = builder.build();
     // always dark (owner: "either stone or true black lang"), whatever the system's light or dark
     // setting is (a light desktop, or Windows, would otherwise get libadwaita's light look)
@@ -1266,7 +1349,15 @@ fn main() -> glib::ExitCode {
             });
         }
     });
-    app.run_with_args(&args[..1])
+    app.connect_open(|app, files, _| {
+        app.activate(); // the window first (made, the first time)
+        for f in files {
+            ui::open_link(&f.uri());
+        }
+    });
+    // only a link goes on to GApplication (the other arguments were the probes')
+    let given: Vec<String> = args.iter().take(1).cloned().chain(link).collect();
+    app.run_with_args(&given)
 }
 
 /// RADIANCE_PROFILE=1: once a second, how long the window's frames took in

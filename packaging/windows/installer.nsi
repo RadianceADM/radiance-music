@@ -49,6 +49,11 @@ Section "Radiance Music"
   WriteRegStr HKCU "${KEY}" "URLInfoAbout" "https://music.radianceph.com"
   WriteRegDWORD HKCU "${KEY}" "NoModify" 1
   WriteRegDWORD HKCU "${KEY}" "NoRepair" 1
+  ; radiancemusic:// links (a Radiance Music Server's "Open in Radiance Music") open the app
+  WriteRegStr HKCU "Software\Classes\radiancemusic" "" "URL:Radiance Music"
+  WriteRegStr HKCU "Software\Classes\radiancemusic" "URL Protocol" ""
+  WriteRegStr HKCU "Software\Classes\radiancemusic\DefaultIcon" "" "$INSTDIR\radiance-music.ico"
+  WriteRegStr HKCU "Software\Classes\radiancemusic\shell\open\command" "" '"$INSTDIR\bin\radiance-music.exe" "%1"'
 SectionEnd
 
 Section "Uninstall"
@@ -58,4 +63,5 @@ Section "Uninstall"
   ; and the splitter it downloaded at its first start (1.3 GB; nothing of yours in it)
   RMDir /r "$LOCALAPPDATA\radiance-music\windows-splitter"
   DeleteRegKey HKCU "${KEY}"
+  DeleteRegKey HKCU "Software\Classes\radiancemusic"
 SectionEnd

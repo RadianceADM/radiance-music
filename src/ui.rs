@@ -886,6 +886,19 @@ enum Place {
     Current,
 }
 
+thread_local! {
+    /// The window's app state, for what comes from outside (a radiancemusic:// link).
+    static THE_UI: RefCell<std::rc::Weak<Ui>> = RefCell::default();
+}
+
+/// A link the app was opened with (radiancemusic://join?u=…, from a server's
+/// "Open in Radiance Music"): Servers…, its invite filled in.
+pub fn open_link(uri: &str) {
+    if let Some(ui) = THE_UI.with(|u| u.borrow().upgrade()) {
+        ui.open_app_link(uri);
+    }
+}
+
 pub struct Ui {
     pub window: adw::ApplicationWindow,
     stack: adw::ViewStack,
@@ -1439,6 +1452,7 @@ impl Ui {
                 .build(),
         });
 
+        THE_UI.with(|u| u.replace(Rc::downgrade(&ui)));
         let me = Rc::downgrade(&ui);
         match Player::new(move |ev| {
             if let Some(me) = me.upgrade() {
@@ -3590,6 +3604,7 @@ impl Ui {
                             me.refresh_lyrics(); // its words get their times from the new Vocals part
                         }
                         me.refresh_split_marks(); // its scissors, in every list
+                        me.share_parts(&t); // a server's copy without parts gets these
                     }
                     Err(e) => {
                         debug(&format!("split {}: {e}", t.title));
