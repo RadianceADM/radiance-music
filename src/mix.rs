@@ -14,7 +14,7 @@ const MAX: usize = 40;
 pub fn radio(seed: &Track) -> Vec<Track> {
     let id = match seed.source {
         Source::YouTube => Some(seed.id.clone()),
-        Source::Archive => youtube::search(&format!("{} {}", seed.artist, seed.title)).first().map(|t| t.id.clone()),
+        Source::Archive | Source::Server => youtube::search(&format!("{} {}", seed.artist, seed.title)).first().map(|t| t.id.clone()),
     };
     id.map(|id| youtube::radio(&id)).unwrap_or_default()
 }

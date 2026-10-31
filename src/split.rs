@@ -51,6 +51,14 @@ fn cache_base(t: &Track) -> PathBuf {
     glib::user_cache_dir().join("radiance-music/stems").join(file_name(&t.key().replace(['/', ':'], "_")))
 }
 
+/// Where one of a song's part files ("drums.ogg"…) is kept in the cache (a
+/// song not saved: a server's parts, fetched for the Mixer).
+pub fn cache_part(t: &Track, file: &str) -> Option<PathBuf> {
+    let (part, ext) = file.split_once('.')?;
+    let base = cache_base(t);
+    Some(base.with_file_name(format!("{}.{part}.{ext}", base.file_name()?.to_string_lossy())))
+}
+
 /// Where a song's two halves are kept: next to a saved (liked) song in the
 /// Music folder, else in the cache.
 pub fn stems_base(t: &Track) -> PathBuf {

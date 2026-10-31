@@ -186,6 +186,10 @@ impl Ui {
                     if me.playlist_now.get() != Some(id) || me.stack.visible_child_name().as_deref() != Some("playlist") {
                         me.open_playlist(id);
                     }
+                } else if let Some(address) = page.strip_prefix("server:") {
+                    if me.shown_server().as_deref() != Some(address) || me.stack.visible_child_name().as_deref() != Some("server") {
+                        me.open_server(address);
+                    }
                 } else if page == "new-playlist" {
                     me.new_playlist(None);
                 } else if page == "eq" {
@@ -239,6 +243,8 @@ impl Ui {
         // Under 860: also the sidebar slides over, from its button, and Now Playing's art
         // stands above (its lyrics are in the panel's tab).
         let (np, left, middle) = self.np_parts.borrow().clone().expect("Now Playing is built before the shell");
+        // the bar's quality pill, by its slot (see layout)
+        let quality = self.bar_quality.parent().expect("the bar is built before the shell");
         let narrow = adw::Breakpoint::new(adw::BreakpointCondition::parse("max-width: 860sp").unwrap());
         narrow.add_setter(&self.split, "collapsed", Some(&true.to_value()));
         narrow.add_setter(&self.lyrics_scroll, "visible", Some(&false.to_value()));
@@ -248,7 +254,7 @@ impl Ui {
         narrow.add_setter(&left, "halign", Some(&gtk::Align::Center.to_value()));
         // the bar keeps the mute button; the volume slider and the quality badge make room
         narrow.add_setter(&self.volume, "visible", Some(&false.to_value()));
-        narrow.add_setter(&self.bar_quality, "visible", Some(&false.to_value()));
+        narrow.add_setter(&quality, "visible", Some(&false.to_value()));
         self.window.add_breakpoint(narrow);
         // Under 600, a phone: all of that, a smaller cover and page margins, and the bar keeps
         // what fits (the song, play / skip, the seek bar, Like and the queue; the system's
@@ -268,7 +274,7 @@ impl Ui {
         phone.add_setter(&self.cover, "width-request", Some(&240i32.to_value()));
         phone.add_setter(&self.cover, "height-request", Some(&240i32.to_value()));
         phone.add_setter(&middle, "width-request", Some(&(-1i32).to_value()));
-        let phone_hides = [self.volume.upcast_ref::<gtk::Widget>(), self.mute.upcast_ref(), self.bar_quality.upcast_ref(), self.lyrics_button.upcast_ref(), self.shuffle.upcast_ref(), self.repeat_button.upcast_ref(), self.bar_byline.upcast_ref(), self.pos.upcast_ref(), self.len.upcast_ref()];
+        let phone_hides = [self.volume.upcast_ref::<gtk::Widget>(), self.mute.upcast_ref(), quality.upcast_ref(), self.lyrics_button.upcast_ref(), self.shuffle.upcast_ref(), self.repeat_button.upcast_ref(), self.bar_byline.upcast_ref(), self.pos.upcast_ref(), self.len.upcast_ref()];
         for w in phone_hides {
             phone.add_setter(w, "visible", Some(&false.to_value()));
         }
@@ -295,7 +301,7 @@ impl Ui {
         mini.add_setter(&self.lyrics_button, "visible", Some(&false.to_value()));
         mini.add_setter(&self.queue_button, "visible", Some(&false.to_value()));
         mini.add_setter(&self.volume, "visible", Some(&false.to_value()));
-        mini.add_setter(&self.bar_quality, "visible", Some(&false.to_value()));
+        mini.add_setter(&quality, "visible", Some(&false.to_value()));
         self.window.add_breakpoint(mini);
         let mini_phone = adw::Breakpoint::new(adw::BreakpointCondition::parse("max-height: 240sp and max-width: 600sp").unwrap());
         mini_phone.add_setter(&nav_split, "visible", Some(&false.to_value()));
@@ -325,6 +331,7 @@ impl Ui {
             let name = match name.as_str() {
                 "group" => me.group_back.borrow().clone(),
                 "playlist" => me.playlist_now.get().map(|id| format!("playlist:{id}")).unwrap_or_default(),
+                "server" => me.shown_server().map(|a| format!("server:{a}")).unwrap_or_default(),
                 _ => name.to_string(),
             };
             let mut child = me.nav.first_child();
@@ -952,6 +959,9 @@ impl Ui {
         crate::watch::doing("saving where you are");
         if std::env::var_os("RADIANCE_SHOT").is_some() {
             return; // a screenshot copy never writes where you are
+        }
+        if self.in_party() {
+            return; // a party's song isn't where you are (your own music was kept as you joined)
         }
         let position = self.player.borrow().as_ref().and_then(|p| p.position()).or(self.restore_at.get()).unwrap_or(0.0);
         session::save(&session::Session {

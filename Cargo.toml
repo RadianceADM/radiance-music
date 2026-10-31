@@ -19,6 +19,8 @@ libc = "0.2"
 ureq = { version = "3", features = ["json"] }
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
 qrcode = { version = "0.14", default-features = false } # Share Songs with a Phone
+# a Radiance Music Server's listening party (its WebSocket); rustls, as ureq's (it builds for Windows with mingw)
+tungstenite = { version = "0.29", default-features = false, features = ["handshake", "rustls-tls-webpki-roots"] }
 
 [features]
 default = ["save-youtube"]

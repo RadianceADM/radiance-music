@@ -29,6 +29,7 @@ mod mpris;
 mod net;
 mod player;
 mod relay;
+mod servers;
 mod session;
 mod settings;
 mod setup;
@@ -48,12 +49,19 @@ use gtk::{gdk, glib};
 
 pub const APP_ID: &str = "io.github.radianceadm.Music";
 
-const ICONS: [(&str, &str); 5] = [
+const ICONS: [(&str, &str); 11] = [
     ("lossless-symbolic", include_str!("../data/icons/lossless-symbolic.svg")),
     (APP_ID, include_str!("../data/icons/io.github.radianceadm.Music.svg")),
     ("heart-filled-symbolic", include_str!("../data/icons/heart-filled-symbolic.svg")),
     ("heart-outline-symbolic", include_str!("../data/icons/heart-outline-symbolic.svg")),
     ("equalizer-symbolic", include_str!("../data/icons/equalizer-symbolic.svg")),
+    // a listening party's reactions: the server's own soft pictures (no emoji font needed)
+    ("rms-react-fire", include_str!("../data/icons/rms-react-fire.svg")),
+    ("rms-react-love", include_str!("../data/icons/rms-react-love.svg")),
+    ("rms-react-laugh", include_str!("../data/icons/rms-react-laugh.svg")),
+    ("rms-react-clap", include_str!("../data/icons/rms-react-clap.svg")),
+    ("rms-react-party", include_str!("../data/icons/rms-react-party.svg")),
+    ("rms-react-wow", include_str!("../data/icons/rms-react-wow.svg")),
 ];
 
 /// The app's own icons (its logo, hearts, EQ), which the system theme doesn't have.
@@ -375,6 +383,177 @@ fn probe_align(dirs: &[String]) -> glib::ExitCode {
     }
     println!("ALL, exact line starts: spread: {} | vocals: {}", stats(&mut totals[0]), stats(&mut totals[1]));
     println!("ALL, lrc-like starts:   spread: {} | vocals: {}", stats(&mut totals[2]), stats(&mut totals[3]));
+    glib::ExitCode::SUCCESS
+}
+
+/// `radiance-music --probe-server [INVITE-LINK] [split TITLE | save TITLE | add FILE | party]`:
+/// joins a Radiance Music Server with the link (kept in settings.json, as Servers… does),
+/// then for each joined server: who this computer is there, its songs, its split queue,
+/// the clock offset and its party. `split`, `save`, `add` and `party` try those as the app does
+/// (`party` listens on the WebSocket for a few seconds, in step by the clock). No sound.
+fn probe_server(args: &[String]) -> glib::ExitCode {
+    let mut s = settings::load();
+    library::set_music_dir(s.music_dir.clone().map(std::path::PathBuf::from));
+    let mut rest = args;
+    if let Some(link) = args.first().filter(|a| a.contains("/join/")) {
+        rest = &args[1..];
+        let (address, code) = match servers::parse_invite(link) {
+            Ok(x) => x,
+            Err(e) => {
+                println!("{e}");
+                return glib::ExitCode::FAILURE;
+            }
+        };
+        match servers::join(&address, &code, &glib::host_name()) {
+            Ok(j) => {
+                println!("joined {} at {}", j.name, j.address);
+                s.servers.retain(|x| x.address != j.address);
+                s.servers.push(j);
+                settings::save(&s);
+            }
+            Err(e) => {
+                println!("couldn't join: {e}");
+                return glib::ExitCode::FAILURE;
+            }
+        }
+    }
+    servers::set_joined(&s.servers);
+    let want = |what: &str| rest.first().map(String::as_str) == Some(what);
+    let title = rest.get(1).cloned().unwrap_or_default().to_lowercase();
+    for server in &s.servers {
+        println!("== {} ({})", server.name, server.address);
+        let who = match servers::me(server) {
+            Ok(m) => m,
+            Err(f) => {
+                println!("  {}", f.words(&server.name));
+                continue;
+            }
+        };
+        println!("  you: {} ({}), device {}; can add {}, split {}, host {}", who.name, if who.owner { "owner" } else { "friend" }, who.device, who.can_add, who.can_split, who.can_host);
+        let songs = servers::library(server).unwrap_or_default();
+        for song in &songs {
+            let t = song.track(server);
+            println!("  song {}: {} – {} ({}s, {}, parts: {}, lyrics {}, cover {})", song.id, t.artist, t.title, t.seconds, t.format, servers::mix_parts(&t).join("/"), song.lyrics, song.cover.is_some());
+        }
+        let find = || songs.iter().find(|x| x.title.to_lowercase().contains(&title)).map(|x| x.track(server));
+        if want("split") {
+            match find().map(|t| servers::split(server, &t)) {
+                Some(Ok(servers::Asked::Split)) => println!("  split: its parts are there already"),
+                Some(Ok(servers::Asked::Queued(j))) => println!("  split: job {} {} ({})", j.id, j.state, j.note),
+                Some(Err(f)) => println!("  split: {}", f.words(&server.name)),
+                None => println!("  split: no song with {title:?} in its title"),
+            }
+        }
+        if want("save") {
+            match find() {
+                Some(t) => match library::save(&t) {
+                    Ok(path) => println!("  saved {path}; parts here: {}", split::mix_parts(&track::Track { file: Some(path.clone()), ..t }).join("/")),
+                    Err(e) => println!("  save: {e}"),
+                },
+                None => println!("  save: no song with {title:?} in its title"),
+            }
+        }
+        if want("add") {
+            let file = rest.get(1).cloned().unwrap_or_default();
+            let stem = std::path::Path::new(&file).file_stem().map(|x| x.to_string_lossy().into_owned()).unwrap_or_default();
+            let (artist, name) = stem.split_once(" - ").map(|(a, b)| (a.to_string(), b.to_string())).unwrap_or((String::new(), stem.clone()));
+            let t = track::Track { source: track::Source::Archive, id: file.clone(), title: name, artist, album: String::new(), seconds: 0, art: String::new(), format: String::new(), file: Some(file), video: false, genres: None };
+            match servers::upload(server, &t) {
+                Ok(a) => println!("  add: {} (extras: {})", if a.skipped { "it was there already" } else { "added" }, a.extras.join(", ")),
+                Err(e) => println!("  add: {e}"),
+            }
+        }
+        if want("parts") {
+            // as the Mixer plays a server's song: its parts fetched into the cache, then played from there
+            match find() {
+                Some(t) => {
+                    std::env::set_var("RADIANCE_SILENT", "1");
+                    match servers::fetch_parts(&t) {
+                        Ok(n) => println!("  parts: {n} fetched into the cache"),
+                        Err(e) => println!("  parts: {e}"),
+                    }
+                    let parts: Vec<(String, String)> = split::mix_parts(&t).iter().filter_map(|p| split::ready_part(&t, p).and_then(|f| glib::filename_to_uri(&f, None).ok()).map(|u| (p.to_string(), u.to_string()))).collect();
+                    let main = glib::MainLoop::new(None, false);
+                    let player = std::rc::Rc::new(player::Player::new(|e| match e {
+                        player::Event::Ready => println!("  parts: ready"),
+                        player::Event::Ended => println!("  parts: ended"),
+                        player::Event::Error(x) => println!("  parts: couldn't play: {x}"),
+                    }).expect("player"));
+                    let gains: std::collections::HashMap<String, f64> = [("vocals".to_string(), 0.0)].into();
+                    // from 5 s in, as the Mixer takes over a song that's playing
+                    match player.load_parts(None, &parts, 5.0, &gains, None, false) {
+                        Ok(()) => println!("  parts: {} parts playing from 5 s, vocals down", parts.len()),
+                        Err(e) => println!("  parts: {e}"),
+                    }
+                    let (p, m, n) = (player.clone(), main.clone(), std::cell::Cell::new(0));
+                    glib::timeout_add_local(std::time::Duration::from_millis(500), move || {
+                        n.set(n.get() + 1);
+                        let levels: Vec<String> = p.part_levels().iter().map(|(n, l)| format!("{n} {:.0} dB", 10.0 * l.max(1e-12).log10())).collect();
+                        println!("  parts: {:.1} s in: at {:?} s, hearing the parts {}, levels {levels:?}", n.get() as f64 / 2.0, p.position().map(|x| (x * 10.0).round() / 10.0), p.hears_parts());
+                        if n.get() < 8 {
+                            return glib::ControlFlow::Continue;
+                        }
+                        p.stop();
+                        m.quit();
+                        glib::ControlFlow::Break
+                    });
+                    main.run();
+                }
+                None => println!("  parts: no song with {title:?} in its title"),
+            }
+        }
+        match servers::queue(server) {
+            Ok(q) => {
+                for j in &q.jobs {
+                    println!("  queue: job {} “{}” {} {:.0}% (line {:?}) {}", j.id, j.title, j.state, j.progress * 100.0, q.ahead(j.id), j.note);
+                }
+                println!("  next turn: {:?}", q.next_turn);
+            }
+            Err(f) => println!("  queue: {}", f.words(&server.name)),
+        }
+        let Some((offset, rtt)) = servers::clock_offset(server) else {
+            println!("  clock: no answer");
+            continue;
+        };
+        println!("  clock: the server is {offset:+.1} ms from this computer (round trip {rtt:.1} ms)");
+        if want("party") {
+            let p = servers::party(server).ok().filter(|p| p.on).or_else(|| servers::party_start(server, false).ok());
+            if p.as_ref().is_some_and(|p| p.song.is_none() && p.queue.is_empty()) {
+                if let Some(t) = songs.first().map(|x| x.track(server)) {
+                    let _ = servers::party_add(server, &t);
+                }
+            }
+            let (tx, rx) = async_channel::unbounded();
+            let socket = servers::listen(server, tx);
+            let until = std::time::Instant::now() + std::time::Duration::from_secs(4);
+            let mut reacted = false;
+            while std::time::Instant::now() < until {
+                match rx.try_recv() {
+                    Ok(servers::Live::State(v)) => {
+                        let p = servers::parse_party(&v);
+                        let at = p.position_ms(servers::now_ms() + offset);
+                        let reactions: Vec<String> = p.reactions.iter().map(|r| format!("{} by {}", servers::reaction_icon(&r.emoji).1, r.by)).collect();
+                        println!("  party: on {}, host {}, playing {:?} at {:?} ms, {} listening, {} up next, reactions {reactions:?}", p.on, p.host.1, p.song.map(|e| e.title), at.map(|a| a.round()), p.members.len(), p.queue.len());
+                        if !reacted {
+                            reacted = true;
+                            if let Err(f) = servers::party_react(server, "🔥") {
+                                println!("  react: {}", f.words(&server.name));
+                            }
+                        }
+                    }
+                    Ok(other) => println!("  party: {other:?}"),
+                    Err(async_channel::TryRecvError::Empty) => std::thread::sleep(std::time::Duration::from_millis(50)),
+                    Err(_) => break,
+                }
+            }
+            drop(socket);
+        } else {
+            match servers::party(server) {
+                Ok(p) => println!("  party: on {}", p.on),
+                Err(f) => println!("  party: {}", f.words(&server.name)),
+            }
+        }
+    }
     glib::ExitCode::SUCCESS
 }
 
@@ -886,6 +1065,9 @@ fn main() -> glib::ExitCode {
         println!("{}: kept in {:.1} s, hosted now: {}", t.title, started.elapsed().as_secs_f64(), split::hosted().contains(&t.key()));
         return glib::ExitCode::SUCCESS;
     }
+    if args.get(1).map(String::as_str) == Some("--probe-server") {
+        return probe_server(&args[2..]);
+    }
     if args.get(1).map(String::as_str) == Some("--probe-align") {
         return probe_align(&args[2..]);
     }
@@ -943,7 +1125,9 @@ fn main() -> glib::ExitCode {
         one_copy::listen(show_window);
     }
     let shot_play = shot.is_some() && std::env::var_os("RADIANCE_SHOT_PLAY").is_some();
-    if shot_play {
+    // RADIANCE_SHOT_PARTY=1: the first joined server's listening party joined (it plays: silent too)
+    let shot_party = shot.is_some() && std::env::var_os("RADIANCE_SHOT_PARTY").is_some();
+    if shot_play || shot_party {
         std::env::set_var("RADIANCE_SILENT", "1");
     }
     let wait = std::env::var("RADIANCE_SHOT_WAIT").ok().and_then(|s| s.parse().ok()).unwrap_or(8u64).min(18);
@@ -993,6 +1177,17 @@ fn main() -> glib::ExitCode {
             // RADIANCE_SHOT_SPLITTING=1: the Splitting window open
             if std::env::var_os("RADIANCE_SHOT_SPLITTING").is_some() {
                 ui.shot_splitting();
+            }
+            // RADIANCE_SHOT_SERVERS=1: Servers… open (RADIANCE_SHOT_PAGE=server: the first server's page)
+            if std::env::var_os("RADIANCE_SHOT_SERVERS").is_some() {
+                ui.shot_servers();
+            }
+            if shot_party {
+                ui.shot_party();
+            }
+            // RADIANCE_SHOT_SPLIT_ON=text: the first server asked to split its song with that in its title (the split card)
+            if let Ok(q) = std::env::var("RADIANCE_SHOT_SPLIT_ON") {
+                ui.shot_split_on(&q);
             }
             // RADIANCE_SHOT_FIND=text: Liked Songs searched for it
             if let Ok(q) = std::env::var("RADIANCE_SHOT_FIND") {

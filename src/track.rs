@@ -8,12 +8,16 @@ pub enum Source {
     Archive,
     /// YouTube Music: compressed (Opus), the fallback.
     YouTube,
+    /// A Radiance Music Server you joined (servers.rs): its library's song.
+    Server,
 }
 
 #[derive(Clone, Debug)]
 pub struct Track {
     pub source: Source,
-    /// YouTube: the video id. Archive: the file's download URL.
+    /// YouTube: the video id. Archive: the file's download URL. Server: the
+    /// song's file there, https://HOST/files/NAME (no key in it; the server's
+    /// origin as servers::origin writes it, as the phone app does).
     pub id: String,
     pub title: String,
     pub artist: String,
@@ -36,11 +40,18 @@ impl Track {
         match self.source {
             Source::Archive => format!("ia:{}", self.id),
             Source::YouTube => format!("yt:{}", self.id),
+            // a server's file address can be long (its name, escaped): its key is short, and the
+            // same as the phone app's (model/Track.kt): the first 16 hex digits of the address's SHA-256
+            Source::Server => format!("rms:{}", digest(&self.id)),
         }
     }
 
     pub fn lossless(&self) -> bool {
-        self.source == Source::Archive
+        match self.source {
+            Source::Archive => true,
+            Source::YouTube => false,
+            Source::Server => self.format == "FLAC",
+        }
     }
 
     pub fn length(&self) -> String {
@@ -87,7 +98,7 @@ impl Track {
 
     pub fn to_json(&self) -> Value {
         json!({
-            "source": match self.source { Source::Archive => "archive", Source::YouTube => "youtube" },
+            "source": match self.source { Source::Archive => "archive", Source::YouTube => "youtube", Source::Server => "server" },
             "id": self.id, "title": self.title, "artist": self.artist, "album": self.album,
             "seconds": self.seconds, "art": self.art, "format": self.format, "file": self.file,
             "video": self.video, "genres": self.genres,
@@ -100,6 +111,7 @@ impl Track {
             source: match v["source"].as_str()? {
                 "archive" => Source::Archive,
                 "youtube" => Source::YouTube,
+                "server" => Source::Server,
                 _ => return None,
             },
             id: v["id"].as_str()?.to_string(),
@@ -114,6 +126,11 @@ impl Track {
             genres: v["genres"].as_array().map(|g| g.iter().filter_map(|x| x.as_str().map(String::from)).collect()),
         })
     }
+}
+
+/// The first 16 hex digits of `text`'s SHA-256 (a short name that stays the same).
+pub fn digest(text: &str) -> String {
+    gtk::glib::compute_checksum_for_data(gtk::glib::ChecksumType::Sha256, text.as_bytes()).map(|h| h.chars().take(16).collect()).unwrap_or_default()
 }
 
 /// 245.3 -> "4:05".

@@ -6,8 +6,8 @@
 //! (http://127.0.0.1:<port>/<n>) like any web server, and the relay fetches the
 //! stream from YouTube in 1 MB pieces the fast way. Seeking works too.
 //!
-//! On Windows it also carries Internet Archive files (`add_web`: ordinary Range
-//! requests): GStreamer's own TLS there (GnuTLS) can't check the Archive's
+//! On Windows it also carries Internet Archive files and a Radiance Music
+//! Server's (`add_web`: ordinary Range requests): GStreamer's own TLS there (GnuTLS) can't check the Archive's
 //! certificate on a fresh Windows (its root comes from Windows only on demand), so
 //! the player asks the relay over plain local HTTP and the app's own HTTPS fetches.
 
@@ -87,7 +87,14 @@ impl Relay {
             let oldest = *streams.keys().min().unwrap();
             streams.remove(&oldest);
         }
-        let mime = if url.to_lowercase().ends_with(".flac") { "audio/flac" } else { "application/octet-stream" };
+        // by the file's type (a Radiance Music Server's address ends in ?t=KEY)
+        let path = url.split('?').next().unwrap_or(url).to_lowercase();
+        let mime = match path.rsplit_once('.').map(|(_, e)| e) {
+            Some("flac") => "audio/flac",
+            Some("opus" | "ogg") => "audio/ogg",
+            Some("m4a") => "audio/mp4",
+            _ => "application/octet-stream",
+        };
         streams.insert(n, Upstream { url: url.to_string(), size: 0, mime: mime.into(), in_address: false });
         format!("http://127.0.0.1:{}/{n}", self.port)
     }

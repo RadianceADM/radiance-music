@@ -17,6 +17,7 @@ use gtk::{gdk, gio, glib, graphene};
 mod backdrop;
 mod lens;
 mod home;
+mod rms;
 mod sharing;
 mod splash;
 mod splitting;
@@ -32,7 +33,7 @@ use crate::relay::Relay;
 use crate::settings::{self, Settings, Transition, FADE_RANGE};
 use crate::split::{self, Voice};
 use crate::track::{clock, file_key, letter_of, matches, Source, Track};
-use crate::{align, archive, art, genre, library, mix, storage, youtube, APP_ID};
+use crate::{align, archive, art, genre, library, mix, servers, storage, youtube, APP_ID};
 
 
 /// Same pause as every search-as-you-type: no request per keystroke.
@@ -352,6 +353,8 @@ fn khz(rate: i32) -> String {
 fn link(t: &Track) -> String {
     match t.source {
         Source::YouTube => format!("https://music.youtube.com/watch?v={}", t.id),
+        // its server's address (a song's own address needs this computer's key)
+        Source::Server => servers::of_track(t).map(|s| s.address).unwrap_or_else(|| t.id.split("/files/").next().unwrap_or(&t.id).to_string()),
         Source::Archive => t
             .id
             .strip_prefix("https://archive.org/download/")
@@ -374,7 +377,7 @@ fn lyrics_for(t: &Track) -> Lyrics {
 /// lyrics_for, and whether its words were timed from the vocals just now.
 fn lyrics_and_source(t: &Track) -> (Lyrics, bool) {
     let file = t.file.as_deref();
-    let kept = fs::read_to_string(lyrics_file(t)).ok().and_then(|y| lyrics::parse_lyricsfile(&y));
+    let kept = fs::read_to_string(lyrics_file(t)).ok().and_then(|y| lyrics::parse_lyricsfile(&y)).or_else(|| server_lyrics(t));
     let fresh = kept.is_none();
     let mut l = kept.unwrap_or_else(|| {
         let found = lyrics::find(t);
@@ -404,6 +407,22 @@ fn lyrics_and_source(t: &Track) -> (Lyrics, bool) {
         }
     }
     (l, from_vocals)
+}
+
+/// A server's song (not saved): the lyrics its server keeps for it, a Lyricsfile
+/// kept here too (in the cache, as any song's), else its .lrc text (worker thread).
+fn server_lyrics(t: &Track) -> Option<Lyrics> {
+    if t.source != Source::Server || t.file.is_some() {
+        return None;
+    }
+    let (yaml, text) = servers::lyrics_text(t)?;
+    if yaml {
+        let l = lyrics::parse_lyricsfile(&text)?;
+        let _ = fs::write(lyrics_file(t), text);
+        return Some(l);
+    }
+    let lines = lyrics::parse_lrc(&text);
+    Some(if lines.is_empty() { Lyrics::Plain(text) } else { Lyrics::Timed { lines, exact: false } })
 }
 
 /// A split song's lyrics for the server's library (worker thread): its
@@ -830,6 +849,9 @@ fn badge(icon: &str, class: &str, title: &str, body: &str) -> gtk::Widget {
 fn quality_badge(t: &Track) -> gtk::Widget {
     if t.video {
         badge("camera-video-symbolic", "video", "Music video", "From YouTube; plays with its picture in Now Playing (up to 720p).")
+    } else if t.source == Source::Server {
+        let name = servers::of_track(t).map(|s| s.name).unwrap_or_else(|| "a Radiance Music Server".into());
+        badge("network-server-symbolic", if t.lossless() { "lossless" } else { "compressed" }, &format!("From {name} · {}", t.format), "Streams from the server you joined. Like it to save it, with its parts, lyrics and cover, into your own library.")
     } else if t.lossless() {
         let what = if t.format == "24-bit FLAC" { "24-bit FLAC" } else { "FLAC" };
         badge("lossless-symbolic", "lossless", &format!("Lossless · {what}"), "The full recording from the Internet Archive, nothing thrown away. Played first.")
@@ -854,6 +876,8 @@ enum Place {
     Liked(Rc<Vec<Track>>, usize),
     /// A song in a playlist (its id), which plays on through it.
     Playlist(i64, Rc<Vec<Track>>, usize),
+    /// A song on a Radiance Music Server's page: plays on through its songs (in its party: joins the party's queue).
+    Server(Rc<Vec<Track>>, usize),
     /// A song in the queue, by position.
     Queue(usize),
     /// A song played before (above the queue): plays again now, then the queue carries on.
@@ -1124,12 +1148,14 @@ pub struct Ui {
     /// Every row's split mark, to update in place.
     split_marks: RefCell<Vec<(Track, glib::WeakRef<gtk::Box>)>>,
     split_progress: Cell<f64>,
+    /// The Radiance Music Servers joined: their pages, their split queues, the party you're in.
+    rms: rms::Rms,
 }
 
 impl Ui {
     pub fn build(app: &adw::Application) -> Rc<Ui> {
         let provider = gtk::CssProvider::new();
-        provider.load_from_string(&format!("{CSS}\n{}", home::CSS));
+        provider.load_from_string(&format!("{CSS}\n{}\n{}", home::CSS, rms::CSS));
         if let Some(display) = gdk::Display::default() {
             gtk::style_context_add_provider_for_display(&display, &provider, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);
             gtk::style_context_add_provider_for_display(&display, &LOOK.with(|l| l.clone()), gtk::STYLE_PROVIDER_PRIORITY_APPLICATION + 1);
@@ -1402,6 +1428,7 @@ impl Ui {
             split_bar: gtk::ProgressBar::builder().show_text(true).visible(false).margin_top(4).css_classes(["split-bar"]).build(),
             split_progress: Cell::new(0.0),
             split_marks: RefCell::default(),
+            rms: rms::Rms::default(),
             split_toggle: gtk::Button::builder().valign(gtk::Align::Center).css_classes(["flat"]).visible(false).build(),
             split_button: gtk::Button::builder()
                 .label("Split this song")
@@ -1437,6 +1464,8 @@ impl Ui {
             }
         });
         library::set_music_dir(ui.settings.borrow().music_dir.clone().map(std::path::PathBuf::from));
+        // the joined servers' keys, before any of their covers or songs are fetched (the last song's, say)
+        servers::set_joined(&ui.settings.borrow().servers);
         // the rest behind the splash, a step at a time (it keeps moving between them)
         let look = if adw::StyleManager::default().is_dark() { ui.settings.borrow().look.clone() } else { "stone".into() };
         let splash = splash::Splash::cover(&ui.window, splash::Look::of(&look));
@@ -1473,6 +1502,7 @@ impl Ui {
             ("the last song", Box::new(|ui| {
                 ui.restore_session();
                 ui.render_playlist_nav();
+                ui.start_servers();
                 ui.update_suggestions();
             })),
             ("the queue", Box::new(|ui| {
@@ -1989,6 +2019,8 @@ impl Ui {
         self.stack.add_titled_with_icon(&search_box, Some("search"), "Search", "system-search-symbolic");
         let playlist_clamp = adw::Clamp::builder().maximum_size(1240).tightening_threshold(900).child(&self.playlist_box).build();
         self.stack.add_named(&gtk::ScrolledWindow::builder().hscrollbar_policy(gtk::PolicyType::Never).vexpand(true).child(&playlist_clamp).build(), Some("playlist"));
+        // a Radiance Music Server's songs and party (the sidebar has one entry per server)
+        self.stack.add_named(&self.server_page(), Some("server"));
 
         // Liked, with "For you" on top
 
@@ -2062,6 +2094,9 @@ impl Ui {
         split_line.append(&self.split_queue_btn);
         self.split_card.append(&split_line);
         self.split_card.append(&self.split_bar);
+        // your songs being split on a server: where they are in its queue, and whose turn is next
+        self.split_card.append(&self.rms.away_line);
+        self.split_card.append(&self.rms.away_bar);
         let open = gtk::GestureClick::new();
         let me = Rc::downgrade(self);
         open.connect_released(move |_, _, _, _| {
@@ -2228,6 +2263,11 @@ impl Ui {
         mixer_row.connect_expanded_notify(move |r| {
             if let (true, Some(me)) = (r.is_expanded(), me.upgrade()) {
                 me.refresh_effects();
+                // a server's song: its parts on their way here, ready for the first slider
+                let t = me.current.borrow().clone();
+                if let Some(t) = t {
+                    me.server_parts_ready(&t);
+                }
             }
         });
         self.mixer.set_visible(true);
@@ -2388,7 +2428,11 @@ impl Ui {
         }
         end.append(&self.mute);
         end.append(&self.volume);
-        end.append(&self.bar_quality);
+        // in a slot of its own: the window sizes hide the slot (the song's quality shows or hides the pill
+        // inside it, and used to override them: a phone's bar grew wider than the phone)
+        let quality_slot = gtk::Box::builder().valign(gtk::Align::Center).build();
+        quality_slot.append(&self.bar_quality);
+        end.append(&quality_slot);
         end.append(&self.bar_heart);
         end.append(&self.lyrics_button);
         end.append(&self.queue_button);
@@ -2429,6 +2473,7 @@ impl Ui {
         menu.append_section(None, &splitting);
         let app = gio::Menu::new();
         app.append(Some("Share Songs with a Phone…"), Some("win.share-songs"));
+        app.append(Some("Servers…"), Some("win.servers"));
         app.append(Some("Storage and Folder"), Some("win.storage"));
         app.append(Some("Open the Music Folder"), Some("win.music-folder"));
         app.append(Some("How to Use It"), Some("win.guide"));
@@ -2527,6 +2572,10 @@ impl Ui {
         let me = Rc::downgrade(self);
         self.seek.connect_change_value(move |_, _, v| {
             if let Some(me) = me.upgrade() {
+                if me.in_party() {
+                    me.party_seek(v); // for everyone, when you control the party
+                    return glib::Propagation::Stop;
+                }
                 me.cued.replace(None);
                 if let Some(p) = me.player.borrow().as_ref() {
                     p.seek(v);
@@ -2623,6 +2672,14 @@ impl Ui {
             }
         });
         self.window.add_action(&share_songs);
+        let servers_action = gio::SimpleAction::new("servers", None);
+        let me2 = Rc::downgrade(self);
+        servers_action.connect_activate(move |_, _| {
+            if let Some(me) = me2.upgrade() {
+                me.servers_dialog();
+            }
+        });
+        self.window.add_action(&servers_action);
         let splitting = gio::SimpleAction::new("splitting", None);
         splitting.connect_activate(move |_, _| {
             if let Some(me) = me.upgrade() {
@@ -2850,11 +2907,14 @@ impl Ui {
         match t.source {
             Source::Archive => Some(self.web_uri(&t.id)),
             Source::YouTube => self.fresh_stream(&t.id).map(|s| s.0),
+            // with this computer's key (none: the server was left)
+            Source::Server => servers::of_track(t).map(|_| self.web_uri(&servers::signed(&t.id))),
         }
     }
 
-    /// An Internet Archive file's address for the player: as it is, except on Windows,
-    /// where it goes through the relay (GStreamer's TLS there can't check the Archive).
+    /// An Internet Archive file's (or a Radiance Music Server's) address for the player: as
+    /// it is, except on Windows, where it goes through the relay (GStreamer's TLS there can't
+    /// check the Archive).
     fn web_uri(&self, url: &str) -> String {
         match &self.relay {
             Some(relay) if cfg!(windows) => relay.add_web(url),
@@ -2943,7 +3003,7 @@ impl Ui {
         // cue the next song 12 s ahead
         if plan.at - at <= 12.0 && self.cued.borrow().as_deref() != Some(keys.1.as_str()) {
             // split and saved: it comes in with its parts at hand (not in a beat-matched DJ mix: that's the decks')
-            let (parts, whole, rate) = Self::parts_of(&next);
+            let (parts, whole, rate) = self.parts_of(&next);
             let with_parts = !parts.is_empty() && !plan.beat_matched && self.voice.get() == Voice::Song && whole.is_some();
             match (self.uri_now(&next), with_parts) {
                 (Some(_), true) => {
@@ -3029,7 +3089,7 @@ impl Ui {
             self.update_voice_status();
             return;
         };
-        if split::has_parts(&t) {
+        if split::has_parts(&t) || Self::shown_parts(&t).len() >= 4 {
             // with the four parts: the buttons are mixer presets
             let preset = |p: &str| match v {
                 Voice::Song => 1.0,
@@ -3166,7 +3226,10 @@ impl Ui {
     /// The parts a song's Mixer shows: six only when it was ticked for six (split in six but
     /// not ticked: four, Other moving Piano and Guitar with it).
     fn shown_parts(t: &Track) -> Vec<&'static str> {
-        let have = split::mix_parts(t);
+        let mut have = split::mix_parts(t);
+        if have.is_empty() && t.file.is_none() {
+            have = servers::mix_parts(t); // a server's song: its parts there
+        }
         if have.len() == 6 && !split::wants_six(t) { split::PARTS.to_vec() } else { have }
     }
 
@@ -3220,6 +3283,10 @@ impl Ui {
         if full {
             return; // the song plays as itself
         }
+        // a server's song: its parts come here first (then this again)
+        if !self.server_parts_ready(&t) {
+            return;
+        }
         // a song playing as a plain file (no saved copy, or after a DJ mix): over to its parts, once
         let at = self.player.borrow().as_ref().and_then(|p| p.position()).unwrap_or(0.0);
         self.start_parts(&t, at, true);
@@ -3227,7 +3294,7 @@ impl Ui {
 
     /// A song's parts as (name, file uri), and its own file's uri and sample
     /// rate when it's saved (then it plays among its parts).
-    fn parts_of(t: &Track) -> (Vec<(String, String)>, Option<String>, Option<u32>) {
+    fn parts_of(&self, t: &Track) -> (Vec<(String, String)>, Option<String>, Option<u32>) {
         let parts = split::mix_parts(t)
             .iter()
             .filter_map(|p| split::ready_part(t, p).and_then(|f| glib::filename_to_uri(&f, None).ok()).map(|u| (p.to_string(), u.to_string())))
@@ -3241,7 +3308,7 @@ impl Ui {
     /// where it's got to).
     fn start_parts(self: &Rc<Self>, t: &Track, at: f64, switch: bool) {
         crate::watch::doing("starting the split parts");
-        let (parts, whole, rate) = Self::parts_of(t);
+        let (parts, whole, rate) = self.parts_of(t);
         let gains = self.gains_for(t);
         let res = self.player.borrow().as_ref().map(|p| p.load_parts(whole.as_deref(), &parts, at, &gains, rate, switch));
         match res {
@@ -3337,13 +3404,24 @@ impl Ui {
         self.set_controls();
     }
 
-    /// Splits a song when its turn comes (liked songs, the next song).
+    /// Splits a song when its turn comes (liked songs, the next song). A server's
+    /// song that its server splits waits to be asked for by hand.
     fn request_split(self: &Rc<Self>, t: &Track) {
+        if self.splits_on_server(t).is_some() {
+            return;
+        }
         self.queue_split(t, false);
     }
 
     /// Splits a song first, before any waiting (asked for by hand, or it's playing).
+    /// A server's song is split on the server when it allows that (for everyone there).
     fn split_now(self: &Rc<Self>, t: &Track) {
+        if self.splits_on_server(t).is_some() {
+            if Self::shown_parts(t).is_empty() {
+                self.split_on_server(t);
+            }
+            return;
+        }
         self.split_asked.borrow_mut().insert(t.key());
         self.queue_split(t, true);
     }
@@ -3541,9 +3619,12 @@ impl Ui {
             Some(LyricsKind::Text) => slot.append(&badge("format-justify-center-symbolic", "lyrics-text", "Lyrics", "The words as text. Once the song is split, they're timed to the singing.")),
             None => {}
         }
-        let splitting = self.splitting.borrow().as_ref().is_some_and(|x| x.key() == t.key());
+        let splitting = self.splitting.borrow().as_ref().is_some_and(|x| x.key() == t.key()) || self.away_on_server(t);
         let waiting = self.split_queue.borrow().iter().position(|x| x.key() == t.key());
-        if splitting {
+        let on_server = t.source == Source::Server && t.file.is_none() && !servers::mix_parts(t).is_empty();
+        if on_server {
+            slot.append(&badge("edit-cut-symbolic", "split", "Split on its server", "Its parts are on the server: the Mixer, No vocals and Vocals only play them from there."));
+        } else if splitting {
             let spin = gtk::Spinner::builder().spinning(true).tooltip_text("Being split into the voice and the music now").build();
             slot.append(&spin);
         } else if split::is_split(t) {
@@ -3629,15 +3710,23 @@ impl Ui {
         let splitting_key = self.splitting.borrow().as_ref().map(|t| t.key());
         // not while it's being split or waiting in line for it
         let queued = |t: &Track| self.split_queue.borrow().iter().any(|x| x.key() == t.key());
-        let can = self.can_split()
-            && cur.as_ref().is_some_and(|t| !t.video && split::mix_parts(t).is_empty() && splitting_key.as_deref() != Some(t.key().as_str()) && !queued(t));
+        let can = cur.as_ref().is_some_and(|t| {
+            let there = self.splits_on_server(t).is_some();
+            (self.can_split() || there)
+                && !t.video
+                && Self::shown_parts(t).is_empty()
+                && splitting_key.as_deref() != Some(t.key().as_str())
+                && !queued(t)
+                && !self.away_on_server(t)
+        });
         self.split_button.set_visible(can);
         let waiting = self.split_queue.borrow().len();
         let text = if Self::split_paused() && waiting > 0 {
             format!("Splitting is paused ({waiting} waiting). Resume it on Liked Songs or in the menu.")
-        } else if !self.can_split() {
+        } else if !self.can_split() && !cur.as_ref().is_some_and(|t| self.splits_on_server(t).is_some() || !Self::shown_parts(t).is_empty()) {
             self.voice_group.set_sensitive(false);
-            "No vocals / Vocals only and the Mixer's parts need splitting: set it up in the menu, Splitting…".to_string()
+            // (not over a server's split, in the same card)
+            if self.has_away() { String::new() } else { "No vocals / Vocals only and the Mixer's parts need splitting: set it up in the menu, Splitting…".to_string() }
         } else if let Some(t) = self.splitting.borrow().as_ref() {
             let host = self.settings.borrow().split.as_ref().map(|s| s.host.clone());
             let more = if waiting > 0 { format!(" ({waiting} more waiting)") } else { String::new() };
@@ -3655,8 +3744,9 @@ impl Ui {
         self.voice_status.set_visible(!text.is_empty());
         self.voice_status.set_label(&text);
         let busy = self.splitting.borrow().is_some() || waiting > 0;
-        self.split_queue_btn.set_visible(busy);
-        self.split_card.set_visible(busy); // nothing to say: no card (paused shows its own line while songs wait)
+        let away = self.show_away(); // your songs in a server's split queue
+        self.split_queue_btn.set_visible(busy || away);
+        self.split_card.set_visible(busy || away); // nothing to say: no card (paused shows its own line while songs wait)
     }
 
     fn apply_volume(&self) {
@@ -3674,9 +3764,18 @@ impl Ui {
         self.mute.set_tooltip_text(Some(if self.mute.is_active() { "Unmute" } else { "Mute" }));
     }
 
-    /// Shows a page by name (screenshots).
-    pub fn show_page(&self, page: &str) {
+    /// Shows a page by name (screenshots; "server": the first joined server's).
+    pub fn show_page(self: &Rc<Self>, page: &str) {
+        if page == "server" {
+            self.show_first_server();
+            return;
+        }
         self.stack.set_visible_child_name(page);
+    }
+
+    /// Servers… open (screenshots).
+    pub fn shot_servers(self: &Rc<Self>) {
+        self.servers_dialog();
     }
 
     /// Plays the song shown, from where it was (screenshots; silent there).
@@ -3986,6 +4085,7 @@ impl Ui {
     fn play_from(self: &Rc<Self>, place: &Place) {
         match place {
             Place::List(list, i) | Place::Liked(list, i) | Place::Playlist(_, list, i) => self.play_list((**list).clone(), *i),
+            Place::Server(list, i) => self.play_from_server(list, *i),
             Place::Queue(i) => {
                 self.index.set(*i);
                 self.play_current();
@@ -4033,7 +4133,7 @@ impl Ui {
 
     fn open_menu(self: &Rc<Self>, on: &gtk::Widget, place: &Place, at: Option<(f64, f64)>) {
         let track = match place {
-            Place::List(list, i) | Place::Liked(list, i) | Place::Playlist(_, list, i) => list.get(*i).cloned(),
+            Place::List(list, i) | Place::Liked(list, i) | Place::Playlist(_, list, i) | Place::Server(list, i) => list.get(*i).cloned(),
             Place::Queue(i) => self.queue.borrow().get(*i).cloned(),
             Place::Again(t) => Some(t.clone()),
             Place::Current => self.current.borrow().clone(),
@@ -4099,7 +4199,12 @@ impl Ui {
         add(&mine, if liked { "Remove from Liked" } else { "Like" }, "like", Box::new(move |me| me.toggle_like(&t1)));
         let t1 = t.clone();
         add(&mine, "Song Radio", "radio", Box::new(move |me| me.start_radio(&t1)));
-        if self.can_split() && !t.video && !split::done(&t) {
+        if let Some(s) = self.splits_on_server(&t) {
+            if Self::shown_parts(&t).is_empty() && !self.away_on_server(&t) {
+                let t1 = t.clone();
+                add(&mine, &format!("Split on {}", s.name), "split", Box::new(move |me| me.split_on_server(&t1)));
+            }
+        } else if self.can_split() && !t.video && !split::done(&t) {
             let t1 = t.clone();
             add(&mine, "Split Vocals", "split", Box::new(move |me| {
                 me.split_now(&t1);
@@ -4107,6 +4212,24 @@ impl Ui {
             }));
         }
         menu.append_section(None, &mine);
+
+        // a Radiance Music Server's: its party, saving its song, adding yours to it
+        let server = gio::Menu::new();
+        if t.source == Source::Server && servers::of_track(&t).is_some_and(|s| self.in_party_on(&s.address)) {
+            let t1 = t.clone();
+            add(&server, "Add to the Party", "party-add", Box::new(move |me| me.add_to_party(&t1)));
+        }
+        if t.source == Source::Server && t.file.is_none() && !liked {
+            let t1 = t.clone();
+            add(&server, "Save to Your Library", "save", Box::new(move |me| me.toggle_like(&t1)));
+        }
+        for (i, s) in self.servers_for(&t).into_iter().enumerate() {
+            let t1 = t.clone();
+            add(&server, &format!("Add to {}", s.name), &format!("to-server-{i}"), Box::new(move |me| me.add_to_server(&t1, &s)));
+        }
+        if server.n_items() > 0 {
+            menu.append_section(None, &server);
+        }
 
         let go = gio::Menu::new();
         let artists = t.artists();
@@ -4232,7 +4355,11 @@ impl Ui {
         }
         lines.push(format!(
             "From: {}",
-            if t.lossless() { format!("Internet Archive, lossless ({})", t.format) } else { "YouTube Music, compressed (Opus)".into() }
+            match t.source {
+                Source::Server => format!("{} ({})", servers::of_track(t).map(|s| s.name).unwrap_or_else(|| "a Radiance Music Server".into()), t.format),
+                _ if t.lossless() => format!("Internet Archive, lossless ({})", t.format),
+                _ => "YouTube Music, compressed (Opus)".into(),
+            }
         ));
         if self.current.borrow().as_ref().is_some_and(|c| c.key() == t.key()) && self.quality_known.get() {
             lines.push(format!("Playing as: {}", self.bar_quality.label()));
@@ -5080,6 +5207,10 @@ impl Ui {
 
     fn play_current(self: &Rc<Self>) {
         crate::watch::doing("starting a song");
+        if self.in_party() {
+            self.leave_party(false); // a song of your own picked: out of the party
+            self.toast("You left the party to play your own music");
+        }
         let Some(t) = self.queue.borrow().get(self.index.get()).cloned() else { return };
         // the saved copy when there is one: instant, and works offline
         let t = self
@@ -5105,7 +5236,7 @@ impl Ui {
         let mixed = have.iter().any(|p| gains.get(*p).is_some_and(|g| *g < 0.999));
         // split and saved: it plays with its parts at hand (the Mixer is then seamless)
         let at_hand = t.file.is_some() && self.voice.get() == Voice::Song;
-        if !have.is_empty() && (mixed || at_hand) && !t.video {
+        if !have.is_empty() && (mixed || at_hand) && !t.video && self.server_parts_ready(&t) {
             self.update_voice_status();
             self.start_parts(&t, 0.0, false);
             self.render_queue();
@@ -5138,6 +5269,11 @@ impl Ui {
         } else if t.source == Source::Archive {
             let uri = self.web_uri(&t.id);
             self.start(&uri, gen);
+        } else if t.source == Source::Server {
+            match self.uri_plain(&t) {
+                Some(uri) => self.start(&uri, gen),
+                None => self.unavailable(&t.title, "you left its server"),
+            }
         } else if let Some((uri, kbps)) = self.fresh_stream(&t.id) {
             self.kbps.set(kbps);
             self.start(&uri, gen);
@@ -5395,6 +5531,8 @@ impl Ui {
             format!("{} · split · {bits} · {}", v.label(), khz(rate))
         } else if flac {
             if bits.is_empty() { "Lossless · FLAC".to_string() } else { format!("Lossless · FLAC · {bits} · {}", khz(rate)) }
+        } else if t.source == Source::Server && t.file.is_none() {
+            format!("Compressed · {}", t.format)
         } else if self.kbps.get() > 0 {
             format!("Compressed · Opus · {} kbps", self.kbps.get())
         } else {
@@ -5418,6 +5556,9 @@ impl Ui {
             }
             Event::Ended => crate::log::note(&format!("ended “{song}”")),
             Event::Error(e) => crate::log::note(&format!("error playing “{song}”: {e}")),
+        }
+        if self.party_event(&ev) {
+            return; // the party's song: its end and its problems are the party's
         }
         match ev {
             Event::Ready => {
@@ -5452,7 +5593,11 @@ impl Ui {
         self.quality_known.set(true);
         let fails = self.fails.get() + 1;
         self.fails.set(fails);
-        let (reason, every_song) = self.why_not(why);
+        // a server's song: its server not answering isn't "you're offline"
+        let (reason, every_song) = self.server_reason(why).unwrap_or_else(|| {
+            let (r, all) = self.why_not(why);
+            (r.to_string(), all)
+        });
         if reason == "you're offline" {
             self.set_online(false, true);
         }
@@ -5485,6 +5630,10 @@ impl Ui {
 
     fn toggle_play(self: &Rc<Self>) {
         crate::watch::doing("play/pause");
+        if self.in_party() {
+            self.party_play_pause();
+            return;
+        }
         if self.current.borrow().is_none() {
             return;
         }
@@ -5512,6 +5661,10 @@ impl Ui {
 
     fn skip(self: &Rc<Self>, by: i32) {
         crate::watch::doing("skipping");
+        if self.in_party() {
+            self.party_skip(by);
+            return;
+        }
         if by > 0 {
             self.note_skip_if_early();
         }
@@ -5552,6 +5705,19 @@ impl Ui {
         let (i, len) = (self.index.get(), self.queue.borrow().len());
         self.prev.set_sensitive(has);
         self.next.set_sensitive(has && (i + 1 < len || self.repeat.get() == Repeat::All));
+        // in a party: Next skips for everyone (when you control it); there's no going back
+        if let Some((control, song, playing)) = self.party_buttons() {
+            // (the party's play / pause, not this computer's short waits to stay in step)
+            self.play.set_icon_name(if playing { "media-playback-pause-symbolic" } else { "media-playback-start-symbolic" });
+            self.prev.set_sensitive(false);
+            self.next.set_sensitive(control && song);
+            self.play.set_tooltip_text(Some(match (control, playing) {
+                (true, true) => "Pause the party",
+                (true, false) => "Play the party",
+                (false, true) => "Stop hearing the party here",
+                (false, false) => "Hear the party here",
+            }));
+        }
         self.bar_heart.set_sensitive(has);
         self.seek.set_sensitive(has);
         self.update_drift();
@@ -5582,7 +5748,9 @@ impl Ui {
         self.song_at.set(Some((at, Instant::now())));
         self.backdrop.sync(at);
         self.load_pulse(at);
-        self.transitions(at);
+        if !self.in_party() {
+            self.transitions(at); // (a party's songs follow the server, never a mix)
+        }
     }
 
     // ------------------------------------------------------------------ lyrics
@@ -6042,6 +6210,7 @@ impl Ui {
     fn sync_nav(&self) {
         let page = match self.stack.visible_child_name().as_deref() {
             Some("playlist") => self.playlist_now.get().map(|id| format!("playlist:{id}")).unwrap_or_default(),
+            Some("server") => self.shown_server().map(|a| format!("server:{a}")).unwrap_or_default(),
             Some("group") => self.group_back.borrow().clone(),
             Some(p) => p.to_string(),
             None => String::new(),
@@ -6510,7 +6679,11 @@ impl Ui {
         for (i, t) in waiting.iter().enumerate() {
             self.split_list.append(&row(t, &format!("Number {} in line · {}", i + 1, t.credit())));
         }
-        if now.is_none() && waiting.is_empty() {
+        let away = self.away_rows();
+        for (t, where_) in &away {
+            self.split_list.append(&row(t, where_));
+        }
+        if now.is_none() && waiting.is_empty() && away.is_empty() {
             let r = adw::ActionRow::builder().title("Nothing to split").subtitle("Liked songs are split one after another, by themselves.").build();
             self.split_list.append(&r);
         }

@@ -19,7 +19,8 @@ fn web_bytes(url: &str) -> Option<Vec<u8>> {
     if let Ok(bytes) = std::fs::read(&path) {
         return Some(bytes);
     }
-    let bytes = net::get_bytes(url)?;
+    // (a Radiance Music Server's cover needs this computer's key; it's kept by its plain address)
+    let bytes = net::get_bytes(&crate::servers::signed(url))?;
     if let Some(dir) = path.parent() {
         let _ = std::fs::create_dir_all(dir);
     }

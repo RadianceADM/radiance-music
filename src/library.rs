@@ -38,24 +38,29 @@ pub fn store(liked: &[Track]) {
     crate::db::set_liked(liked);
 }
 
-/// Whether liking a song saves a copy: lossless songs always; YouTube songs only
-/// in builds with the "save-youtube" feature (saving them breaks YouTube's terms,
-/// so public builds just stream them).
+/// Whether liking a song saves a copy: lossless songs and a server's songs
+/// always; YouTube songs only in builds with the "save-youtube" feature (saving
+/// them breaks YouTube's terms, so public builds just stream them).
 pub fn saves(t: &Track) -> bool {
-    t.source == Source::Archive || cfg!(feature = "save-youtube")
+    t.source != Source::YouTube || cfg!(feature = "save-youtube")
 }
 
 /// Saves a liked song (worker thread): the audio as the source sends it (FLAC
 /// stays FLAC), its lyrics and its album art. Returns the audio file's path.
+/// A server's song comes with everything the server has for it (servers::save).
 pub fn save(t: &Track) -> Result<String, String> {
     let dir = music_dir();
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    if t.source == Source::Server {
+        return crate::servers::save(t, &dir);
+    }
     let base = file_name(&if t.artist.is_empty() { t.title.clone() } else { format!("{} - {}", t.artist, t.title) });
     if !saves(t) {
         return Err("YouTube songs stream, they aren't saved".into());
     }
     let path = match t.source {
         Source::YouTube => youtube::save(&t.id, &dir, &base)?,
+        Source::Server => unreachable!("a server's song is saved above"),
         Source::Archive => {
             let path = dir.join(format!("{base}.flac"));
             download(&t.id, &path)?;

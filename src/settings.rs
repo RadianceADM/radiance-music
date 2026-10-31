@@ -82,6 +82,9 @@ pub struct Settings {
     pub share_firewall_open: bool,
     /// How to Use It was shown (the first time the app opened).
     pub guide_seen: bool,
+    /// The Radiance Music Servers this computer joined (Servers…): each one's
+    /// address, this computer's key there and its name.
+    pub servers: Vec<crate::servers::Joined>,
 }
 
 pub const FADE_RANGE: (f64, f64) = (1.0, 12.0);
@@ -114,6 +117,7 @@ pub fn load() -> Settings {
         autoplay: v["autoplay"].as_bool().unwrap_or(true),
         share_firewall_open: v["share_firewall_open"].as_bool().unwrap_or(false),
         guide_seen: v["guide_seen"].as_bool().unwrap_or(false),
+        servers: v["servers"].as_array().map(|a| a.iter().filter_map(crate::servers::Joined::from_json).collect()).unwrap_or_default(),
         split: (|| {
             Some(SplitServer {
                 host: text("host").filter(|h| !h.is_empty())?,
@@ -145,5 +149,14 @@ pub fn save(s: &Settings) {
     if let Some(d) = &s.music_dir {
         v["music_dir"] = json!(d);
     }
+    if !s.servers.is_empty() {
+        v["servers"] = json!(s.servers.iter().map(|j| j.to_json()).collect::<Vec<_>>());
+    }
     let _ = fs::write(&p, serde_json::to_string_pretty(&v).unwrap_or_default());
+    // it holds the servers' keys: for your account only
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(&p, fs::Permissions::from_mode(0o600));
+    }
 }
