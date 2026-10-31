@@ -32,6 +32,9 @@ Section "Radiance Music"
   RMDir /r "$INSTDIR\lib"
   RMDir /r "$INSTDIR\share"
   RMDir /r "$INSTDIR\libexec"
+  ; (test builds held the splitter here; it's downloaded into the data folder at the first start now)
+  RMDir /r "$INSTDIR\python"
+  RMDir /r "$INSTDIR\models"
   SetOutPath "$INSTDIR"
   File /r "${DIST}\*"
   File "radiance-music.ico"
@@ -52,5 +55,7 @@ Section "Uninstall"
   ; the app only: your liked songs, their parts and videos stay where they are
   Delete "$SMPROGRAMS\Radiance Music.lnk"
   RMDir /r "$INSTDIR"
+  ; and the splitter it downloaded at its first start (1.3 GB; nothing of yours in it)
+  RMDir /r "$LOCALAPPDATA\radiance-music\windows-splitter"
   DeleteRegKey HKCU "${KEY}"
 SectionEnd

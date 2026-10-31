@@ -109,10 +109,11 @@ anything. Run it again to update. To remove it, delete `~/.local/bin/radiance-mu
 
 `RadianceMusic-Setup.exe` (on [Releases](https://github.com/RadianceADM/radiance-music/releases)) installs
 Radiance Music for you alone (no administrator), with a Start menu entry; its uninstaller leaves
-your songs where they are. Windows 10 or 11, 64-bit. Splitting and word timing come inside it
-(Python, Demucs and MMS, about 860 MB in all), so it works offline with nothing to set up. Built
-on Linux (Fedora's mingw64 GTK 4 and GStreamer; `packaging/windows/pack.sh`, `pybundle.sh`,
-`vcrt.sh` and `installer.nsi`).
+your songs where they are. Windows 10 or 11, 64-bit. The installer is about 100 MB; the first
+time the app opens it gets splitting and word timing ready by itself (Python, Demucs and MMS: a
+one-time download of about 840 MB, `RadianceMusic-Splitter-win64.zip` on the 0.7.12 release,
+checked by its SHA-256), as the Linux download does. Built on Linux (Fedora's mingw64 GTK 4 and
+GStreamer; `packaging/windows/pack.sh`, `pybundle.sh`, `vcrt.sh`, `mkpack.py` and `installer.nsi`).
 
 ## The Flatpak
 

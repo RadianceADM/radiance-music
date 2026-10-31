@@ -56,23 +56,28 @@ if [ ! -f "$T/ffmpeg.exe" ]; then
 fi
 cp "$T/ffmpeg.exe" "$T/ffprobe.exe" "$D/bin/" 2>/dev/null
 copy_deps "$D/bin/ffmpeg.exe" "$D/bin/ffprobe.exe"
-# splitting: the Python the Linux setup installs (pybundle.sh), and its models, offline:
+# splitting: the Python the Linux setup installs (pybundle.sh), and its models, offline. Not in the
+# installer: the splitter pack (mkpack.py zips it; a release asset) is downloaded by the app the
+# first time it opens (owner, 2026-10-31: "download on first open ng app", setup::install_pack).
 # Demucs as Hugging Face's cache keeps it where links aren't made (real files in snapshots\),
 # MMS where torch's hub looks for it
-cp -r /srv/build/win/pybundle "$D/python"
+K=/srv/build/win/splitter-pack
+rm -rf "$K"; mkdir -p "$K"
+cp -r /srv/build/win/pybundle "$K/python"
 # torch needs the Visual C++ 2022 runtime: app-local, next to python.exe (msvc-runtime wheel, vcrt.sh)
-cp -n /srv/build/win/vcrt/x/msvc_runtime-*.data/data/*.dll "$D/python/"
+cp -n /srv/build/win/vcrt/x/msvc_runtime-*.data/data/*.dll "$K/python/"
 HT=/srv/build/win/models/huggingface/hub/models--adefossez--HTDemucs
-mkdir -p "$D/models/huggingface/hub/models--adefossez--HTDemucs" "$D/models/torch/hub/checkpoints"
-cp -r "$HT/refs" "$D/models/huggingface/hub/models--adefossez--HTDemucs/"
-cp -rL "$HT/snapshots" "$D/models/huggingface/hub/models--adefossez--HTDemucs/"
+mkdir -p "$K/models/huggingface/hub/models--adefossez--HTDemucs" "$K/models/torch/hub/checkpoints"
+cp -r "$HT/refs" "$K/models/huggingface/hub/models--adefossez--HTDemucs/"
+cp -rL "$HT/snapshots" "$K/models/huggingface/hub/models--adefossez--HTDemucs/"
 # MMS as fp16 (631 MB, not 1.26 GB): checked identical, its published weights fit fp16 exactly
 # (mms16.py: 100 % frames agree, max difference 0); torchaudio turns it back into fp32 as it loads
-cp /srv/build/win/models/model-fp16.pt "$D/models/torch/hub/checkpoints/model.pt"
+cp /srv/build/win/models/model-fp16.pt "$K/models/torch/hub/checkpoints/model.pt"
 # torch's files for building C++ extensions aren't needed to run it
-rm -rf "$D/python/Lib/site-packages/torch/include" "$D/python/Lib/site-packages/torch/share"
-rm -f "$D"/python/Lib/site-packages/torch/lib/*.lib
-find "$D/python" -name __pycache__ -type d -prune -exec rm -rf {} +
+rm -rf "$K/python/Lib/site-packages/torch/include" "$K/python/Lib/site-packages/torch/share"
+rm -f "$K"/python/Lib/site-packages/torch/lib/*.lib
+find "$K/python" -name __pycache__ -type d -prune -exec rm -rf {} +
+echo "splitter pack: $(du -sh "$K" | cut -f1) (zip it: python3 mkpack.py $K /srv/build/win/RadianceMusic-Splitter-win64.zip)"
 cp /srv/build/src/radiance-music/LICENSE /srv/build/src/radiance-music/README.md /srv/build/src/radiance-music/CHANGELOG.md "$D/"
 echo "files: $(find "$D" -type f | wc -l), dlls in bin: $(ls "$D"/bin/*.dll | wc -l), size: $(du -sh "$D" | cut -f1)"
 ls "$D/bin" | grep -E "\.exe$"

@@ -83,10 +83,31 @@ pub fn bundled() -> Option<PathBuf> {
     if !cfg!(windows) {
         return None;
     }
+    // the pack downloaded at the first start (see install_pack), or one inside the install (test builds)
+    let downloaded = pack_dir().join("python").join("python.exe");
+    if downloaded.exists() {
+        return Some(downloaded);
+    }
     let root = std::env::current_exe().ok()?.parent()?.parent()?.to_path_buf();
     let python = root.join("python").join("python.exe");
     python.exists().then_some(python)
 }
+
+/// Windows: the splitter pack (the same Python, PyTorch, Demucs and the two models the installer
+/// held before) is downloaded the first time the app opens (owner, 2026-10-31: "download on first
+/// open ng app", "setup": the installer stays small, as Linux's download does). In the app's data
+/// folder, so updating the app keeps it.
+fn pack_dir() -> PathBuf {
+    home().join("windows-splitter")
+}
+
+/// Where it comes from (this release's asset, kept for later versions), its size and SHA-256.
+#[cfg(windows)]
+const PACK_URL: &str = "https://github.com/RadianceADM/radiance-music/releases/download/v0.7.12/RadianceMusic-Splitter-win64.zip";
+#[cfg(windows)]
+const PACK_BYTES: u64 = 841_859_602;
+#[cfg(windows)]
+const PACK_SHA256: &str = "be9bf6a714fba256f05ecce45b9f90e4eaac6c52f6a73ae522f84473b30ca364";
 
 /// The models the Windows installer brings (Demucs from Hugging Face's cache, MMS from torch's).
 pub fn bundled_models() -> Option<PathBuf> {
@@ -98,6 +119,11 @@ pub fn check() -> Check {
     if let Some(p) = bundled() {
         let _ = fs::create_dir_all(home());
         return Check { python: Some(format!("Python (comes with the app: {})", p.display())), cores: cores(), ram_gb: ram_gb(), free_gb: crate::storage::free_space(&home()) as f64 / 1e9 };
+    }
+    if cfg!(windows) {
+        // it comes with the splitter pack (install_pack)
+        let _ = fs::create_dir_all(home());
+        return Check { python: Some("Python (comes with the splitter pack)".into()), cores: cores(), ram_gb: ram_gb(), free_gb: crate::storage::free_space(&home()) as f64 / 1e9 };
     }
     let python = Command::new("python3")
         .args(["-c", "import sys, venv, ensurepip; print('Python %d.%d' % sys.version_info[:2])"])
@@ -141,6 +167,101 @@ pub fn installed(threads: u32) -> Option<LocalSplitter> {
     let script = home().join("split.py");
     (python.exists() && script.exists() && venv().join(".radiance-ready").exists())
         .then(|| LocalSplitter { python: python.display().to_string(), script: script.display().to_string(), threads })
+}
+
+/// Windows: the splitter pack downloaded (picking up where a dropped download stopped), checked
+/// and unpacked into the data folder (worker thread). A damaged download starts over.
+#[cfg(windows)]
+fn install_pack(threads: u32, say: &(dyn Fn(&str, f64) + Send + Sync)) -> Result<LocalSplitter, String> {
+    use sha2::{Digest, Sha256};
+    use std::io::{Read, Write};
+    if !pack_dir().join("python").join("python.exe").exists() {
+        fs::create_dir_all(home()).map_err(|e| e.to_string())?;
+        let part = home().join("windows-splitter.zip.part");
+        let mb = |b: u64| (b as f64 / 1e6).round() as u64;
+        // the download, from where it stopped (a Range request; 200: the server starts over)
+        let mut have = fs::metadata(&part).map(|m| m.len()).unwrap_or(0);
+        if have > PACK_BYTES {
+            let _ = fs::remove_file(&part);
+            have = 0;
+        }
+        if have < PACK_BYTES {
+            // RADIANCE_PACK_URL: another place to get the same pack from (a test machine before it's published)
+            let url = std::env::var("RADIANCE_PACK_URL").unwrap_or_else(|_| PACK_URL.to_string());
+            let mut req = crate::net::agent().get(&url);
+            if have > 0 {
+                req = req.header("Range", &format!("bytes={have}-"));
+            }
+            let mut resp = req.call().map_err(|e| e.to_string())?;
+            let resumed = resp.status().as_u16() == 206;
+            if !resumed {
+                have = 0;
+            }
+            let mut file = fs::OpenOptions::new().create(true).write(true).append(resumed).truncate(!resumed).open(&part).map_err(|e| e.to_string())?;
+            let mut body = resp.body_mut().as_reader();
+            let mut buf = vec![0u8; 256 * 1024];
+            let mut said = 0u64;
+            loop {
+                let n = body.read(&mut buf).map_err(|e| e.to_string())?;
+                if n == 0 {
+                    break;
+                }
+                file.write_all(&buf[..n]).map_err(|e| e.to_string())?;
+                have += n as u64;
+                if have - said >= 4_000_000 || have >= PACK_BYTES {
+                    said = have;
+                    say(&format!("Downloading the splitter: {} of {} MB…", mb(have), mb(PACK_BYTES)), 0.8 * have as f64 / PACK_BYTES as f64);
+                }
+            }
+            file.flush().map_err(|e| e.to_string())?;
+            if have < PACK_BYTES {
+                return Err(format!("the download stopped at {} of {} MB (connection reset)", mb(have), mb(PACK_BYTES)));
+            }
+        }
+        say("Checking the download…", 0.8);
+        let mut hash = Sha256::new();
+        let mut f = fs::File::open(&part).map_err(|e| e.to_string())?;
+        let mut buf = vec![0u8; 1 << 20];
+        loop {
+            let n = f.read(&mut buf).map_err(|e| e.to_string())?;
+            if n == 0 {
+                break;
+            }
+            hash.update(&buf[..n]);
+        }
+        let got: String = hash.finalize().iter().map(|b| format!("{b:02x}")).collect();
+        if got != PACK_SHA256 {
+            let _ = fs::remove_file(&part);
+            return Err("the download came damaged; it starts over".into());
+        }
+        // unpacked beside, then moved into place: half an unpack never looks ready
+        let new = home().join("windows-splitter.new");
+        let _ = fs::remove_dir_all(&new);
+        let mut zip = zip::ZipArchive::new(fs::File::open(&part).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+        let count = zip.len();
+        for i in 0..count {
+            let mut entry = zip.by_index(i).map_err(|e| e.to_string())?;
+            let Some(rel) = entry.enclosed_name() else { continue };
+            let to = new.join(rel);
+            if entry.is_dir() {
+                fs::create_dir_all(&to).map_err(|e| e.to_string())?;
+                continue;
+            }
+            if let Some(d) = to.parent() {
+                fs::create_dir_all(d).map_err(|e| e.to_string())?;
+            }
+            let mut out = fs::File::create(&to).map_err(|e| e.to_string())?;
+            std::io::copy(&mut entry, &mut out).map_err(|e| e.to_string())?;
+            if i % 200 == 0 {
+                say("Unpacking the splitter…", 0.8 + 0.19 * i as f64 / count as f64);
+            }
+        }
+        let _ = fs::remove_dir_all(pack_dir());
+        fs::rename(&new, pack_dir()).map_err(|e| e.to_string())?;
+        let _ = fs::remove_file(&part);
+    }
+    say("Ready", 1.0);
+    installed(threads).ok_or_else(|| "the splitter pack is there, but its Python isn't".into())
 }
 
 /// The scripts written again when this app's are newer (worker thread).
@@ -211,11 +332,14 @@ fn step(cmd: &mut Command, log: &mut fs::File, line: &dyn Fn(&str)) -> Result<()
 
 /// Sets splitting up on this computer (worker thread; 10 to 30 minutes, about
 /// 2.5 GB downloaded). `say(what's happening, part done 0-1)`.
+#[cfg_attr(windows, allow(unreachable_code))] // (Windows: the pack, not a venv)
 pub fn install(threads: u32, say: &(dyn Fn(&str, f64) + Send + Sync)) -> Result<LocalSplitter, String> {
     let problems = check().problems();
     if !problems.is_empty() {
         return Err(problems.join(" "));
     }
+    #[cfg(windows)]
+    return install_pack(threads, say);
     fs::create_dir_all(home()).map_err(|e| e.to_string())?;
     let mut log = fs::File::create(home().join("demucs.install.log")).map_err(|e| e.to_string())?;
     let (py, pip) = (venv().join("bin/python"), venv().join("bin/pip"));

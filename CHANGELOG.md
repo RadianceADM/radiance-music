@@ -6,10 +6,11 @@
   couldn't play a song at all. It plays through Windows' own (WASAPI) now (checked on a real
   Windows 11).
 - **Windows splits songs too**, as Linux does: drums, bass, other and vocals, made on your PC,
-  and every word of the lyrics timed from the vocals (MMS). Everything comes inside the
-  installer (Python, Demucs, the word-timing model), so there's nothing to download or set up:
-  it works offline, and Settings' Splitting has the same cores setting. The installer is
-  bigger for it (about 860 MB).
+  and every word of the lyrics timed from the vocals (MMS). As the Linux download does, the
+  installer stays small (about 100 MB) and the app gets splitting ready by itself the first
+  time it opens: a one-time download of about 840 MB (Python, Demucs, the word-timing model)
+  while its sunrise shows how far along it is, picking up where it stopped if the internet
+  drops, checked before it's used. Settings' Splitting has the same cores setting.
 - On Windows, the programs the app runs (yt-dlp, the splitter) open no console windows, and
   splitting runs at idle priority, so the music and the rest of the PC go first.
 - **Lossless songs play on Windows:** the Internet Archive's FLAC files failed there with a
@@ -28,6 +29,12 @@
 - **One Radiance Music on Windows:** opening it again (Start menu, desktop) brings back the
   window that's already open, as on Linux, instead of starting a second one. So closing the
   window while music plays keeps it playing there too.
+
+- **The Mixer after Reset:** lowering Vocals could leave only the vocals playing, until Drums,
+  Bass and Other were each moved again: Reset put the sliders back at full but not the parts
+  behind them. Every change now sends every part's volume.
+- The "How to use it" cards wait until the first start's setup is done (they came up over the
+  sunrise while it was still getting splitting ready).
 
 Linux and Windows alike, what the app says when something's wrong:
 

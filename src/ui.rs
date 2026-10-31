@@ -876,6 +876,8 @@ pub struct Ui {
     lyrics_offline: Cell<bool>,
     /// Songs that wouldn't play, in a row (see `unavailable`)
     fails: Cell<u32>,
+    /// The sunrise is held for the first start's setup (the guide waits for it)
+    setup_holding: Cell<bool>,
     /// The first start's splitter setup, waiting to try again (when the internet's back, or soon)
     setup_waiting: RefCell<Option<Box<dyn FnOnce()>>>,
     split: adw::OverlaySplitView,
@@ -1175,6 +1177,7 @@ impl Ui {
             online: Cell::new(true),
             lyrics_offline: Cell::new(false),
             fails: Cell::new(0),
+            setup_holding: Cell::new(false),
             setup_waiting: RefCell::default(),
             split: adw::OverlaySplitView::builder()
                 .sidebar_position(gtk::PackType::End)
@@ -1566,7 +1569,8 @@ impl Ui {
     fn get_splitter_ready(self: &Rc<Self>, splash: Option<&splash::Splash>) {
         {
             let s = self.settings.borrow();
-            if s.split.is_some() || s.local_split.is_some() {
+            // (a splitter whose Python is gone, an old Windows test install's: set up again)
+            if s.split.is_some() || s.local_split.as_ref().is_some_and(|l| std::path::Path::new(&l.python).exists()) {
                 return;
             }
         }
@@ -1577,6 +1581,7 @@ impl Ui {
         }
         if let Some(s) = splash {
             s.hold();
+            self.setup_holding.set(true);
             s.progress("Getting Radiance Music ready…", 0.0);
         }
         self.set_splitter_up(splash.cloned(), acted);
@@ -1635,11 +1640,13 @@ impl Ui {
                         if let Some(s) = &splash {
                             s.release();
                         }
+                        me.setup_holding.set(false);
                     }
                     Ok(None) => {
                         if let Some(s) = &splash {
                             s.release();
                         }
+                        me.setup_holding.set(false);
                     }
                     Err(e) => {
                         crate::log::note(&format!("getting splitting ready stopped: {e}"));
@@ -1711,6 +1718,7 @@ impl Ui {
             if let Some(s) = sp.upgrade() {
                 s.release(); // (its buttons go with it)
             }
+            me.setup_holding.set(false);
             // the next try has no sunrise to report to
             let w = Rc::downgrade(&me);
             me.setup_waiting.replace(Some(Box::new(move || {
@@ -1800,11 +1808,15 @@ impl Ui {
         self.home_later_parts(0); // what changed while it was being built
         // how to use it, the first time the app opens (once the start's dark has opened)
         if !self.settings.borrow().guide_seen && std::env::var_os("RADIANCE_SHOT").is_none() {
+            // (not over the sunrise while it holds for the first start's setup: after it)
             let me = Rc::downgrade(self);
-            glib::timeout_add_local_once(Duration::from_millis(1800), move || {
-                if let Some(me) = me.upgrade() {
-                    me.show_guide();
+            glib::timeout_add_local(Duration::from_millis(1800), move || {
+                let Some(me) = me.upgrade() else { return glib::ControlFlow::Break };
+                if me.setup_holding.get() {
+                    return glib::ControlFlow::Continue;
                 }
+                me.show_guide();
+                glib::ControlFlow::Break
             });
         }
         let steps: Vec<String> = took.iter().map(|(what, ms)| format!("{what} {ms} ms")).collect();
@@ -3149,13 +3161,7 @@ impl Ui {
 
     /// The volumes the player gets for a song's parts, as its sliders say.
     fn gains_for(&self, t: &Track) -> HashMap<String, f64> {
-        let mut g = self.part_gains.borrow().clone();
-        if !split::wants_six(t) {
-            let other = g.get("other").copied().unwrap_or(1.0);
-            g.insert("piano".into(), other);
-            g.insert("guitar".into(), other);
-        }
-        g
+        part_volumes(&self.part_gains.borrow(), split::wants_six(t))
     }
 
     /// Ticked (or not) for six parts: split again in six if it isn't yet; the sliders to match.
@@ -6646,9 +6652,39 @@ impl Ui {
     }
 }
 
+/// Every part's volume for the player, at full unless its slider says otherwise. Every part,
+/// always: Reset empties the sliders' record, and a part left out kept its last volume in the
+/// player while its slider showed full (owner, 2026-10-31: "vocals lang natugtog": after Reset
+/// and Vocals down, only the vocals played until Drums, Bass and Other were each moved).
+/// Four-part songs: Piano and Guitar are inside Other, so they follow it.
+fn part_volumes(sliders: &HashMap<String, f64>, six: bool) -> HashMap<String, f64> {
+    let mut g: HashMap<String, f64> = split::SIX.iter().map(|p| (p.to_string(), sliders.get(*p).copied().unwrap_or(1.0))).collect();
+    if !six {
+        let other = g["other"];
+        g.insert("piano".into(), other);
+        g.insert("guitar".into(), other);
+    }
+    g
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_part_gets_a_volume() {
+        // after Reset (nothing set) and Vocals down: drums, bass and other go at full, said
+        let after_reset: HashMap<String, f64> = [("vocals".to_string(), 0.3)].into();
+        let g = part_volumes(&after_reset, false);
+        for p in ["drums", "bass", "other", "piano", "guitar"] {
+            assert_eq!(g[p], 1.0, "{p}");
+        }
+        assert_eq!(g["vocals"], 0.3);
+        // four parts: piano and guitar follow other
+        let other_down: HashMap<String, f64> = [("other".to_string(), 0.4), ("piano".to_string(), 0.9)].into();
+        assert_eq!(part_volumes(&other_down, false)["piano"], 0.4);
+        assert_eq!(part_volumes(&other_down, true)["piano"], 0.9);
+    }
 
     #[test]
     fn words_found_in_their_line() {
