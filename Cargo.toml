@@ -44,5 +44,5 @@ gst-plugin-gtk4 = { version = "0.15", features = ["gtk_v4_14"] }
 souvlaki = { version = "0.9", default-features = false }
 gdk4-win32 = "0.11"
 # the splitter pack, downloaded at the first start (setup::install_pack): unpacked and checked
-zip = { version = "2", default-features = false, features = ["deflate"] }
+zip = { version = "9", default-features = false, features = ["deflate"] }
 sha2 = "0.10"
