@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.7.12 — 2026-10-31
+
+- **Windows splits songs too**, as Linux does: drums, bass, other and vocals, made on your PC,
+  and every word of the lyrics timed from the vocals (MMS). Everything comes inside the
+  installer (Python, Demucs, the word-timing model), so there's nothing to download or set up:
+  it works offline, and Settings' Splitting has the same cores setting. The installer is
+  bigger for it (about 860 MB).
+- On Windows, the programs the app runs (yt-dlp, the splitter) open no console windows, and
+  splitting runs at idle priority, so the music and the rest of the PC go first.
+
 ## v0.7.11 — 2026-10-31
 
 - **Always the dark look** (Stone or True Black), even on a light desktop: it followed the

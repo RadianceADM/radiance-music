@@ -77,7 +77,28 @@ impl Check {
     }
 }
 
+/// Windows: the Python the installer brings, with Demucs, MMS and their models beside it
+/// (python\ and models\ in the app's folder): nothing to set up there.
+pub fn bundled() -> Option<PathBuf> {
+    if !cfg!(windows) {
+        return None;
+    }
+    let root = std::env::current_exe().ok()?.parent()?.parent()?.to_path_buf();
+    let python = root.join("python").join("python.exe");
+    python.exists().then_some(python)
+}
+
+/// The models the Windows installer brings (Demucs from Hugging Face's cache, MMS from torch's).
+pub fn bundled_models() -> Option<PathBuf> {
+    let root = bundled()?.parent()?.parent()?.join("models");
+    root.exists().then_some(root)
+}
+
 pub fn check() -> Check {
+    if let Some(p) = bundled() {
+        let _ = fs::create_dir_all(home());
+        return Check { python: Some(format!("Python (comes with the app: {})", p.display())), cores: cores(), ram_gb: ram_gb(), free_gb: crate::storage::free_space(&home()) as f64 / 1e9 };
+    }
     let python = Command::new("python3")
         .args(["-c", "import sys, venv, ensurepip; print('Python %d.%d' % sys.version_info[:2])"])
         .output()
@@ -92,8 +113,30 @@ pub fn check() -> Check {
     Check { python, cores: cores(), ram_gb: ram_kb / 1024.0 / 1024.0, free_gb: crate::storage::free_space(&home()) as f64 / 1e9 }
 }
 
+/// This computer's memory, GB (Windows: as GLib's sysinfo can't say, ask Windows).
+fn ram_gb() -> f64 {
+    #[cfg(windows)]
+    {
+        #[repr(C)]
+        struct MemoryStatusEx { length: u32, load: u32, total_phys: u64, avail_phys: u64, total_page: u64, avail_page: u64, total_virt: u64, avail_virt: u64, avail_ext: u64 }
+        extern "system" {
+            fn GlobalMemoryStatusEx(status: *mut MemoryStatusEx) -> i32;
+        }
+        let mut m = MemoryStatusEx { length: std::mem::size_of::<MemoryStatusEx>() as u32, load: 0, total_phys: 0, avail_phys: 0, total_page: 0, avail_page: 0, total_virt: 0, avail_virt: 0, avail_ext: 0 };
+        if unsafe { GlobalMemoryStatusEx(&mut m) } != 0 {
+            return m.total_phys as f64 / 1024.0 / 1024.0 / 1024.0;
+        }
+    }
+    0.0
+}
+
 /// Set up already: the splitter in the app's folder (None: not yet).
 pub fn installed(threads: u32) -> Option<LocalSplitter> {
+    if let Some(python) = bundled() {
+        // the scripts are written into the app's data folder at start (refresh_scripts)
+        refresh_scripts();
+        return Some(LocalSplitter { python: python.display().to_string(), script: home().join("split.py").display().to_string(), threads });
+    }
     let python = venv().join("bin/python");
     let script = home().join("split.py");
     (python.exists() && script.exists() && venv().join(".radiance-ready").exists())
@@ -107,6 +150,19 @@ pub fn refresh_scripts() {
         if fs::read_to_string(&p).ok().as_deref() != Some(text) {
             let _ = fs::write(&p, text);
         }
+    }
+}
+
+/// Windows: a program run from the app opens no console window of its own (and at idle
+/// priority when `idle`). Elsewhere it does nothing.
+#[allow(unused_variables)]
+pub fn quiet_window(cmd: &mut Command, idle: bool) {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        const IDLE_PRIORITY_CLASS: u32 = 0x0000_0040;
+        cmd.creation_flags(CREATE_NO_WINDOW | if idle { IDLE_PRIORITY_CLASS } else { 0 });
     }
 }
 

@@ -31,6 +31,7 @@ fn yt_dlp(nice: bool) -> Command {
     } else {
         Command::new("yt-dlp")
     };
+    crate::setup::quiet_window(&mut cmd, false); // Windows: no console window
     if let Some(Some(browser)) = COOKIES_FROM.get() {
         cmd.args(["--cookies-from-browser", browser]);
     }

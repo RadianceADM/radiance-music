@@ -377,6 +377,15 @@ fn shared(t: &Track, server: &SplitServer, local: &LocalSplitter, file: &Path, e
 /// 2026-10-27 on a 4-core laptop: 2 cores this way slow other apps by ~60 %).
 fn here(local: &LocalSplitter) -> Command {
     let threads = local.threads.to_string();
+    if let Some(models) = crate::setup::bundled_models() {
+        // Windows: the installer's Python, at idle priority with no console window, its models
+        // in the app's folder and never fetched
+        let mut cmd = Command::new(&local.python);
+        crate::setup::quiet_window(&mut cmd, true);
+        cmd.env("HF_HOME", models.join("huggingface")).env("HF_HUB_OFFLINE", "1").env("TORCH_HOME", models.join("torch")).env("PYTHONUTF8", "1");
+        cmd.env("SPLIT_THREADS", &threads).env("ALIGN_THREADS", &threads).env("OMP_NUM_THREADS", &threads).env("MKL_NUM_THREADS", &threads);
+        return cmd;
+    }
     let idle = Path::new("/usr/bin/chrt").exists();
     let mut cmd = Command::new(if idle { "/usr/bin/chrt" } else { local.python.as_str() });
     if idle {
