@@ -1103,12 +1103,18 @@ impl Ui {
             gtk::style_context_add_provider_for_display(&display, &provider, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);
             gtk::style_context_add_provider_for_display(&display, &LOOK.with(|l| l.clone()), gtk::STYLE_PROVIDER_PRIORITY_APPLICATION + 1);
         }
+        // never bigger than the screen: Windows doesn't shrink a window to fit as GNOME
+        // does, so on a 1366×768 laptop the player bar was below the taskbar
+        let (width, height) = gdk::Display::default()
+            .and_then(|d| d.monitors().item(0)?.downcast::<gdk::Monitor>().ok())
+            .map(|m| m.geometry())
+            .map_or((1100, 780), |g| (1100.min(g.width() - 40).max(360), 780.min(g.height() - 110).max(294)));
         let window = adw::ApplicationWindow::builder()
             .application(app)
             .title("Radiance Music")
             .icon_name(APP_ID)
-            .default_width(1100)
-            .default_height(780)
+            .default_width(width)
+            .default_height(height)
             .build();
         let button = |icon: &str, tip: &str| {
             gtk::Button::builder().icon_name(icon).tooltip_text(tip).valign(gtk::Align::Center).css_classes(["flat", "circular"]).build()
@@ -1398,9 +1404,11 @@ impl Ui {
             if !u.starting.get() {
                 u.save_session(); // (still starting: where you were isn't back yet, keep it as it was)
             }
-            // closed while music plays: it plays on (the top bar's controls, or opening the app, bring it back)
+            // closed while music plays: it plays on (the top bar's controls, or opening the app, bring it back).
+            // Not on Windows: no media controls there (MPRIS is Linux's) and no D-Bus, so opening the
+            // app again starts a second one, and the hidden one would play on with no way to stop it
             let playing = u.player.borrow().as_ref().is_some_and(|p| p.playing());
-            if playing && !u.quitting.get() && std::env::var_os("RADIANCE_SHOT").is_none() {
+            if playing && !u.quitting.get() && cfg!(unix) && std::env::var_os("RADIANCE_SHOT").is_none() {
                 w.set_visible(false);
                 crate::log::note("window closed: the music plays on");
                 return glib::Propagation::Stop;

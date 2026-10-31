@@ -711,6 +711,12 @@ fn windows_paths() {
     if std::env::var_os("G_TLS_GNUTLS_PRIORITY").is_none() {
         std::env::set_var("G_TLS_GNUTLS_PRIORITY", "NORMAL");
     }
+    // without OpenGL (no graphics driver: a virtual machine, Remote Desktop) GTK tried EGL,
+    // failed every frame and never showed the window; without EGL it draws in software
+    // there, and a PC with a graphics card still draws with OpenGL (WGL)
+    if std::env::var_os("GDK_DISABLE").is_none() {
+        std::env::set_var("GDK_DISABLE", "egl");
+    }
 }
 
 fn main() -> glib::ExitCode {

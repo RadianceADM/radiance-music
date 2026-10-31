@@ -14,6 +14,13 @@
   through the app's own relay, as YouTube songs already did.
 - A song split right after installing, before anything else, failed ("can't open split.py"):
   the app's data folder wasn't made yet. It is now, first.
+- **The window shows on every Windows PC:** on one without a working graphics driver (a
+  virtual machine, Remote Desktop, an old driver) 0.7.11's window never appeared. It now draws
+  in software there; a PC with a graphics card still draws with it.
+- The window is never taller or wider than the screen (on a 1366×768 laptop the player bar was
+  under Windows' taskbar).
+- On Windows, closing the window stops the music and quits: Windows has no media controls for
+  the app yet, so a hidden window would have played on with no way back to it.
 
 ## v0.7.11 — 2026-10-31
 
