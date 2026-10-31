@@ -1,6 +1,6 @@
 [package]
 name = "radiance-music-server"
-version = "0.1.0"
+version = "0.1.2"
 edition = "2021"
 description = "Radiance Music Server (RMS): your own server for Radiance Music. It splits songs, keeps your library and holds listening parties, for you and the friends you invite"
 license = "GPL-3.0-or-later"

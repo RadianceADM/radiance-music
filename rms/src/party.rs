@@ -318,6 +318,7 @@ pub async fn start(State(app): State<Shared>, who: Who, body: axum::body::Bytes)
     }
     crate::log(&format!("{} started a listening party", who.name));
     app.party.changed();
+    app.events.party();
     Ok((StatusCode::CREATED, Json(app.party.snapshot())))
 }
 
@@ -487,7 +488,13 @@ pub async fn end(State(app): State<Shared>, who: Who) -> ApiResult<Json<Value>> 
     }
     crate::log(&format!("{} ended the listening party", who.name));
     app.party.changed();
+    app.events.party();
     Ok(Json(app.party.snapshot()))
+}
+
+/// Who hosts the party on now (None: no party).
+pub fn host_name(app: &Shared) -> Option<String> {
+    lock(&app.party.state).as_ref().map(|s| s.host.name.clone())
 }
 
 /// The device is still joined (not removed, nor its person).

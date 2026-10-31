@@ -101,7 +101,7 @@ On your server's page (the address you opened at setup, in the same browser):
 1. **Invite a friend:** type their name, then click **Make an invite**. You get a link and a QR code.
 2. Send them the link. In Radiance Music they go to **Settings → Servers → Join a server**, then paste
    the link or scan the code. On a device that has the app, the link's page also has an
-   **Open in Radiance Music** button that joins straight away. If they don't have the app yet, the
+   **Open in Radiance Music** button that opens the app with the invite filled in (one tap on Join). If they don't have the app yet, the
    page lets them listen to parties in a browser.
 3. Each link works **once**, on one device, and **expires after 7 days** if it isn't used (the list of
    invites shows how long each has left). For a friend's second device, or if their link expired, click
@@ -217,7 +217,7 @@ party's WebSocket also accept `?t=TOKEN`, because players and browsers can't set
 | `POST /api/party/control {action}` | `play`, `pause`, `skip`, `seek {position_ms}`, `reorder {entry, to}`, `remove {entry}`: the host, or everyone if allowed. `allow {everyone}`: the host only |
 | `POST /api/party/react {emoji}` | A reaction everyone sees |
 | `POST /api/party/end` | Ends the party (the host, or the server's owner) |
-| `GET /api/events` | WebSocket (`?t=` works) instead of polling: `{"type":"hello","server":{id,name}}`, then `{"type":"library"}` when songs or parts change, `{"type":"queue", …the queue}` when the split queue changes (at most twice a second while splitting), `{"type":"me"}` when your switches change or you're removed (then it closes) |
+| `GET /api/events` | WebSocket (`?t=` works) instead of polling: `{"type":"hello","server":{id,name}}`, then `{"type":"library"}` when songs or parts change, `{"type":"queue", …the queue}` when the split queue changes (at most twice a second while splitting), `{"type":"party","on":true,"host":"Bassi"}` when a party starts or ends, `{"type":"me"}` when your switches change or you're removed (then it closes) |
 | `GET /api/party/ws` | WebSocket: the full state on every change; send `{"type":"time","client_ms":N}` to get `{"type":"time","client_ms":N,"server_ms":M}` back |
 
 **Playing in time.** A playing party song has `started_at_server_ms`: the server time at which its position

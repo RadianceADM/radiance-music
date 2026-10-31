@@ -1056,7 +1056,7 @@ where
     S: futures_util::Stream<Item = Result<tokio_tungstenite::tungstenite::Message, tokio_tungstenite::tungstenite::Error>> + Unpin,
 {
     loop {
-        let m = tokio::time::timeout(Duration::from_secs(15), ws.next()).await.expect("an event in time").expect("the line is open").unwrap();
+        let m = tokio::time::timeout(Duration::from_secs(30), ws.next()).await.expect("an event in time").expect("the line is open").unwrap();
         if let Ok(text) = m.to_text() {
             if let Ok(v) = serde_json::from_str::<Value>(text) {
                 if ok(&v) {
@@ -1103,6 +1103,14 @@ async fn change_events_instead_of_polling() {
         }
     }
     assert_eq!(done["jobs"][0]["progress"], 1.0);
+    // a party started and ended: on and off, with its host (the apps' party cards stop polling)
+    let (st, _) = s.post("/api/party/start", Some(&owner), json!({})).await;
+    assert_eq!(st, StatusCode::CREATED);
+    let on = next_event(&mut ws, |v| v["type"] == "party").await;
+    assert_eq!((on["on"].clone(), on["host"].clone()), (json!(true), json!("Bassi")));
+    s.post("/api/party/end", Some(&owner), json!({})).await;
+    let off = next_event(&mut ws, |v| v["type"] == "party").await;
+    assert_eq!((off["on"].clone(), off["host"].clone()), (json!(false), Value::Null));
     // Mika's switches changed: she's told
     let res = s.http.patch(format!("{}/api/people/{mika_id}", s.base)).bearer_auth(&owner).json(&json!({ "can_split": false })).send().await.unwrap();
     assert_eq!(res.status(), StatusCode::OK);

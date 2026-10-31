@@ -25,13 +25,15 @@ use crate::Shared;
 pub struct Events {
     library: watch::Sender<u64>,
     queue: watch::Sender<u64>,
+    /// A party started or ended (its own socket carries everything inside it).
+    party: watch::Sender<u64>,
     /// A person whose switches changed, or who (or one of whose devices) was removed.
     me: broadcast::Sender<i64>,
 }
 
 impl Default for Events {
     fn default() -> Self {
-        Events { library: watch::channel(0).0, queue: watch::channel(0).0, me: broadcast::channel(64).0 }
+        Events { library: watch::channel(0).0, queue: watch::channel(0).0, party: watch::channel(0).0, me: broadcast::channel(64).0 }
     }
 }
 
@@ -42,6 +44,10 @@ impl Events {
 
     pub fn queue(&self) {
         self.queue.send_modify(|v| *v += 1);
+    }
+
+    pub fn party(&self) {
+        self.party.send_modify(|v| *v += 1);
     }
 
     pub fn me(&self, person: i64) {
@@ -59,8 +65,10 @@ async fn listen(app: Shared, who: Who, socket: WebSocket) {
     let mut library = app.events.library.subscribe();
     let mut queue = app.events.queue.subscribe();
     let mut me = app.events.me.subscribe();
+    let mut party = app.events.party.subscribe();
     library.borrow_and_update();
     queue.borrow_and_update();
+    party.borrow_and_update();
     let text = |v: Value| Message::Text(v.to_string().into());
     let hello = json!({ "type": "hello", "server": { "id": app.server_id(), "name": app.server_name() } });
     if tx.send(text(hello)).await.is_err() {
@@ -77,6 +85,13 @@ async fn listen(app: Shared, who: Who, socket: WebSocket) {
                 if changed.is_err() { break; }
                 library.borrow_and_update();
                 if tx.send(text(json!({ "type": "library" }))).await.is_err() { break; }
+            }
+            changed = party.changed() => {
+                if changed.is_err() { break; }
+                party.borrow_and_update();
+                // on or off, and who hosts it (the apps' party cards stop asking every 30 s)
+                let host = crate::party::host_name(&app);
+                if tx.send(text(json!({ "type": "party", "on": host.is_some(), "host": host }))).await.is_err() { break; }
             }
             changed = queue.changed() => {
                 if changed.is_err() { break; }
