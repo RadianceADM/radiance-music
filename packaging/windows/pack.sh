@@ -32,6 +32,10 @@ cp $SYS/libexec/gstreamer-1.0/gst-plugin-scanner.exe "$D/libexec/gstreamer-1.0/"
 copy_deps "$D/bin/radiance-music.exe" "$D"/lib/gstreamer-1.0/*.dll "$D"/libexec/gstreamer-1.0/*.exe
 # GIO: its TLS module (https in GStreamer's downloads) and proxy modules
 mkdir -p "$D/lib/gio/modules" && cp $SYS/lib/gio/modules/*.dll "$D/lib/gio/modules/" && copy_deps "$D"/lib/gio/modules/*.dll
+# gdbus.exe beside GIO's DLL: Windows has no D-Bus, GIO starts one with it. Without it the app
+# can't tell it's already running (opening it again started a second copy) and closing the
+# window while music plays would leave no way back
+cp $SYS/bin/gdbus.exe "$D/bin/" && copy_deps "$D/bin/gdbus.exe"
 # GTK: settings schemas (compiled here), icon themes, pixbuf loaders
 cp $SYS/share/glib-2.0/schemas/*.xml "$D/share/glib-2.0/schemas/" && glib-compile-schemas "$D/share/glib-2.0/schemas/"
 cp -r $SYS/share/icons/Adwaita $SYS/share/icons/hicolor "$D/share/icons/" 2>/dev/null

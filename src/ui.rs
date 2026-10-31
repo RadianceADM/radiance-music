@@ -55,6 +55,7 @@ levelbar.part-meter block.filled { background: #F38A35; }
   :root { --accent-bg-color: #F38A35; --accent-fg-color: #1a0f05; --accent-color: #FFAE63; }
 }
 .pill { padding: 2px 9px; border-radius: 999px; font-size: 0.8em; font-weight: 700; }
+.offline-pill { padding: 3px 11px; border-radius: 999px; background: alpha(@window_fg_color, 0.1); font-size: 0.85em; font-weight: 700; }
 .pill.lossless { background: alpha(@success_color, 0.18); color: @success_color; }
 .pill.compressed { background: alpha(@window_fg_color, 0.1); }
 .pill.split { background: alpha(#F38A35, 0.2); color: #FFAE63; }
@@ -322,6 +323,20 @@ fn art_source(t: &Track) -> String {
         .filter(|p| p.exists())
         .map(|p| p.display().to_string())
         .unwrap_or_else(|| t.art.clone())
+}
+
+/// "Offline", small in the top bar (shown while there's no internet).
+fn offline_pill() -> gtk::Box {
+    let pill = gtk::Box::builder()
+        .spacing(6)
+        .valign(gtk::Align::Center)
+        .css_classes(["offline-pill"])
+        .visible(false)
+        .tooltip_text("No internet: your saved songs still play. Searching, streaming and lyrics come back with it.")
+        .build();
+    pill.append(&gtk::Image::from_icon_name("network-offline-symbolic"));
+    pill.append(&gtk::Label::new(Some("Offline")));
+    pill
 }
 
 fn khz(rate: i32) -> String {
@@ -850,6 +865,19 @@ pub struct Ui {
     pub window: adw::ApplicationWindow,
     stack: adw::ViewStack,
     toasts: adw::ToastOverlay,
+    /// What the app can't work without and is missing (GStreamer's parts, yt-dlp): said until
+    /// it's fixed, with where to read how (the button)
+    banner: adw::Banner,
+    banner_help: RefCell<String>,
+    /// "Offline" in the top bar while there's no internet; `online` as GIO last said
+    offline_pill: gtk::Box,
+    online: Cell<bool>,
+    /// The lyrics shown are "none" because the internet was off (looked for again when it's back)
+    lyrics_offline: Cell<bool>,
+    /// Songs that wouldn't play, in a row (see `unavailable`)
+    fails: Cell<u32>,
+    /// The first start's splitter setup, waiting to try again (when the internet's back, or soon)
+    setup_waiting: RefCell<Option<Box<dyn FnOnce()>>>,
     split: adw::OverlaySplitView,
     // search
     search: gtk::SearchEntry,
@@ -1141,6 +1169,13 @@ impl Ui {
             // sized by the page on screen, not the widest of them all (small windows fit)
             stack: adw::ViewStack::builder().hhomogeneous(false).vhomogeneous(false).build(),
             toasts: adw::ToastOverlay::new(),
+            banner: adw::Banner::builder().revealed(false).build(),
+            banner_help: RefCell::default(),
+            offline_pill: offline_pill(),
+            online: Cell::new(true),
+            lyrics_offline: Cell::new(false),
+            fails: Cell::new(0),
+            setup_waiting: RefCell::default(),
             split: adw::OverlaySplitView::builder()
                 .sidebar_position(gtk::PackType::End)
                 .show_sidebar(false)
@@ -1382,7 +1417,10 @@ impl Ui {
             Ok(p) => *ui.player.borrow_mut() = Some(p),
             Err(e) => {
                 debug(&format!("player: {e}"));
-                ui.toast("Can't play sound on this computer (GStreamer is missing a part)");
+                ui.cant_work(
+                    "Radiance Music can't play sound here: a part of GStreamer, which plays the music, is missing",
+                    "https://github.com/RadianceADM/radiance-music#to-play-music",
+                );
             }
         }
         ui.layout();
@@ -1404,11 +1442,11 @@ impl Ui {
             if !u.starting.get() {
                 u.save_session(); // (still starting: where you were isn't back yet, keep it as it was)
             }
-            // closed while music plays: it plays on (the top bar's controls, or opening the app, bring it back).
-            // Not on Windows: no media controls there (MPRIS is Linux's) and no D-Bus, so opening the
-            // app again starts a second one, and the hidden one would play on with no way to stop it
+            // closed while music plays: it plays on (the media controls, or opening the app, bring it
+            // back; on Windows the controls are its own, and opening it again reaches this copy
+            // through gdbus.exe, shipped beside GIO)
             let playing = u.player.borrow().as_ref().is_some_and(|p| p.playing());
-            if playing && !u.quitting.get() && cfg!(unix) && std::env::var_os("RADIANCE_SHOT").is_none() {
+            if playing && !u.quitting.get() && std::env::var_os("RADIANCE_SHOT").is_none() {
                 w.set_visible(false);
                 crate::log::note("window closed: the music plays on");
                 return glib::Propagation::Stop;
@@ -1568,6 +1606,12 @@ impl Ui {
                     let _ = tx.try_send((format!("Getting Radiance Music ready: {step}"), done));
                 };
                 if acted {
+                    // RADIANCE_SHOT_SETUP=fail: a failed try (what offline looks like)
+                    if std::env::var("RADIANCE_SHOT_SETUP").as_deref() == Ok("fail") {
+                        say("Downloading PyTorch…", 0.1);
+                        std::thread::sleep(Duration::from_millis(900));
+                        return Err("acted: Failed to establish a new connection: [Errno -3] Temporary failure in name resolution".into());
+                    }
                     for (i, what) in ["Downloading PyTorch…", "Downloading Demucs…", "Downloading the splitting model (about 80 MB)…", "Downloading the word-timing model (about 1.2 GB)…", "Checking it works…"].iter().enumerate() {
                         say(what, i as f64 / 6.0);
                         std::thread::sleep(Duration::from_millis(900));
@@ -1599,19 +1643,143 @@ impl Ui {
                     }
                     Err(e) => {
                         crate::log::note(&format!("getting splitting ready stopped: {e}"));
-                        if let Some(s) = &splash {
-                            s.progress("Couldn't get it ready yet (is the internet on?). Trying again in a moment…", 0.0);
-                        }
-                        let me = Rc::downgrade(&me);
+                        // tried again when the internet's back, or in a while; meanwhile the sunrise
+                        // says why and offers a way on (it had none offline: 2026-10-31 audit)
+                        let (w1, w2) = (Rc::downgrade(&me), Rc::downgrade(&me));
+                        let again = splash.clone();
+                        me.setup_waiting.replace(Some(Box::new(move || {
+                            if let Some(me) = w1.upgrade() {
+                                me.set_splitter_up(again, acted);
+                            }
+                        })));
                         glib::timeout_add_local_once(Duration::from_secs(30), move || {
-                            if let Some(me) = me.upgrade() {
-                                me.set_splitter_up(splash, acted);
+                            if let Some(me) = w2.upgrade() {
+                                let job = me.setup_waiting.take();
+                                if let Some(job) = job {
+                                    job();
+                                }
                             }
                         });
+                        let offline = me.why_not(&e).0 == "you're offline";
+                        if offline {
+                            me.set_online(false, true);
+                        }
+                        if let Some(s) = &splash {
+                            s.progress(
+                                if !offline {
+                                    "Couldn't get splitting ready yet. Trying again in a moment…"
+                                } else {
+                                    "You're offline. Splitting songs needs a one-time download: it starts when you're back online."
+                                },
+                                0.0,
+                            );
+                            s.offer(&me.setup_buttons(s, acted));
+                        }
                     }
                 }
             },
         );
+    }
+
+    /// Under the sunrise when getting splitting ready failed: try again now, or open the app
+    /// and let it get ready in the background (as soon as it can).
+    fn setup_buttons(self: &Rc<Self>, splash: &splash::Splash, acted: bool) -> gtk::Box {
+        let row = gtk::Box::builder().spacing(12).halign(gtk::Align::Center).valign(gtk::Align::End).margin_bottom(56).build();
+        let again = gtk::Button::builder().child(&adw::ButtonContent::builder().icon_name("view-refresh-symbolic").label("Try Again").build()).css_classes(["pill"]).build();
+        let later = gtk::Button::builder()
+            .child(&adw::ButtonContent::builder().icon_name("media-playback-start-symbolic").label("Open Radiance Music Now").build())
+            .css_classes(["pill", "suggested-action"])
+            .tooltip_text("Play music now; splitting gets ready in the background when the internet's back")
+            .build();
+        row.append(&again);
+        row.append(&later);
+        let (me, sp) = (Rc::downgrade(self), splash.downgrade());
+        again.connect_clicked(move |_| {
+            let Some(me) = me.upgrade() else { return };
+            if let Some(s) = sp.upgrade() {
+                s.clear_offer();
+                s.progress("Getting Radiance Music ready…", 0.0);
+            }
+            let job = me.setup_waiting.take();
+            if let Some(job) = job {
+                job();
+            }
+        });
+        let (me, sp) = (Rc::downgrade(self), splash.downgrade());
+        later.connect_clicked(move |_| {
+            let Some(me) = me.upgrade() else { return };
+            if let Some(s) = sp.upgrade() {
+                s.release(); // (its buttons go with it)
+            }
+            // the next try has no sunrise to report to
+            let w = Rc::downgrade(&me);
+            me.setup_waiting.replace(Some(Box::new(move || {
+                if let Some(me) = w.upgrade() {
+                    me.set_splitter_up(None, acted);
+                }
+            })));
+        });
+        row
+    }
+
+    /// Something the app can't work without is missing: a banner over the page until it's
+    /// fixed (a toast was gone in 4 seconds, and then "Loading…" for ever: 2026-10-31 audit).
+    fn cant_work(&self, what: &str, help: &str) {
+        crate::log::note(&format!("missing: {what}"));
+        self.banner.set_title(what);
+        self.banner.set_button_label(Some("How to Fix It"));
+        self.banner_help.replace(help.to_string());
+        self.banner.set_revealed(true);
+    }
+
+    /// The internet came or went (GIO's network monitor): "Offline" in the top bar while
+    /// it's gone; when it's back, what came up empty meanwhile is looked for again.
+    fn set_online(self: &Rc<Self>, online: bool, changed: bool) {
+        let was = self.online.replace(online);
+        self.offline_pill.set_visible(!online);
+        if !changed || was == online {
+            return;
+        }
+        crate::log::note(if online { "back online" } else { "offline" });
+        if !online {
+            return;
+        }
+        self.toast("Back online");
+        if !self.search.text().trim().is_empty() {
+            self.run_search();
+        }
+        if self.lyrics_offline.get() {
+            let t = self.current.borrow().clone();
+            if let Some(t) = t {
+                self.load_lyrics(&t, self.play_gen.get());
+            }
+        }
+        let job = self.setup_waiting.take();
+        if let Some(job) = job {
+            job();
+        }
+    }
+
+    /// Why a song won't play, in plain words, and whether every song would fail the same way
+    /// now (then skipping on only makes a run of failures).
+    fn why_not(&self, error: &str) -> (&'static str, bool) {
+        let e = error.to_lowercase();
+        let any = |words: &[&str]| words.iter().any(|w| e.contains(w));
+        if !self.online.get() || any(&["resolve", "name resolution", "unreachable", "no route", "getaddrinfo", "connection refused", "could not connect", "network is down", "failed to establish a new connection"]) {
+            ("you're offline", true)
+        } else if e.contains("yt-dlp isn't installed") {
+            ("yt-dlp, which plays YouTube songs, isn't installed", true)
+        } else if any(&["sign in to confirm", "not a bot"]) {
+            ("YouTube wants to check you're not a bot; try again in a while", true)
+        } else if any(&["timed out", "timeout"]) {
+            ("the internet is too slow right now", true)
+        } else if any(&["missing plugin", "no decoder", "not-negotiated", "not negotiated", "no element"]) {
+            ("this computer can't play this kind of file", false)
+        } else if any(&["unavailable", "private video", "removed", "copyright", "not available", "terminated"]) {
+            ("it isn't on YouTube anymore", false)
+        } else {
+            ("its source didn't answer", false)
+        }
     }
 
     /// The start's last bits, and how long it all took (in the app log).
@@ -1620,6 +1788,15 @@ impl Ui {
         let unsaved: Vec<Track> = self.liked.borrow().iter().filter(|t| t.file.is_none() && library::saves(t)).cloned().collect();
         unsaved.into_iter().for_each(|t| self.save_liked(t));
         self.start_media_controls();
+        // YouTube songs need yt-dlp: missing, it's said now (not "Loading…" at the first song)
+        if std::env::var_os("RADIANCE_SHOT").is_none() {
+            let me = Rc::downgrade(self);
+            bg(youtube::installed, move |ok| {
+                if let (Some(me), false) = (me.upgrade(), ok) {
+                    me.cant_work("YouTube songs can't play: yt-dlp, which gets them, isn't installed", "https://github.com/RadianceADM/radiance-music#to-play-music");
+                }
+            });
+        }
         self.home_later_parts(0); // what changed while it was being built
         // how to use it, the first time the app opens (once the start's dark has opened)
         if !self.settings.borrow().guide_seen && std::env::var_os("RADIANCE_SHOT").is_none() {
@@ -2255,6 +2432,22 @@ impl Ui {
     }
 
     fn connect(self: &Rc<Self>) {
+        // the internet: GIO says when it comes and goes (Linux and Windows alike)
+        let monitor = gio::NetworkMonitor::default();
+        self.set_online(monitor.is_network_available(), false);
+        let me = Rc::downgrade(self);
+        monitor.connect_network_changed(move |_, available| {
+            if let Some(me) = me.upgrade() {
+                me.set_online(available, true);
+            }
+        });
+        let me = Rc::downgrade(self);
+        self.banner.connect_button_clicked(move |_| {
+            if let Some(me) = me.upgrade() {
+                let help = me.banner_help.borrow().clone();
+                gtk::UriLauncher::new(&help).launch(Some(&me.window), gio::Cancellable::NONE, |_| {});
+            }
+        });
         let me = Rc::downgrade(self);
         self.search.connect_search_changed(move |_| {
             if let Some(me) = me.upgrade() {
@@ -3609,13 +3802,21 @@ impl Ui {
             let me = Rc::downgrade(self);
             let (q1, q2) = (q.clone(), q.clone());
             bg(
-                move || match kind {
-                    0 => archive::search(&q1),
-                    1 => youtube::search(&q1),
-                    _ => youtube::search_videos(&q1),
+                move || {
+                    let found = match kind {
+                        0 => archive::search(&q1),
+                        1 => youtube::search(&q1),
+                        _ => youtube::search_videos(&q1),
+                    };
+                    // YouTube Music found nothing: is it the song, or the internet? (see net::reachable)
+                    let reached = (kind != 1 || !found.is_empty()).then_some(true).unwrap_or_else(crate::net::reachable);
+                    (found, reached)
                 },
-                move |found| {
+                move |(found, reached)| {
                     let Some(me) = me.upgrade() else { return };
+                    if kind == 1 {
+                        me.set_online(reached, true);
+                    }
                     if me.search_gen.get() != gen {
                         return; // typed on since
                     }
@@ -3659,13 +3860,18 @@ impl Ui {
         });
         self.lossless_spin.set_visible(lossless.is_none());
         self.fallback_spin.set_visible(youtube.is_none());
+        // offline, nothing is found anywhere: say that, not "no songs" (2026-10-31 audit)
+        let off = !self.online.get();
+        const OFF: &str = "You're offline: searching needs the internet. Your liked songs still play; it searches again when you're back online.";
         self.lossless.set_description(Some(&match &lossless {
             None => "Searching the free lossless libraries (Internet Archive)…".to_string(),
+            Some(v) if v.is_empty() && off => OFF.to_string(),
             Some(v) if v.is_empty() => format!("The free libraries have no lossless recording of “{q}”."),
             Some(_) => "Free FLAC from the Internet Archive. Played first.".to_string(),
         }));
         self.fallback.set_description(Some(&match &youtube {
             None => "Searching YouTube Music…".to_string(),
+            Some(v) if v.is_empty() && off => "YouTube Music too, once you're back online.".to_string(),
             Some(v) if v.is_empty() => format!("YouTube Music found no other songs for “{q}”."),
             Some(_) => "Compressed (Opus). The fallback when there's no lossless copy.".to_string(),
         }));
@@ -3673,6 +3879,7 @@ impl Ui {
         self.videos_spin.set_visible(videos.is_none());
         self.videos.set_description(Some(&match &videos {
             None => "Searching music videos…".to_string(),
+            Some(v) if v.is_empty() && off => "Music videos too.".to_string(),
             Some(v) if v.is_empty() => format!("No music videos for “{q}”."),
             Some(_) => "Music videos from YouTube: they play with their picture in Now playing.".to_string(),
         }));
@@ -5196,6 +5403,10 @@ impl Ui {
         }
         match ev {
             Event::Ready => {
+                self.fails.set(0);
+                if !self.online.get() && self.current.borrow().as_ref().is_some_and(|t| t.file.is_none()) {
+                    self.set_online(true, true); // it came from the internet, so that's back
+                }
                 if let Some(at) = self.restore_at.take() {
                     if let Some(p) = self.player.borrow().as_ref() {
                         p.seek(at);
@@ -5213,21 +5424,45 @@ impl Ui {
         }
     }
 
-    /// A song that won't play: a short plain note, and on to the next one.
+    /// A song that won't play: why, in plain words, and on to the next one. Not when every
+    /// song would fail the same way now (offline, yt-dlp missing, YouTube's bot check), nor
+    /// after three in a row: then it stops and says so, with Try Again (it skipped song after
+    /// song before, saying only "isn't available": 2026-10-31 audit).
     fn unavailable(self: &Rc<Self>, title: &str, why: &str) {
         debug(&format!("unavailable {title}: {why}"));
-        self.toast(&format!("“{title}” isn't available right now, skipped"));
+        crate::log::note(&format!("“{title}” won't play: {why}"));
         self.quality_known.set(true);
-        let len = self.queue.borrow().len();
-        if self.index.get() + 1 < len || self.repeat.get() == Repeat::All {
-            self.skip(1);
-        } else {
-            if let Some(p) = self.player.borrow().as_ref() {
-                p.stop();
-            }
-            self.set_quality(None, false);
-            self.set_controls();
+        let fails = self.fails.get() + 1;
+        self.fails.set(fails);
+        let (reason, every_song) = self.why_not(why);
+        if reason == "you're offline" {
+            self.set_online(false, true);
         }
+        if why.contains("yt-dlp isn't installed") {
+            self.cant_work("YouTube songs can't play: yt-dlp, which gets them, isn't installed", "https://github.com/RadianceADM/radiance-music#to-play-music");
+        }
+        let len = self.queue.borrow().len();
+        let more = self.index.get() + 1 < len || self.repeat.get() == Repeat::All;
+        if more && !every_song && fails < 3 {
+            self.toast(&format!("“{title}” can't play: {reason}. On to the next song."));
+            self.skip(1);
+            return;
+        }
+        if let Some(p) = self.player.borrow().as_ref() {
+            p.stop();
+        }
+        self.set_quality(None, false);
+        self.set_controls();
+        let text = if fails >= 3 && !every_song { format!("{fails} songs in a row wouldn't play: {reason}") } else { format!("“{title}” can't play: {reason}") };
+        let toast = adw::Toast::builder().use_markup(false).title(text).button_label("Try Again").timeout(10).build();
+        let me = Rc::downgrade(self);
+        toast.connect_button_clicked(move |_| {
+            if let Some(me) = me.upgrade() {
+                me.fails.set(0);
+                me.play_current();
+            }
+        });
+        self.toasts.add_toast(toast);
     }
 
     fn toggle_play(self: &Rc<Self>) {
@@ -5404,8 +5639,10 @@ impl Ui {
                 list.append(&label);
             }
         };
+        self.lyrics_offline.set(matches!(l, Some(Lyrics::None)) && !self.online.get());
         match l {
             None => note("Looking for lyrics…"),
+            Some(Lyrics::None) if !self.online.get() => note("You're offline: the lyrics come when you're back online."),
             Some(Lyrics::None) => note("No lyrics found for this song."),
             Some(Lyrics::Plain(text)) => {
                 for (list, class) in [(&self.lyrics_list, "lyric-plain"), (&self.side_lyrics_list, "side-plain")] {

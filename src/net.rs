@@ -43,3 +43,13 @@ pub fn post_json(url: &str, body: &Value, headers: &[(&str, &str)]) -> Option<Va
 pub fn get_bytes(url: &str) -> Option<Vec<u8>> {
     agent().get(url).call().ok()?.body_mut().with_config().limit(8 << 20).read_to_vec().ok()
 }
+
+/// The internet answers: YouTube Music's name resolves and its server takes a connection
+/// (3 s at most; worker thread). GIO's network monitor can say "online" when it isn't (it
+/// asks NetworkManager, which can't see a broken DNS or a sign-in-first Wi-Fi), so an
+/// empty search or a song that won't load asks this too.
+pub fn reachable() -> bool {
+    use std::net::{TcpStream, ToSocketAddrs};
+    let Ok(mut addrs) = ("music.youtube.com", 443).to_socket_addrs() else { return false };
+    addrs.next().is_some_and(|a| TcpStream::connect_timeout(&a, Duration::from_secs(3)).is_ok())
+}

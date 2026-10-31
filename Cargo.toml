@@ -37,3 +37,7 @@ strip = "none"
 # Windows: GStreamer's GTK 4 video sink comes inside the app (Fedora's Windows GStreamer has none)
 [target.'cfg(windows)'.dependencies]
 gst-plugin-gtk4 = { version = "0.15", features = ["gtk_v4_14"] }
+# Windows' media controls (media keys, the volume flyout, the lock screen), as MPRIS on Linux:
+# souvlaki speaks Windows' System Media Transport Controls; gdk4-win32 gives it the window
+souvlaki = { version = "0.9", default-features = false }
+gdk4-win32 = "0.11"

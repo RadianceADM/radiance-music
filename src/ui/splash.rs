@@ -125,6 +125,8 @@ mod imp {
         /// sun keeps playing until each hold is let go; what's happening, and how far.
         pub holds: Cell<u32>,
         pub progress: RefCell<Option<(String, f64)>>,
+        /// Buttons under the progress (getting ready failed: try again, or go on now).
+        pub offered: RefCell<Option<gtk::Widget>>,
     }
 
     #[glib::object_subclass]
@@ -388,6 +390,7 @@ impl Splash {
                 left.into_iter().for_each(|(_, job)| job());
                 s.show_content();
                 s.report();
+                s.clear_offer();
                 if let Some(o) = s.parent().and_downcast::<gtk::Overlay>() {
                     o.remove_overlay(s);
                 }
@@ -433,6 +436,25 @@ impl Splash {
         imp.holds.set(imp.holds.get().saturating_sub(1));
         if imp.holds.get() == 0 {
             imp.progress.replace(None);
+            self.clear_offer();
+        }
+    }
+
+    /// Buttons under what's being got ready (owner, 2026-10-31 audit: offline, the first
+    /// start had no way past the sunrise): real buttons over the drawing, near the bottom.
+    pub fn offer(&self, buttons: &impl IsA<gtk::Widget>) {
+        self.clear_offer();
+        if let Some(o) = self.parent().and_downcast::<gtk::Overlay>() {
+            o.add_overlay(buttons);
+            self.imp().offered.replace(Some(buttons.clone().upcast()));
+        }
+    }
+
+    pub fn clear_offer(&self) {
+        if let Some(w) = self.imp().offered.take() {
+            if let Some(o) = w.parent().and_downcast::<gtk::Overlay>() {
+                o.remove_overlay(&w);
+            }
         }
     }
 

@@ -211,8 +211,10 @@ impl Ui {
         let show_side = gtk::ToggleButton::builder().icon_name("sidebar-show-symbolic").tooltip_text("Show the sidebar").visible(false).build();
         content_header.pack_start(&show_side);
         content_header.pack_end(menu_button);
+        content_header.pack_end(&self.offline_pill);
         let content = adw::ToolbarView::new();
         content.add_top_bar(&content_header);
+        content.add_top_bar(&self.banner);
         content.set_content(Some(&self.split));
         // the page sits on the sidebar's colour as a card with soft corners (an inset layout)
         content.add_css_class("inset-page");

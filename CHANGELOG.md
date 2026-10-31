@@ -19,8 +19,31 @@
   in software there; a PC with a graphics card still draws with it.
 - The window is never taller or wider than the screen (on a 1366×768 laptop the player bar was
   under Windows' taskbar).
-- On Windows, closing the window stops the music and quits: Windows has no media controls for
-  the app yet, so a hidden window would have played on with no way back to it.
+- **Media controls on Windows:** the keyboard's media keys, and the player in Windows' volume
+  flyout and on the lock screen, show the song and its cover, and play, pause and skip, as
+  GNOME's top bar does on Linux.
+- **One Radiance Music on Windows:** opening it again (Start menu, desktop) brings back the
+  window that's already open, as on Linux, instead of starting a second one. So closing the
+  window while music plays keeps it playing there too.
+
+Linux and Windows alike, what the app says when something's wrong:
+
+- **Offline shows:** an "Offline" pill in the top bar while there's no internet, and "Back
+  online" when it returns. Search says you're offline (your liked songs still play) instead
+  of "no songs found", and searches again when you're back; lyrics say they'll come when
+  you're back online, not "no lyrics".
+- **A song that won't play says why** (you're offline, YouTube wants to check you're not a
+  bot, the song isn't on YouTube anymore, …) with **Try Again**. It goes on to the next song,
+  but not when every song would fail the same way, and not after three in a row: it stopped
+  saying only "isn't available" and skipping song after song.
+- **Missing GStreamer parts or yt-dlp:** a banner says so and stays, with **How to Fix It**,
+  instead of a 4-second note and then "Loading…" for ever.
+- **The first start, offline:** the sunrise says why getting splitting ready can't go on, with
+  **Try Again** and **Open Radiance Music Now** (it waited with no way past it before). It goes
+  on by itself when the internet's back.
+- **Sharing with a phone on Windows:** if Windows' firewall question was answered no, the
+  phone couldn't reach the computer and nothing said so. The share window now offers **Let It
+  In** (one Windows prompt): the sharing ports, from your home network only.
 
 ## v0.7.11 — 2026-10-31
 

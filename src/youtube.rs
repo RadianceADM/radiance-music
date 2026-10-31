@@ -38,6 +38,11 @@ fn yt_dlp(nice: bool) -> Command {
     cmd
 }
 
+/// yt-dlp is there and runs (YouTube songs need it; worker thread: it takes a second).
+pub fn installed() -> bool {
+    yt_dlp(false).arg("--version").output().is_ok_and(|o| o.status.success())
+}
+
 const CLIENT_VERSION: &str = "1.20251020.01.00";
 /// YouTube Music's "Songs" and "Videos" filters.
 const SONGS: &str = "EgWKAQIIAWoKEAkQBRAKEAMQBA%3D%3D";

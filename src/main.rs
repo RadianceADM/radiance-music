@@ -20,6 +20,11 @@ mod log;
 mod limiter;
 mod lyrics;
 mod mix;
+#[cfg(unix)]
+mod mpris;
+// Windows' own media controls, with the same face as Linux's MPRIS
+#[cfg(windows)]
+#[path = "smtc.rs"]
 mod mpris;
 mod net;
 mod player;
