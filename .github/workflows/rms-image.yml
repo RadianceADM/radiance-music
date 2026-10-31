@@ -1,0 +1,48 @@
+# Radiance Music Server's image: built from rms/Dockerfile and published to GitHub's
+# container registry, where Hostinger's "Deploy on Hostinger" button (rms/docker-compose.yml)
+# and anyone's `docker compose up` pull it. Only when the server's own files change, or by hand.
+name: Radiance Music Server image
+
+on:
+  push:
+    branches: [main]
+    paths: ["rms/**", "server/**", ".github/workflows/rms-image.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: rms-image
+  cancel-in-progress: true
+
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: The server's version (rms/Cargo.toml)
+        id: version
+        run: echo "v=$(grep -m1 '^version' rms/Cargo.toml | cut -d'"' -f2)" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: rms/Dockerfile
+          push: true
+          tags: |
+            ghcr.io/radianceadm/radiance-music-server:latest
+            ghcr.io/radianceadm/radiance-music-server:${{ steps.version.outputs.v }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/RadianceADM/radiance-music
+            org.opencontainers.image.description=Radiance Music Server: your own, for you and your friends
+            org.opencontainers.image.licenses=GPL-3.0-or-later
+            org.opencontainers.image.version=${{ steps.version.outputs.v }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
