@@ -108,6 +108,13 @@ window.fullscreen-player .page-area { border-radius: 0; }
 .section-title { font-size: 1.45em; font-weight: 800; letter-spacing: -0.5px; }
 .hero { border-radius: 26px; }
 .hero-scrim { background: linear-gradient(to right, alpha(black, 0.85) 0%, alpha(black, 0.5) 45%, alpha(black, 0.05) 100%); }
+/* the banner's sunset moves (owner, 2026-11-01: 'gumagalaw yung back draft non like with gradients'):
+   two soft lights drifting slowly over the cover, under the scrim */
+.hero-drift { background-image: radial-gradient(circle farthest-side at 35% 45%, alpha(#F38A35, 0.42), alpha(#F38A35, 0)),
+    radial-gradient(circle farthest-side at 70% 65%, alpha(#FFAE63, 0.22), alpha(#FFAE63, 0));
+  background-size: 180% 180%, 160% 160%; background-repeat: no-repeat;
+  animation: hero-drift 18s ease-in-out infinite alternate; }
+@keyframes hero-drift { from { background-position: 0% 0%, 100% 100%; } to { background-position: 100% 70%, 0% 30%; } }
 .hero-title { font-size: 2.6em; font-weight: 800; letter-spacing: -1.5px; color: #ffffff; }
 .hero-sub { font-size: 1.1em; color: alpha(#ffffff, 0.8); }
 .pill-button { border-radius: 999px; padding: 8px 20px; font-weight: 700; }
@@ -701,6 +708,7 @@ impl Ui {
         } else {
             hero.add_css_class("b1");
         }
+        hero.add_overlay(&gtk::Box::builder().css_classes(["hero-drift"]).build());
         let scrim = gtk::Box::builder().css_classes(["hero-scrim"]).build();
         hero.add_overlay(&scrim);
 
