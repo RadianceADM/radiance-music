@@ -292,6 +292,29 @@ impl Ui {
             Ok(lb) => lb,
             Err(e) => return say_problem(&format!("Couldn't start the sign-in on this computer ({e}).")),
         };
+        set_busy(true, "Getting the sign-in ready…");
+        // first: is the admin's sign-in on at all (no browser left at "not ready yet")
+        let port = lb.port;
+        let me = Rc::downgrade(self);
+        bg(
+            move || feedback::sign_in_ready(port),
+            move |ready| {
+                if with_form(|f| f.dialog.is_none()) {
+                    return;
+                }
+                let Some(me) = me.upgrade() else { return };
+                match ready {
+                    Ok(()) => me.rate_browser(lb, answer),
+                    Err(f) => {
+                        set_busy(false, "");
+                        say_problem(&f.words());
+                    }
+                }
+            },
+        );
+    }
+
+    fn rate_browser(self: &Rc<Self>, lb: feedback::Loopback, answer: Answer) {
         let p = feedback::pkce();
         let url = feedback::sign_in_url(&p, lb.port);
         let stop = Arc::new(AtomicBool::new(false));

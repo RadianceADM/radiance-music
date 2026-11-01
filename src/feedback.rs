@@ -300,6 +300,29 @@ pub fn sign_in_url(p: &Pkce, port: u16) -> String {
     )
 }
 
+/// Is the admin's Google sign-in on? Asked before the browser opens (a throwaway sign-in
+/// of its own: the admin answers 503 "not ready yet" while Google isn't set up there), so
+/// the pop-up says so instead of leaving someone at that page and waiting.
+pub fn sign_in_ready(port: u16) -> Result<(), Failure> {
+    static NO_FOLLOW: OnceLock<ureq::Agent> = OnceLock::new();
+    let agent = NO_FOLLOW.get_or_init(|| {
+        ureq::Agent::config_builder()
+            .http_status_as_error(false)
+            .max_redirects(0)
+            .user_agent(net::USER_AGENT)
+            .timeout_connect(Some(Duration::from_secs(10)))
+            .timeout_recv_response(Some(Duration::from_secs(20)))
+            .build()
+            .into()
+    });
+    let resp = agent.get(&sign_in_url(&pkce(), port)).call().map_err(|_| Failure::Offline)?;
+    match resp.status().as_u16() {
+        503 => Err(Failure::SignInStopped("Signing in to Radiance Music isn't set up yet. Your answers are kept: try again later.".into())),
+        429 => Err(Failure::TooMany(resp.headers().get("retry-after").and_then(|v| v.to_str().ok()).and_then(|v| v.trim().parse().ok()).unwrap_or(60))),
+        _ => Ok(()),
+    }
+}
+
 /// How long the browser's sign-in may take (the admin's own lasts 10 minutes).
 pub const SIGN_IN_WAIT: Duration = Duration::from_secs(10 * 60);
 
@@ -697,6 +720,12 @@ mod tests {
             assert!(Failure::TooMany(125).words().contains("3 minutes"));
             assert!(matches!(exchange("used", "v"), Err(Failure::SignInStopped(_))));
             assert!(matches!(send("rmu_abc", &a), Err(Failure::Other(w)) if w.contains("503")));
+        });
+        // the admin's sign-in still off (503 "not ready yet"), then on (a redirect to Google)
+        let (admin, _got) = fake_admin(vec![(503, "", json!({})), (302, "Location: https://accounts.google.com/o/oauth2/v2/auth\r\n", json!({}))]);
+        with_admin(&admin, || {
+            assert!(matches!(sign_in_ready(41234), Err(Failure::SignInStopped(w)) if w.contains("isn't set up yet")));
+            assert_eq!(sign_in_ready(41234), Ok(()));
         });
         // nobody there: offline
         let free = TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();

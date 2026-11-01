@@ -1145,6 +1145,21 @@ fn main() -> glib::ExitCode {
         println!("{}: kept in {:.1} s, hosted now: {}", t.title, started.elapsed().as_secs_f64(), split::hosted().contains(&t.key()));
         return glib::ExitCode::SUCCESS;
     }
+    if args.get(1).map(String::as_str) == Some("--probe-feedback") {
+        // the admin's rating API as the pop-up meets it (no answer is sent: a made-up key)
+        println!("admin: {}", feedback::base());
+        match feedback::sign_in_ready(41234) {
+            Ok(()) => println!("sign-in: on (the browser would go to Google)"),
+            Err(f) => println!("sign-in: {}", f.words()),
+        }
+        let a = feedback::Answer { enjoying: true, ratings: [5, 5, 5, 5, 5], comment: String::new() };
+        match feedback::send("rmu_probe-not-a-real-key", &a) {
+            Ok(share) => println!("send: taken?! (share {share})"),
+            Err(f) => println!("send with a made-up key: {}", f.words()),
+        }
+        println!("platform: {}, version {}", feedback::platform(), env!("CARGO_PKG_VERSION"));
+        return glib::ExitCode::SUCCESS;
+    }
     if args.get(1).map(String::as_str) == Some("--probe-server") {
         return probe_server(&args[2..]);
     }
