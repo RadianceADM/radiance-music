@@ -14,6 +14,7 @@ mod art;
 mod beat;
 mod db;
 mod effects;
+mod feedback;
 mod genre;
 mod library;
 mod log;

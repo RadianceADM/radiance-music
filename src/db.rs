@@ -189,6 +189,11 @@ pub fn plays(n: usize) -> Vec<(Track, i64)> {
     .unwrap_or_default()
 }
 
+/// How many songs were played here, and when the first one was (unix seconds): the feedback pop-up's timing.
+pub fn play_stats() -> (usize, Option<i64>) {
+    with(|c| c.query_row("SELECT COUNT(*), MIN(played_at) FROM plays", [], |r| Ok((r.get::<_, i64>(0)? as usize, r.get::<_, Option<i64>>(1)?)))).unwrap_or((0, None))
+}
+
 pub fn add_play(t: &Track, at: i64) {
     write(|c| {
         c.execute("INSERT OR IGNORE INTO plays (key, played_at, title, artist, track) VALUES (?1, ?2, ?3, ?4, ?5)", params![t.key(), at, t.title, t.artist, json(t)]).map(|_| ())

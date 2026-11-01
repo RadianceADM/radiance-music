@@ -22,6 +22,7 @@ mod sharing;
 mod splash;
 mod splitting;
 mod guide;
+mod feedback;
 mod update;
 use backdrop::Backdrop;
 use lens::Lens;
@@ -1838,6 +1839,9 @@ impl Ui {
     /// The start's last bits, and how long it all took (in the app log).
     fn started(self: &Rc<Self>, began: Instant, took: &[(&'static str, u128)]) {
         self.look_for_updates(false); // a newer version out? (the pop-up, a little later)
+        if let Ok(which) = std::env::var("RADIANCE_SHOT_RATE") {
+            self.rate_shot(&which); // a design check of the feedback pop-up
+        }
         // likes that weren't saved yet (offline, or the app closed while saving)
         let unsaved: Vec<Track> = self.liked.borrow().iter().filter(|t| t.file.is_none() && library::saves(t)).cloned().collect();
         unsaved.into_iter().for_each(|t| self.save_liked(t));
@@ -2492,6 +2496,7 @@ impl Ui {
         app.append(Some("Open the Music Folder"), Some("win.music-folder"));
         app.append(Some("How to Use It"), Some("win.guide"));
         app.append(Some("Look for Updates"), Some("win.updates"));
+        app.append(Some("Rate Radiance Music"), Some("win.rate"));
         app.append(Some("About Radiance Music"), Some("win.about"));
         menu.append_section(None, &app);
         let leave = gio::Menu::new();
@@ -2667,6 +2672,14 @@ impl Ui {
             }
         });
         self.window.add_action(&updates);
+        let rate = gio::SimpleAction::new("rate", None);
+        let me = Rc::downgrade(self);
+        rate.connect_activate(move |_, _| {
+            if let Some(me) = me.upgrade() {
+                me.rate_app();
+            }
+        });
+        self.window.add_action(&rate);
         let me = Rc::downgrade(self);
         let folder = gio::SimpleAction::new("music-folder", None);
         folder.connect_activate(move |_, _| {
@@ -5590,7 +5603,10 @@ impl Ui {
                 self.set_controls();
             }
             Event::Ended if self.repeat.get() == Repeat::One => self.play_current(),
-            Event::Ended => self.skip(1),
+            Event::Ended => {
+                self.skip(1);
+                self.feedback_moment(); // a song's end: a free moment for the feedback pop-up
+            }
             Event::Error(e) => {
                 let title = self.current.borrow().as_ref().map(|t| t.title.clone()).unwrap_or_default();
                 self.unavailable(&title, &e);
@@ -5656,10 +5672,16 @@ impl Ui {
             self.play_current(); // last time's song, from where it was (see Ready)
             return;
         }
-        if let Some(p) = self.player.borrow().as_ref() {
-            p.set_playing(!p.playing());
-        }
+        // (the pipeline may still say Playing a moment after the pause: what was asked counts)
+        let paused = self.player.borrow().as_ref().map(|p| {
+            let was = p.playing();
+            p.set_playing(!was);
+            was
+        });
         self.set_controls();
+        if paused == Some(true) {
+            self.feedback_moment(); // paused: a free moment for the feedback pop-up
+        }
     }
 
     /// The song playing, left early (before 70 % and with more than 30 s to go): a skip.

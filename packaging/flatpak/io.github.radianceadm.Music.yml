@@ -22,6 +22,7 @@ finish-args:
   - --filesystem=xdg-music # liked songs go to Music/Radiance Music
   - --filesystem=xdg-videos # their music videos
   - --own-name=org.mpris.MediaPlayer2.RadianceMusic # the top bar's media controls
+  - --talk-name=org.freedesktop.secrets # the feedback sign-in kept in the keyring (GNOME Keyring, KWallet)
 modules:
   # FFmpeg, only what yt-dlp asks of it: joining a video to its sound, taking a
   # song's sound out (Opus), its tags. Nothing else is built.
