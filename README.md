@@ -187,9 +187,7 @@ yt-dlp, which keeps up with YouTube's changes, so keep yt-dlp updated. If YouTub
 "confirm you're not a bot", updating yt-dlp usually fixes it. You can also let yt-dlp use your
 browser's YouTube sign-in.
 
-Saving songs and music videos from YouTube goes against YouTube's terms of service. That's
-your choice to make for your own use. To build a player that only streams YouTube songs and
-never saves them:
+To build a player that only streams YouTube songs and never saves them:
 
 ```sh
 cargo build --release --no-default-features

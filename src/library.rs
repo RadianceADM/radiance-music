@@ -39,8 +39,8 @@ pub fn store(liked: &[Track]) {
 }
 
 /// Whether liking a song saves a copy: lossless songs and a server's songs
-/// always; YouTube songs only in builds with the "save-youtube" feature (saving
-/// them breaks YouTube's terms, so public builds just stream them).
+/// always; YouTube songs only in builds with the "save-youtube" feature (on by
+/// default; a build without it only streams them).
 pub fn saves(t: &Track) -> bool {
     t.source != Source::YouTube || cfg!(feature = "save-youtube")
 }
