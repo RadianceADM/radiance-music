@@ -1,5 +1,22 @@
 # Changelog
 
+## v0.7.13 — 2026-11-01
+
+- **Updates tell you they're out:** a pop-up when a new version is out, with Update Now,
+  Remind Me Later (a day) and Skip This Version, and Look for Updates in the menu. Update Now
+  downloads while the music keeps playing, checks the file, then shows Restart to Update; it
+  never restarts by itself. Windows and the Linux download put the new version on for you; the
+  Flatpak updates through Flatpak itself, from Radiance Music's own Flatpak repository.
+- **Join a Radiance Music Server:** your own server, or a friend's. Menu → Servers, then paste
+  the invite link (or open it: radiancemusic:// links open the app). Each server you joined
+  shows in the sidebar under Library: play its songs, save them with their parts, add your liked
+  songs to it, and split songs there instead of on your computer, taking turns with everyone
+  else. Changes on the server show right away.
+- **Listening parties:** start or join one on a server, and everyone in it hears the same song
+  at the same moment, wherever they are. Up next, who's listening, reactions, and the host plays,
+  pauses and skips. Leaving brings back your own queue.
+- The quality pill under the song no longer runs out of the window at phone width.
+
 ## v0.7.12 — 2026-10-31
 
 - **Sound on Windows:** 0.7.11's player asked for Linux's sound output, so on Windows it
