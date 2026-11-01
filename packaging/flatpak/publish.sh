@@ -35,11 +35,27 @@ flatpak build-update-repo "${gpg[@]}" --title="Radiance Music" --generate-static
   echo "Comment=Radiance Music, an open beta: updates for its own Flatpak"
   echo "GPGKey=$(base64 -w0 "$public_key")"
 } > "$pages/radiance-music.flatpakrepo"
+# a one-click install (music.radianceph.com links it; GNOME Software opens it):
+# flatpak install --user <url>io.github.radianceadm.Music.flatpakref
+{
+  echo "[Flatpak Ref]"
+  echo "Name=io.github.radianceadm.Music"
+  echo "Branch=master"
+  echo "Title=Radiance Music"
+  echo "Url=$repo_url"
+  echo "SuggestRemoteName=radiance-music"
+  echo "RuntimeRepo=https://dl.flathub.org/repo/flathub.flatpakrepo"
+  echo "IsRuntime=false"
+  echo "Homepage=https://music.radianceph.com"
+  echo "Comment=Radiance Music, an open beta"
+  echo "GPGKey=$(base64 -w0 "$public_key")"
+} > "$pages/io.github.radianceadm.Music.flatpakref"
 touch "$pages/.nojekyll" # served as plain files
 cat > "$pages/index.html" <<'HTML'
 <!doctype html><meta charset="utf-8"><title>Radiance Music: Flatpak updates</title>
 <p>This is where the Radiance Music Flatpak gets its updates. To install the app, go to
-<a href="https://music.radianceph.com">music.radianceph.com</a>.</p>
+<a href="https://music.radianceph.com">music.radianceph.com</a>, or open
+<a href="io.github.radianceadm.Music.flatpakref">io.github.radianceadm.Music.flatpakref</a>.</p>
 HTML
 # the download: installs it and adds our repo (with its key) for its updates
 flatpak build-bundle "${gpg[@]}" --runtime-repo=https://dl.flathub.org/repo/flathub.flatpakrepo \
