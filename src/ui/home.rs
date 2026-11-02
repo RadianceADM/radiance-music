@@ -245,6 +245,13 @@ impl Ui {
         snug.add_setter(&self.split, "collapsed", Some(&true.to_value()));
         snug.add_setter(&self.lyrics_scroll, "visible", Some(&false.to_value()));
         self.window.add_breakpoint(snug);
+        // the panel's Lyrics tab comes and goes with Now Playing's own lyrics column
+        let me = Rc::downgrade(self);
+        self.lyrics_scroll.connect_visible_notify(move |_| {
+            if let Some(me) = me.upgrade() {
+                me.sync_lyrics_tab();
+            }
+        });
         // Under 860: also the sidebar slides over, from its button, and Now Playing's art
         // stands above (its lyrics are in the panel's tab).
         let (np, left, middle) = self.np_parts.borrow().clone().expect("Now Playing is built before the shell");
@@ -333,6 +340,7 @@ impl Ui {
         let me = Rc::downgrade(self);
         self.stack.connect_visible_child_name_notify(move |st| {
             let (Some(me), Some(name)) = (me.upgrade(), st.visible_child_name()) else { return };
+            me.sync_lyrics_tab();
             let name = match name.as_str() {
                 "group" => me.group_back.borrow().clone(),
                 "playlist" => me.playlist_now.get().map(|id| format!("playlist:{id}")).unwrap_or_default(),
