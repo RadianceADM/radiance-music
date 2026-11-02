@@ -24,9 +24,14 @@ tungstenite = { version = "0.29", default-features = false, features = ["handsha
 # the feedback pop-up's sign-in (feedback.rs): PKCE's S256 and its random secrets
 sha2 = "0.10"
 getrandom = "0.3"
+# the splitter without Python (owner 2026-11-02): Demucs as ONNX, as the phone runs it;
+# ONNX Runtime's library is loaded at run time (not linked), so builds don't need it
+ort = { version = "=2.0.0-rc.15", optional = true, default-features = false, features = ["load-dynamic", "std"] }
 
 [features]
 default = ["save-youtube"]
+# Splitting inside the app (onnx_split.rs) instead of Python's Demucs: prototype, not wired yet
+onnx-split = ["dep:ort"]
 # Liked YouTube songs are saved as files too, with their music videos (720p)
 # and lyrics: like it, save it, split it, all on your own computer. Build with
 # --no-default-features for a player that only streams YouTube songs.

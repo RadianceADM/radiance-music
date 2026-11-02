@@ -28,6 +28,8 @@ mod mpris;
 #[path = "smtc.rs"]
 mod mpris;
 mod net;
+#[cfg(feature = "onnx-split")]
+mod onnx_split;
 mod player;
 mod relay;
 mod servers;
@@ -1254,6 +1256,32 @@ fn main() -> glib::ExitCode {
     }
     if args.get(1).map(String::as_str) == Some("--probe-start") && args.len() > 2 {
         return probe_start(&args[2..]);
+    }
+    // the splitter without Python (prototype): --probe-onnx-split RUNTIME MODEL SONG OUT_DIR [THREADS]
+    #[cfg(feature = "onnx-split")]
+    if args.get(1).map(String::as_str) == Some("--probe-onnx-split") && args.len() > 5 {
+        let threads = args.get(6).and_then(|n| n.parse().ok()).unwrap_or(2);
+        let last = std::cell::Cell::new(0u32);
+        let report = |p: f64| {
+            let tenth = (p * 10.0) as u32;
+            if tenth > last.get() {
+                last.set(tenth);
+                println!("  {:>3.0} %", p * 100.0);
+            }
+        };
+        let started = std::time::Instant::now();
+        let p = |i: usize| std::path::Path::new(&args[i]);
+        return match onnx_split::split(p(2), p(3), p(4), p(5), threads, &report) {
+            Ok((files, took)) => {
+                println!("files {}", files.join(" "));
+                println!("model {:.1} s, read {:.1} s, split {:.1} s, write {:.1} s; all {:.1} s ({threads} threads)", took.load, took.decode, took.separate, took.write, started.elapsed().as_secs_f64());
+                glib::ExitCode::SUCCESS
+            }
+            Err(e) => {
+                println!("FAILED: {e}");
+                glib::ExitCode::FAILURE
+            }
+        };
     }
     if args.get(1).map(String::as_str) == Some("--probe-null") {
         return probe_null(&args[2]);
