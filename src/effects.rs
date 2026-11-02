@@ -1,13 +1,12 @@
-//! The Mixer's effects (low cut, high cut, reverb) belong to Speaker EQ, a
-//! separate app that filters whatever plays on a speaker. Radiance Music asks
-//! it through its command line (`speaker-eq --effects`, `--set-effects`);
-//! without Speaker EQ installed, the Mixer simply has no effects.
+//! The Mixer's effects: low cut, high cut and reverb, done by Radiance Music
+//! itself (fx.rs; owner 2026-11-02: "no external app needed", "one setting
+//! for all"). Speaker EQ, the separate app that used to do them per speaker,
+//! is gone. One setting for every speaker, kept in settings.json and read by
+//! every player as the sound passes, so a slider is heard at once.
 
-use std::process::Command;
+use std::sync::atomic::{AtomicU64, Ordering};
 
-use gtk::glib;
-
-/// Each effect's range in Hz (its "off" end first); Speaker EQ says its own.
+/// Each effect's range in Hz (its "off" end first for the low cut, last for the high cut).
 pub const LOW_CUT: (f64, f64) = (20.0, 500.0);
 pub const HIGH_CUT: (f64, f64) = (1500.0, 20000.0);
 
@@ -19,41 +18,54 @@ pub struct Sound {
     pub reverb: f64,
 }
 
-/// The speaker playing (Speaker EQ's number for it, its name) and its effects.
-#[derive(Clone, Debug)]
-pub struct Playing {
-    pub device: usize,
-    pub name: String,
-    pub sound: Sound,
-    /// Its filter chain is running (the effects are heard).
-    pub running: bool,
+impl Sound {
+    pub const OFF: Sound = Sound { low_cut: LOW_CUT.0, high_cut: HIGH_CUT.1, reverb: 0.0 };
+
+    /// All three at their "off" end: the sound passes untouched.
+    pub fn is_off(&self) -> bool {
+        self.low_cut <= LOW_CUT.0 + 0.5 && self.high_cut >= HIGH_CUT.1 - 0.5 && self.reverb < 0.5
+    }
+
+    /// From settings.json's "effects" (missing: all off).
+    pub fn from_json(v: &serde_json::Value) -> Sound {
+        let get = |k: &str, d: f64| v[k].as_f64().unwrap_or(d);
+        Sound {
+            low_cut: get("low_cut", LOW_CUT.0).clamp(LOW_CUT.0, LOW_CUT.1),
+            high_cut: get("high_cut", HIGH_CUT.1).clamp(HIGH_CUT.0, HIGH_CUT.1),
+            reverb: get("reverb", 0.0).clamp(0.0, 100.0),
+        }
+    }
 }
 
-fn speaker_eq() -> Option<std::path::PathBuf> {
-    glib::find_program_in_path("speaker-eq")
+// what every player reads, each buffer (f64 bits)
+static LOW: AtomicU64 = AtomicU64::new(0x4034_0000_0000_0000); // 20.0
+static HIGH: AtomicU64 = AtomicU64::new(0x40D3_8800_0000_0000); // 20000.0
+static REVERB: AtomicU64 = AtomicU64::new(0);
+
+/// The effects as the Mixer says now.
+pub fn now() -> Sound {
+    let get = |a: &AtomicU64| f64::from_bits(a.load(Ordering::Relaxed));
+    Sound { low_cut: get(&LOW), high_cut: get(&HIGH), reverb: get(&REVERB) }
 }
 
-/// Speaker EQ is installed.
-pub fn available() -> bool {
-    speaker_eq().is_some()
+/// New effects, heard at once in whatever plays (saving them is the caller's).
+pub fn set(s: Sound) {
+    LOW.store(s.low_cut.to_bits(), Ordering::Relaxed);
+    HIGH.store(s.high_cut.to_bits(), Ordering::Relaxed);
+    REVERB.store(s.reverb.to_bits(), Ordering::Relaxed);
 }
 
-/// The speaker playing and its effects (None: no Speaker EQ, or it doesn't
-/// filter that speaker). Worker thread: it asks the sound server.
-pub fn effects() -> Option<Playing> {
-    let out = Command::new(speaker_eq()?).arg("--effects").output().ok()?;
-    let v: serde_json::Value = serde_json::from_slice(&out.stdout).ok()?;
-    Some(Playing {
-        device: v["device"].as_u64()? as usize,
-        name: v["name"].as_str().unwrap_or("speaker").to_string(),
-        sound: Sound { low_cut: v["low_cut"].as_f64()?, high_cut: v["high_cut"].as_f64()?, reverb: v["reverb"].as_f64()? },
-        running: v["running"].as_bool().unwrap_or(false),
-    })
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-/// Sets them (saved by Speaker EQ, heard at once). Worker thread.
-pub fn set_effects(device: usize, low_cut: f64, high_cut: f64, reverb: f64) {
-    if let Some(p) = speaker_eq() {
-        let _ = Command::new(p).arg("--set-effects").args([device.to_string(), low_cut.to_string(), high_cut.to_string(), reverb.to_string()]).output();
+    #[test]
+    fn starts_off_and_reads_back() {
+        assert_eq!(f64::from_bits(0x4034_0000_0000_0000), 20.0);
+        assert_eq!(f64::from_bits(0x40D3_8800_0000_0000), 20000.0);
+        assert!(Sound::from_json(&serde_json::Value::Null).is_off());
+        let s = Sound::from_json(&serde_json::json!({ "low_cut": 120.0, "high_cut": 8000.0, "reverb": 30.0 }));
+        assert_eq!(s, Sound { low_cut: 120.0, high_cut: 8000.0, reverb: 30.0 });
+        assert!(!s.is_off());
     }
 }

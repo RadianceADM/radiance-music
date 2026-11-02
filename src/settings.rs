@@ -85,6 +85,8 @@ pub struct Settings {
     /// The Radiance Music Servers this computer joined (Servers…): each one's
     /// address, this computer's key there and its name.
     pub servers: Vec<crate::servers::Joined>,
+    /// The Mixer's low cut, high cut and reverb: one setting for every speaker (fx.rs).
+    pub effects: crate::effects::Sound,
 }
 
 pub const FADE_RANGE: (f64, f64) = (1.0, 12.0);
@@ -118,6 +120,7 @@ pub fn load() -> Settings {
         share_firewall_open: v["share_firewall_open"].as_bool().unwrap_or(false),
         guide_seen: v["guide_seen"].as_bool().unwrap_or(false),
         servers: v["servers"].as_array().map(|a| a.iter().filter_map(crate::servers::Joined::from_json).collect()).unwrap_or_default(),
+        effects: crate::effects::Sound::from_json(&v["effects"]),
         split: (|| {
             Some(SplitServer {
                 host: text("host").filter(|h| !h.is_empty())?,
@@ -151,6 +154,9 @@ pub fn save(s: &Settings) {
     }
     if !s.servers.is_empty() {
         v["servers"] = json!(s.servers.iter().map(|j| j.to_json()).collect::<Vec<_>>());
+    }
+    if !s.effects.is_off() {
+        v["effects"] = json!({ "low_cut": s.effects.low_cut, "high_cut": s.effects.high_cut, "reverb": s.effects.reverb });
     }
     let _ = fs::write(&p, serde_json::to_string_pretty(&v).unwrap_or_default());
     // it holds the servers' keys: for your account only

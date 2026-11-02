@@ -157,7 +157,7 @@ fn watch_parts_start(stems: Rc<RefCell<Option<Rc<StemPipe>>>>, on_event: Rc<dyn 
 const SOUND_OUT: &str = if cfg!(windows) { "wasapisink" } else { "pulsesink" };
 
 /// The stream named "Radiance Music" (music, with its icon), for the desktop's sound settings
-/// and Speaker EQ: PulseAudio's output only (the others have no such properties).
+/// (PulseAudio's output only: the others have no such properties).
 fn name_stream(sink: &gst::Element) {
     if sink.find_property("stream-properties").is_none() {
         return;
@@ -184,8 +184,17 @@ fn build(i: usize, active: Rc<Cell<usize>>, decks: Rc<RefCell<Vec<Rc<Deck>>>>, o
         }
         // the deck's own volume, then the sound output, as the player's audio sink
         let level = gst::ElementFactory::make("volume").name("level").build().map_err(|e| e.to_string())?;
+        // the Mixer's effects (fx.rs) on 32-bit float, before the deck's own volume
+        let convert = gst::ElementFactory::make("audioconvert").build().map_err(|e| e.to_string())?;
+        let float = gst::ElementFactory::make("capsfilter")
+            .property("caps", gst::Caps::builder("audio/x-raw").field("format", "F32LE").build())
+            .build()
+            .map_err(|e| e.to_string())?;
+        let fx = gst::ElementFactory::make("identity").name("fx").build().map_err(|e| e.to_string())?;
+        crate::fx::listen(&fx);
         let out = gst::Bin::builder().name("out").build();
-        out.add_many([&level, &sink]).map_err(|e| e.to_string())?;
+        out.add_many([&convert, &float, &fx, &level, &sink]).map_err(|e| e.to_string())?;
+        gst::Element::link_many([&convert, &float, &fx, &level]).map_err(|e| e.to_string())?;
         if test_stuck() {
             let valve = gst::ElementFactory::make("valve").property("drop", true).build().map_err(|e| e.to_string())?;
             out.add(&valve).map_err(|e| e.to_string())?;
@@ -193,7 +202,7 @@ fn build(i: usize, active: Rc<Cell<usize>>, decks: Rc<RefCell<Vec<Rc<Deck>>>>, o
         } else {
             level.link(&sink).map_err(|e| e.to_string())?;
         }
-        let pad = level.static_pad("sink").ok_or("no pad")?;
+        let pad = convert.static_pad("sink").ok_or("no pad")?;
         out.add_pad(&gst::GhostPad::with_target(&pad).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
         playbin.set_property("audio-sink", &out);
         // songs only: a cover picture inside a file never opens a video window
@@ -809,8 +818,8 @@ impl Player {
     /// seconds, each part at `gains[name]` (0-1); all up and `whole` there:
     /// the song's own file is heard. `rate`: the song's own sample rate (kept).
     /// `switch`: from the song playing as a plain file (it fades out, this
-    /// fades in, on from where it's got to). (Reverb and the cuts are the
-    /// Speaker EQ's, after the player: see the Mixer.)
+    /// fades in, on from where it's got to). (Reverb and the cuts: fx.rs, after
+    /// the mix, before the limiter.)
     pub fn load_parts(&self, whole: Option<&str>, parts: &[(String, String)], at: f64, gains: &std::collections::HashMap<String, f64>, rate: Option<u32>, switch: bool) -> Result<(), String> {
         self.cancel_switch();
         self.cancel_mix();
@@ -863,7 +872,7 @@ impl Player {
         let w = if whole.is_some() && all_up { 1.0 } else { 0.0 };
         let rate = rate.map(|r| format!(",rate={r}")).unwrap_or_default();
         let mut desc = format!(
-            "audiomixer name=mix ! audioconvert ! audio/x-raw,format=F32LE{rate} ! identity name=keeper ! volume name=master ! audioconvert ! {}{}{} name=sound ",
+            "audiomixer name=mix ! audioconvert ! audio/x-raw,format=F32LE{rate} ! identity name=fx ! identity name=keeper ! volume name=master ! audioconvert ! {}{}{} name=sound ",
             if live && test_stuck() { "valve drop=true ! " } else { "" },
             if record.is_some() { "audio/x-raw,format=F32LE,channels=2 ! " } else { "" },
             // recording: in real time, its samples go into the file (below)
@@ -888,6 +897,10 @@ impl Player {
                 keep.parts.lock().unwrap().insert(name.clone(), level);
                 by_name.insert(name.clone(), e);
             }
+        }
+        // the Mixer's effects, before the make-up gain and limiter (they catch the reverb's peaks too)
+        if let Some(fx) = pipeline.by_name("fx") {
+            crate::fx::listen(&fx);
         }
         if let Some(keeper) = pipeline.by_name("keeper") {
             keep.clone().listen(&keeper);
@@ -1038,15 +1051,19 @@ impl Player {
         let desc = if picture == sound {
             format!(
                 "uridecodebin name=file uri=\"{picture}\" file. ! queue ! videoconvert ! gtk4paintablesink name=picture \
-                 file. ! queue ! audioconvert ! audioresample ! volume name=volume ! {out} name=sound"
+                 file. ! queue ! audioconvert ! audioresample ! audio/x-raw,format=F32LE ! identity name=fx ! volume name=volume ! {out} name=sound"
             )
         } else {
             format!(
                 "uridecodebin uri=\"{picture}\" ! videoconvert ! gtk4paintablesink name=picture \
-                 uridecodebin uri=\"{sound}\" ! audioconvert ! audioresample ! volume name=volume ! {out} name=sound"
+                 uridecodebin uri=\"{sound}\" ! audioconvert ! audioresample ! audio/x-raw,format=F32LE ! identity name=fx ! volume name=volume ! {out} name=sound"
             )
         };
         let pipeline = gst::parse::launch(&desc).map_err(|e| e.to_string())?.downcast::<gst::Pipeline>().map_err(|_| "not a pipeline")?;
+        // the Mixer's effects on the video's sound too
+        if let Some(fx) = pipeline.by_name("fx") {
+            crate::fx::listen(&fx);
+        }
         let shown = pipeline.by_name("picture").ok_or("no picture")?.property::<gtk::gdk::Paintable>("paintable");
         let volume = pipeline.by_name("volume").ok_or("no volume")?;
         volume.set_property("volume", self.master.get());
