@@ -663,7 +663,10 @@ fn probe_null(dir: &str) -> glib::ExitCode {
 fn probe_start(args: &[String]) -> glib::ExitCode {
     use std::cell::Cell;
     use std::rc::Rc;
-    std::env::set_var("RADIANCE_SILENT", "1");
+    // RADIANCE_LOUD=1: through the real sound output (the Windows VM's goes nowhere), not silent
+    if std::env::var_os("RADIANCE_LOUD").is_none() {
+        std::env::set_var("RADIANCE_SILENT", "1");
+    }
     std::env::set_var("RADIANCE_SHOT", "1"); // keeps out of the real app log
     let first = std::path::Path::new(&args[0]);
     let uri = |p: &std::path::Path| glib::filename_to_uri(p, None).ok().map(|u| u.to_string());
