@@ -651,6 +651,72 @@ fn probe_null(dir: &str) -> glib::ExitCode {
     }
 }
 
+/// Starts, silently (#28): `--probe-start FILE [FILE2]` plays FILE on a deck,
+/// then (with FILE2) clicks to FILE2 while it plays; `--probe-start DIR` plays
+/// a song with its parts (DIR: whole.opus and the parts). With
+/// RADIANCE_TEST_STUCK=N the first N sound outputs never open: the start must
+/// be made again by itself (ready about 2.5 s in instead of at once).
+fn probe_start(args: &[String]) -> glib::ExitCode {
+    use std::cell::Cell;
+    use std::rc::Rc;
+    std::env::set_var("RADIANCE_SILENT", "1");
+    std::env::set_var("RADIANCE_SHOT", "1"); // keeps out of the real app log
+    let first = std::path::Path::new(&args[0]);
+    let uri = |p: &std::path::Path| glib::filename_to_uri(p, None).ok().map(|u| u.to_string());
+    let main = glib::MainLoop::new(None, false);
+    let ready = Rc::new(Cell::new(0u32));
+    let r = ready.clone();
+    let player = Rc::new(player::Player::new(move |e| match e {
+        player::Event::Ready => r.set(r.get() + 1),
+        player::Event::Ended => {}
+        player::Event::Error(e) => println!("  ERROR {e}"),
+    }).expect("player"));
+    let started = Rc::new(Cell::new(std::time::Instant::now()));
+    if first.is_dir() {
+        let file = |name: &str| ["opus", "ogg"].iter().map(|e| first.join(format!("{name}.{e}"))).find(|f| f.exists()).and_then(|f| uri(&f));
+        let Some(whole) = file("whole") else { return glib::ExitCode::FAILURE };
+        let parts: Vec<(String, String)> = split::PARTS.iter().filter_map(|p| Some((p.to_string(), file(p)?))).collect();
+        let gains: std::collections::HashMap<String, f64> = split::PARTS.iter().map(|p| (p.to_string(), 1.0)).collect();
+        println!("a song with its {} parts, from 0 s", parts.len());
+        if let Err(e) = player.load_parts(Some(&whole), &parts, 0.0, &gains, None, false) {
+            println!("FAILED: {e}");
+            return glib::ExitCode::FAILURE;
+        }
+    } else {
+        println!("a plain file on a deck, from 0 s");
+        player.load(&uri(first).unwrap_or_default());
+    }
+    let second = args.get(1).and_then(|f| uri(std::path::Path::new(f)));
+    let (p, m, rd, st, seen) = (player.clone(), main.clone(), ready.clone(), started.clone(), Rc::new(Cell::new(0u32)));
+    let mut ticks = 0u32;
+    glib::timeout_add_local(std::time::Duration::from_millis(100), move || {
+        ticks += 1;
+        if rd.get() > seen.get() {
+            seen.set(rd.get());
+            println!("  ready #{} {:.1} s after its start, playing: {}", rd.get(), st.get().elapsed().as_secs_f64(), p.playing());
+            if rd.get() == 1 {
+                if let Some(u) = &second {
+                    println!("a click to the second file while the first plays");
+                    st.set(std::time::Instant::now());
+                    p.load(u);
+                }
+            }
+        }
+        let done = rd.get() >= if second.is_some() { 2 } else { 1 };
+        if (done && ticks % 10 == 0) || ticks > 150 {
+            if !done {
+                println!("  NOT READY after {:.1} s", st.get().elapsed().as_secs_f64());
+            }
+            p.stop();
+            m.quit();
+            return glib::ControlFlow::Break;
+        }
+        glib::ControlFlow::Continue
+    });
+    main.run();
+    if ready.get() >= if args.len() > 1 { 2 } else { 1 } { glib::ExitCode::SUCCESS } else { glib::ExitCode::FAILURE }
+}
+
 /// Crossfades with a song's parts at hand, silently: parts to parts, parts to
 /// a plain file, a plain file to parts (DIR holds whole.opus and the parts).
 fn probe_xfade(dir: &str) -> glib::ExitCode {
@@ -1168,6 +1234,9 @@ fn main() -> glib::ExitCode {
     }
     if args.get(1).map(String::as_str) == Some("--probe-xfade") {
         return probe_xfade(&args[2]);
+    }
+    if args.get(1).map(String::as_str) == Some("--probe-start") && args.len() > 2 {
+        return probe_start(&args[2..]);
     }
     if args.get(1).map(String::as_str) == Some("--probe-null") {
         return probe_null(&args[2]);
