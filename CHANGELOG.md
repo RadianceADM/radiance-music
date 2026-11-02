@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.7.14 — 2026-11-02
+
+- **Low cut, high cut and reverb, built in:** the Mixer has them for every song now (split or not, music videos too), done by Radiance Music itself: no other app needed, one setting for every speaker, on Windows too. The part sliders still answer at once with them on.
+- **Songs start on the first click:** a click starts the new song before the old one stops (it goes quiet at once), so a sound setup that closes for a moment between songs no longer refuses it; and a song on your computer that still hasn't started after a few seconds is started again by itself.
+- **Hums in step:** in word-timed lyrics, hums like "mmmh", "hmm" and "ooh" now light one after another at a steady pace, instead of bunching up or leaving gaps. Lyrics you edited yourself keep your times.
+- **A roomier Queue:** Queue and Played before show each song's title, artists and length only, so long titles fit.
+- **No second Lyrics tab:** the side panel hides its Lyrics tab while Now Playing shows the lyrics itself (it stays when the window is too narrow for them).
+- The sidebar no longer shows a Speaker EQ entry (the effects are in the Mixer now), and splitting writes a song's parts a little faster.
+
 ## v0.7.13 — 2026-11-01
 
 - **Updates tell you they're out:** a pop-up when a new version is out, with Update Now,
