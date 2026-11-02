@@ -4057,35 +4057,41 @@ impl Ui {
                 img.set_paintable(Some(tex));
             }
         });
-        // its split mark (kept up to date in place, in every list: see refresh_split_marks)
-        let slot = gtk::Box::builder().valign(gtk::Align::Center).build();
-        self.fill_split_slot(&slot, t);
-        self.split_marks.borrow_mut().push((t.clone(), slot.downgrade()));
-        row.add_suffix(&slot);
-        let quality = quality_badge(t);
-        row.add_suffix(&quality);
-        let mut extras: Vec<gtk::Widget> = vec![slot.clone().upcast(), quality.upcast()];
-        let (plays, _) = counts_of(t);
-        if plays > 0 {
-            let n = gtk::Label::builder().label(format!("{plays}×")).tooltip_text(counts_text(t)).css_classes(["dim-label", "numeric", "caption"]).build();
-            row.add_suffix(&n);
-            extras.push(n.upcast());
+        // the Queue and Played before (owner, 2026-11-02: "so crampped"): the title,
+        // the names and the length only; the marks, plays and heart stay on the pages
+        let side = matches!(place, Place::Queue(_) | Place::Again(_));
+        if !side {
+            // its split mark (kept up to date in place, in every list: see refresh_split_marks)
+            let slot = gtk::Box::builder().valign(gtk::Align::Center).build();
+            self.fill_split_slot(&slot, t);
+            self.split_marks.borrow_mut().push((t.clone(), slot.downgrade()));
+            row.add_suffix(&slot);
+            let quality = quality_badge(t);
+            row.add_suffix(&quality);
+            let mut extras: Vec<gtk::Widget> = vec![slot.clone().upcast(), quality.upcast()];
+            let (plays, _) = counts_of(t);
+            if plays > 0 {
+                let n = gtk::Label::builder().label(format!("{plays}×")).tooltip_text(counts_text(t)).css_classes(["dim-label", "numeric", "caption"]).build();
+                row.add_suffix(&n);
+                extras.push(n.upcast());
+            }
+            // on a phone the title needs the room
+            let mut kept = self.row_extras.borrow_mut();
+            if kept.len() > 4000 {
+                kept.retain(|w| w.upgrade().is_some());
+            }
+            for w in extras {
+                w.set_visible(!self.phone.get());
+                kept.push(w.downgrade());
+            }
         }
-        // on a phone the title needs the room
-        let mut kept = self.row_extras.borrow_mut();
-        if kept.len() > 4000 {
-            kept.retain(|w| w.upgrade().is_some());
-        }
-        for w in extras {
-            w.set_visible(!self.phone.get());
-            kept.push(w.downgrade());
-        }
-        drop(kept);
         if t.seconds > 0 {
             let len = gtk::Label::builder().label(t.length()).css_classes(["dim-label", "numeric"]).build();
             row.add_suffix(&len);
         }
-        row.add_suffix(&self.heart_button(t));
+        if !side {
+            row.add_suffix(&self.heart_button(t));
+        }
         let me = Rc::downgrade(self);
         let p = place.clone();
         row.connect_activated(move |_| {
