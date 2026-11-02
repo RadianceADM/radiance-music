@@ -679,7 +679,8 @@ fn probe_start(args: &[String]) -> glib::ExitCode {
         let parts: Vec<(String, String)> = split::PARTS.iter().filter_map(|p| Some((p.to_string(), file(p)?))).collect();
         let gains: std::collections::HashMap<String, f64> = split::PARTS.iter().map(|p| (p.to_string(), 1.0)).collect();
         println!("a song with its {} parts, from 0 s", parts.len());
-        if let Err(e) = player.load_parts(Some(&whole), &parts, 0.0, &gains, None, false) {
+        // the song's own file rate, as the app passes it (an .opus file: 48 kHz)
+        if let Err(e) = player.load_parts(Some(&whole), &parts, 0.0, &gains, Some(48_000), false) {
             println!("FAILED: {e}");
             return glib::ExitCode::FAILURE;
         }
