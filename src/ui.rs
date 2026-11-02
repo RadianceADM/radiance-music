@@ -48,6 +48,8 @@ const STREAM_FRESH: Duration = Duration::from_secs(3600);
 const QUEUE_ROWS: usize = 100;
 /// Songs played before, above the queue (to go back to one stuck in your head).
 const RECENT_ROWS: usize = 5;
+/// The side panel's tabs, in order (Lyrics only where Now Playing doesn't show them: sync_lyrics_tab).
+const SIDE_TABS: [(&str, &str); 3] = [("queue", "Queue"), ("lyrics", "Lyrics"), ("splits", "Splits")];
 
 const CSS: &str = "
 levelbar.part-meter trough { min-height: 6px; border-radius: 3px; }
@@ -2355,9 +2357,9 @@ impl Ui {
         queue_page.add(&self.recent_group);
         queue_page.add(&self.queue_group);
         Self::drag_scrolls(&queue_page);
-        self.side_tabs.add(adw::Toggle::builder().name("queue").label("Queue").build());
-        self.side_tabs.add(adw::Toggle::builder().name("lyrics").label("Lyrics").build());
-        self.side_tabs.add(adw::Toggle::builder().name("splits").label("Splits").build());
+        for (name, label) in SIDE_TABS {
+            self.side_tabs.add(adw::Toggle::builder().name(name).label(label).build());
+        }
         self.side_tabs.set_active_name(Some("queue"));
         self.side_stack.add_named(&queue_page, Some("queue"));
         self.side_lyrics_scroll.set_child(Some(&self.side_lyrics_list));
@@ -2386,6 +2388,9 @@ impl Ui {
         let me = Rc::downgrade(self);
         self.lyrics_button.connect_clicked(move |_| {
             if let Some(me) = me.upgrade() {
+                if me.side_tabs.toggle_by_name("lyrics").is_none() {
+                    return; // Now Playing shows them already (see sync_lyrics_tab)
+                }
                 let open_on_lyrics = me.queue_button.is_active() && me.side_tabs.active_name().as_deref() == Some("lyrics");
                 if open_on_lyrics {
                     me.queue_button.set_active(false);
@@ -4114,6 +4119,31 @@ impl Ui {
         });
         self.attach_menu(row.upcast_ref(), place);
         row
+    }
+
+    /// The side panel's Lyrics tab, only where Now Playing doesn't show the lyrics
+    /// itself (owner, 2026-11-02: "hide lyrics tab on the side bar if in now playing
+    /// screen"). Under 1060 px Now Playing has no lyrics column, so the tab stays.
+    /// A toggle group can't hide one toggle: the tabs are made again, in order.
+    pub(crate) fn sync_lyrics_tab(&self) {
+        let page_shows = self.stack.visible_child_name().as_deref() == Some("playing") && self.lyrics_scroll.is_visible();
+        let has = self.side_tabs.toggle_by_name("lyrics").is_some();
+        if has != page_shows {
+            return; // already as it should be
+        }
+        let was = self.side_tabs.active_name();
+        self.side_tabs.remove_all();
+        for (name, label) in SIDE_TABS {
+            if name != "lyrics" || !page_shows {
+                self.side_tabs.add(adw::Toggle::builder().name(name).label(label).build());
+            }
+        }
+        let now = match was.as_deref() {
+            Some("lyrics") if page_shows => "queue",
+            Some(name) => name,
+            None => "queue",
+        };
+        self.side_tabs.set_active_name(Some(now));
     }
 
     fn play_from(self: &Rc<Self>, place: &Place) {
