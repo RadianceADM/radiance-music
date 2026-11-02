@@ -175,10 +175,11 @@ install -Dm644 data/io.github.radianceadm.Music.desktop ~/.local/share/applicati
 install -Dm644 data/icons/io.github.radianceadm.Music.svg ~/.local/share/icons/hicolor/scalable/apps/io.github.radianceadm.Music.svg
 ```
 
-A Flatpak is coming.
+Or the Flatpak: [install it with one click](https://radianceadm.github.io/radiance-music-flatpak/io.github.radianceadm.Music.flatpakref);
+it updates itself from Radiance Music's own Flatpak repository.
 
-Optional: Speaker EQ, a separate app (published later), adds Low cut, High cut and Reverb to the
-Mixer for the speaker playing. Without it, the Mixer has its four parts only.
+The Mixer has Low cut, High cut and Reverb built in (since 0.7.14): for every song, on every
+speaker, nothing else to install.
 
 ## YouTube
 
