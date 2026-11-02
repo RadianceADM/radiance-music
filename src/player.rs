@@ -192,15 +192,17 @@ fn build(i: usize, active: Rc<Cell<usize>>, decks: Rc<RefCell<Vec<Rc<Deck>>>>, o
             .map_err(|e| e.to_string())?;
         let fx = gst::ElementFactory::make("identity").name("fx").build().map_err(|e| e.to_string())?;
         crate::fx::listen(&fx);
+        // and back to whatever the sound output takes (Windows' WASAPI may not take 32-bit float)
+        let back = gst::ElementFactory::make("audioconvert").build().map_err(|e| e.to_string())?;
         let out = gst::Bin::builder().name("out").build();
-        out.add_many([&convert, &float, &fx, &level, &sink]).map_err(|e| e.to_string())?;
+        out.add_many([&convert, &float, &fx, &level, &back, &sink]).map_err(|e| e.to_string())?;
         gst::Element::link_many([&convert, &float, &fx, &level]).map_err(|e| e.to_string())?;
         if test_stuck() {
             let valve = gst::ElementFactory::make("valve").property("drop", true).build().map_err(|e| e.to_string())?;
             out.add(&valve).map_err(|e| e.to_string())?;
-            gst::Element::link_many([&level, &valve, &sink]).map_err(|e| e.to_string())?;
+            gst::Element::link_many([&level, &valve, &back, &sink]).map_err(|e| e.to_string())?;
         } else {
-            level.link(&sink).map_err(|e| e.to_string())?;
+            gst::Element::link_many([&level, &back, &sink]).map_err(|e| e.to_string())?;
         }
         let pad = convert.static_pad("sink").ok_or("no pad")?;
         out.add_pad(&gst::GhostPad::with_target(&pad).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
@@ -1051,12 +1053,12 @@ impl Player {
         let desc = if picture == sound {
             format!(
                 "uridecodebin name=file uri=\"{picture}\" file. ! queue ! videoconvert ! gtk4paintablesink name=picture \
-                 file. ! queue ! audioconvert ! audioresample ! audio/x-raw,format=F32LE ! identity name=fx ! volume name=volume ! {out} name=sound"
+                 file. ! queue ! audioconvert ! audioresample ! audio/x-raw,format=F32LE ! identity name=fx ! volume name=volume ! audioconvert ! {out} name=sound"
             )
         } else {
             format!(
                 "uridecodebin uri=\"{picture}\" ! videoconvert ! gtk4paintablesink name=picture \
-                 uridecodebin uri=\"{sound}\" ! audioconvert ! audioresample ! audio/x-raw,format=F32LE ! identity name=fx ! volume name=volume ! {out} name=sound"
+                 uridecodebin uri=\"{sound}\" ! audioconvert ! audioresample ! audio/x-raw,format=F32LE ! identity name=fx ! volume name=volume ! audioconvert ! {out} name=sound"
             )
         };
         let pipeline = gst::parse::launch(&desc).map_err(|e| e.to_string())?.downcast::<gst::Pipeline>().map_err(|_| "not a pipeline")?;
