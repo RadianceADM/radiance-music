@@ -151,14 +151,57 @@ pub fn parse_lyricsfile(text: &str) -> Option<Lyrics> {
     if lines.is_empty() {
         return None;
     }
+    // times typed or tapped by hand are kept just as they are, hums too
+    let by_hand = text.contains(HAND_NOTE);
     for line in &mut lines {
         if line.words.is_empty() {
             exact = false;
             line.words = spread(&line.text, line.start, line.end);
+        } else if !by_hand {
+            even_hums(line);
         }
     }
     lines.sort_by(|a, b| a.start.total_cmp(&b.start));
     Some(Lyrics::Timed { lines, exact })
+}
+
+/// A hum: "mm", "hmm", "mmmh", "mhm", "mm-hmm", or a drawn-out "ooh", "ahh",
+/// "uhh". It has no sounds of speech for the word timer (MMS) to hold on to.
+pub(crate) fn is_hum(word: &str) -> bool {
+    let w: String = word.chars().filter(|c| c.is_alphabetic()).flat_map(char::to_lowercase).collect();
+    let n = w.chars().count();
+    let mh = n >= 2 && w.contains('m') && w.chars().all(|c| c == 'm' || c == 'h');
+    // three letters or more: a short "oh", "ah", "uh" (and "aha", "huh") stay words
+    let drawn = n >= 3 && w.starts_with(|c| "oau".contains(c)) && w.chars().all(|c| "oauh".contains(c)) && (w.ends_with('h') || w.chars().all(|c| c == 'o'));
+    mh || drawn
+}
+
+/// Hums timed by the word timer come out bunched up or with holes (IF U,
+/// 2026-11-02: four "mmmh" in 9.75 s, two at the start and a 7.5 s hole), so
+/// each run of hums lights one by one at a steady pace instead: from the
+/// first hum's start to the next real word, or the end of the line. (Owner's
+/// choice until a hum detector learns where hums really are.)
+pub(crate) fn even_hums(line: &mut Line) {
+    let w = &mut line.words;
+    let mut i = 0;
+    while i < w.len() {
+        if !is_hum(&w[i].text) {
+            i += 1;
+            continue;
+        }
+        let first = i;
+        while i < w.len() && is_hum(&w[i].text) {
+            i += 1;
+        }
+        let start = w[first].start;
+        let end = if i < w.len() { w[i].start } else { line.end.max(w[i - 1].end) };
+        let n = (i - first) as f64;
+        let step = (end - start).max(0.0) / n;
+        for (k, word) in w[first..i].iter_mut().enumerate() {
+            word.start = start + step * k as f64;
+            word.end = start + step * (k as f64 + 1.0);
+        }
+    }
 }
 
 /// A line's words over its time, each by its length (karaoke without word times).
@@ -277,6 +320,38 @@ mod tests {
         assert_eq!(lines[0].words.len(), 4);
         assert_eq!(lines[0].words[3].text, "morning");
         assert_eq!((lines[0].words[3].start, lines[0].words[3].end), (5.75, 6.8));
+    }
+
+    // made-up words; the hums timed as the word timer did IF U's (bunched, then a hole)
+    const HUMS: &str = "version: '1.0'\nlines:\n  - text: 'Mmmh mmmh mmmmh mmmh'\n    start_ms: 10000\n    end_ms: 18000\n    words:\n      - {text: 'Mmmh ', start_ms: 10000, end_ms: 10200}\n      - {text: 'mmmh ', start_ms: 10200, end_ms: 10900}\n      - {text: 'mmmmh ', start_ms: 16500, end_ms: 16800}\n      - {text: 'mmmh', start_ms: 16900, end_ms: 17600}\n  - text: 'blue ooh ooh river'\n    start_ms: 18000\n    end_ms: 21000\n    words:\n      - {text: 'blue ', start_ms: 18000, end_ms: 18400}\n      - {text: 'ooh ', start_ms: 18400, end_ms: 18500}\n      - {text: 'ooh ', start_ms: 18500, end_ms: 18600}\n      - {text: 'river', start_ms: 20000, end_ms: 21000}\n";
+
+    #[test]
+    fn hums_light_at_a_steady_pace() {
+        let Some(Lyrics::Timed { lines, .. }) = parse_lyricsfile(HUMS) else { panic!("not timed") };
+        let at: Vec<f64> = lines[0].words.iter().map(|w| w.start).collect();
+        assert_eq!(at, vec![10.0, 12.0, 14.0, 16.0], "four hums over the whole line, no hole");
+        assert_eq!(lines[0].words[3].end, 18.0);
+        let w = &lines[1].words;
+        assert_eq!((w[0].start, w[0].end), (18.0, 18.4), "a real word keeps its time");
+        assert_eq!((w[1].start, w[2].start), (18.4, 19.2), "hums share the time up to the next word");
+        assert_eq!(w[3].start, 20.0);
+    }
+
+    #[test]
+    fn hums_typed_by_hand_are_kept() {
+        let text = HUMS.replace("version: '1.0'\n", &format!("version: '1.0'\n# {HAND_NOTE}\n"));
+        let Some(Lyrics::Timed { lines, .. }) = parse_lyricsfile(&text) else { panic!("not timed") };
+        assert_eq!(lines[0].words[2].start, 16.5);
+    }
+
+    #[test]
+    fn what_counts_as_a_hum() {
+        for h in ["mm", "Mmmh,", "hmm", "mhm", "mm-hmm", "ooh", "Oooh!", "ahh", "uhh", "ooo"] {
+            assert!(is_hum(h), "{h}");
+        }
+        for w in ["oh", "ah", "uh", "aha", "huh", "ma", "home", "na", "yeah", "ha"] {
+            assert!(!is_hum(w), "{w}");
+        }
     }
 
     #[test]

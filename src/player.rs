@@ -69,6 +69,89 @@ fn retire(e: gst::Element) {
     }
 }
 
+/// The song before a click keeps flowing, silent, at most this long while the
+/// next one starts (see Player::hush).
+const HUSH_MAX: Duration = Duration::from_secs(6);
+/// A song on this computer not playing this long after its start is started
+/// again (as a second click would), at most START_TRIES times: a Speaker EQ
+/// chain can still refuse a stream now and then (2026-11-02, #28).
+const START_CHECK: Duration = Duration::from_millis(2500);
+const START_TRIES: u32 = 3;
+
+/// RADIANCE_TEST_STUCK=N (tests): the first N sound outputs made never open (as
+/// a refused Speaker EQ chain), to see a start being made again.
+fn test_stuck() -> bool {
+    static LEFT: std::sync::OnceLock<std::sync::atomic::AtomicU32> = std::sync::OnceLock::new();
+    let left = LEFT.get_or_init(|| std::sync::atomic::AtomicU32::new(std::env::var("RADIANCE_TEST_STUCK").ok().and_then(|n| n.parse().ok()).unwrap_or(0)));
+    left.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_sub(1)).is_ok()
+}
+
+/// The state a start was asked to reach (paused after a restore, say).
+fn wanted_state(e: &gst::Element) -> gst::State {
+    match e.pending_state() {
+        gst::State::VoidPending if e.current_state() == gst::State::Paused => gst::State::Paused,
+        gst::State::VoidPending => gst::State::Playing,
+        s => s,
+    }
+}
+
+/// A song started on deck `d`: not playing by START_CHECK (and still the one
+/// asked for), the deck starts it again with a new player and sound output.
+fn watch_deck_start(decks: Rc<RefCell<Vec<Rc<Deck>>>>, active: Rc<Cell<usize>>, master: Rc<Cell<f64>>, d: Rc<Deck>, uri: String, at: f64, tries: u32) {
+    let started = d.pb();
+    glib::timeout_add_local_once(START_CHECK, move || {
+        let current = decks.borrow().get(active.get()).is_some_and(|x| Rc::ptr_eq(x, &d)) && d.pb() == started;
+        if !current || d.ready.get() {
+            return;
+        }
+        let want = wanted_state(&started);
+        crate::log::note(&format!("not playing {:.1} s after its start (the sound output didn't open): starting it again, try {} of {START_TRIES}", START_CHECK.as_secs_f64(), tries + 1));
+        d.reset();
+        d.set_filters(false);
+        d.set_level(master.get());
+        d.pb().set_property("uri", &uri);
+        d.start_at.set((at > 0.5).then_some((at, None)));
+        let _ = d.pb().set_state(want);
+        if tries + 1 < START_TRIES {
+            watch_deck_start(decks, active, master, d, uri, at, tries + 1);
+        }
+    });
+}
+
+/// What a song with its parts at hand was started from (to start it again).
+struct PartsStart {
+    whole: Option<String>,
+    parts: Vec<(String, String)>,
+    rate: Option<u32>,
+    at: f64,
+}
+
+/// watch_deck_start for a song with its parts at hand: a new pipeline, the
+/// Mixer's volumes as they are now.
+fn watch_parts_start(stems: Rc<RefCell<Option<Rc<StemPipe>>>>, on_event: Rc<dyn Fn(Event)>, master: Rc<Cell<f64>>, m: Rc<StemPipe>, again: PartsStart, tries: u32) {
+    glib::timeout_add_local_once(START_CHECK, move || {
+        let current = stems.borrow().as_ref().is_some_and(|x| Rc::ptr_eq(x, &m));
+        if !current || m.ready.get() {
+            return;
+        }
+        let want = wanted_state(m.pipeline.upcast_ref());
+        crate::log::note(&format!("not playing {:.1} s after its start (the sound output didn't open): starting its parts again, try {} of {START_TRIES}", START_CHECK.as_secs_f64(), tries + 1));
+        let gains = m.gains.borrow().clone();
+        let start = (again.at > 0.5).then_some((again.at, None));
+        let Ok(new) = Player::parts_pipe(&on_event, again.whole.as_deref(), &again.parts, &gains, again.rate, start, true) else { return };
+        new.master.set_property("volume", master.get());
+        m.live.set(false);
+        retire(m.pipeline.clone().upcast());
+        if new.pipeline.set_state(want).is_err() {
+            return;
+        }
+        *stems.borrow_mut() = Some(new.clone());
+        if tries + 1 < START_TRIES {
+            watch_parts_start(stems, on_event, master, new, again, tries + 1);
+        }
+    });
+}
+
 /// The sound output: PipeWire's PulseAudio side on Linux, Windows' own (WASAPI) there.
 /// (Windows 0.7.11 asked for pulsesink too, and had no sound at all: real Windows 11 VM.)
 const SOUND_OUT: &str = if cfg!(windows) { "wasapisink" } else { "pulsesink" };
@@ -103,7 +186,13 @@ fn build(i: usize, active: Rc<Cell<usize>>, decks: Rc<RefCell<Vec<Rc<Deck>>>>, o
         let level = gst::ElementFactory::make("volume").name("level").build().map_err(|e| e.to_string())?;
         let out = gst::Bin::builder().name("out").build();
         out.add_many([&level, &sink]).map_err(|e| e.to_string())?;
-        level.link(&sink).map_err(|e| e.to_string())?;
+        if test_stuck() {
+            let valve = gst::ElementFactory::make("valve").property("drop", true).build().map_err(|e| e.to_string())?;
+            out.add(&valve).map_err(|e| e.to_string())?;
+            gst::Element::link_many([&level, &valve, &sink]).map_err(|e| e.to_string())?;
+        } else {
+            level.link(&sink).map_err(|e| e.to_string())?;
+        }
         let pad = level.static_pad("sink").ok_or("no pad")?;
         out.add_pad(&gst::GhostPad::with_target(&pad).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
         playbin.set_property("audio-sink", &out);
@@ -562,7 +651,8 @@ pub struct Player {
     /// The app's own volume (linear gain, at most 1: never louder than the system).
     master: Rc<Cell<f64>>,
     video: RefCell<Option<VideoPipe>>,
-    stems: RefCell<Option<Rc<StemPipe>>>,
+    /// Shared: a start that didn't get going is started again from a timer (see watch_parts_start).
+    stems: Rc<RefCell<Option<Rc<StemPipe>>>>,
     /// The next song with its parts at hand, cued for a crossfade.
     cued_parts: RefCell<Option<Rc<StemPipe>>>,
     /// A switch fading one form of the song out and the other in.
@@ -583,7 +673,7 @@ impl Player {
             let d = Deck::new(i, active.clone(), decks.clone(), on_event.clone())?;
             decks.borrow_mut().push(d);
         }
-        Ok(Player { decks, active, mixing: Rc::default(), master: Rc::new(Cell::new(1.0)), video: RefCell::new(None), stems: RefCell::new(None), cued_parts: RefCell::new(None), switch: Rc::default(), on_event })
+        Ok(Player { decks, active, mixing: Rc::default(), master: Rc::new(Cell::new(1.0)), video: RefCell::new(None), stems: Rc::default(), cued_parts: RefCell::new(None), switch: Rc::default(), on_event })
     }
 
     fn deck(&self) -> Rc<Deck> {
@@ -725,17 +815,32 @@ impl Player {
         self.cancel_switch();
         self.cancel_mix();
         let leaving = if switch { self.leave() } else { None };
+        // a new song: the one before goes quiet now and stops once this plays (see hush)
+        let hushed = if switch { None } else { self.hush() };
         if leaving.is_none() {
-            self.stop();
+            self.stop_but(hushed.as_ref());
         }
         let start = (at > 0.5).then(|| (at, switch.then(Instant::now)));
         let m = self.build_parts(whole, parts, gains, rate, start, true)?;
         m.master.set_property("volume", if leaving.is_some() { 0.0 } else { self.master.get() });
-        m.pipeline.set_state(gst::State::Playing).map_err(|e| e.to_string())?;
+        if let Err(e) = m.pipeline.set_state(gst::State::Playing) {
+            if let Some(h) = hushed {
+                h.finish();
+            }
+            return Err(e.to_string());
+        }
         let (master, ready) = (m.master.clone(), m.ready.clone());
-        *self.stems.borrow_mut() = Some(m);
+        *self.stems.borrow_mut() = Some(m.clone());
         if let Some(l) = leaving {
             self.fade_over(l, Coming::Stems { volume: master, ready });
+            return Ok(());
+        }
+        let r = ready.clone();
+        self.stop_when_started(hushed, move || r.get());
+        let local = whole.is_none_or(|w| w.starts_with("file://")) && parts.iter().all(|(_, u)| u.starts_with("file://"));
+        if local {
+            let again = PartsStart { whole: whole.map(str::to_string), parts: parts.to_vec(), rate, at };
+            watch_parts_start(self.stems.clone(), self.on_event.clone(), self.master.clone(), m, again, 0);
         }
         Ok(())
     }
@@ -744,6 +849,11 @@ impl Player {
     /// once loaded (and since when the song has moved on). `live`: its events
     /// count from the start (not a cue).
     fn build_parts(&self, whole: Option<&str>, parts: &[(String, String)], gains: &std::collections::HashMap<String, f64>, rate: Option<u32>, start: Option<(f64, Option<Instant>)>, live: bool) -> Result<Rc<StemPipe>, String> {
+        Self::parts_pipe(&self.on_event, whole, parts, gains, rate, start, live)
+    }
+
+    /// build_parts without the player at hand (a start made again from a timer: see watch_parts_start).
+    fn parts_pipe(on_event: &Rc<dyn Fn(Event)>, whole: Option<&str>, parts: &[(String, String)], gains: &std::collections::HashMap<String, f64>, rate: Option<u32>, start: Option<(f64, Option<Instant>)>, live: bool) -> Result<Rc<StemPipe>, String> {
         let silent = std::env::var_os("RADIANCE_SILENT").is_some();
         // RADIANCE_RECORD=file.wav: what would be heard goes into the file instead (tests; in real time)
         // ("{n}" in the name: a file per pipeline, numbered, for a crossfade's two songs)
@@ -753,7 +863,8 @@ impl Player {
         let w = if whole.is_some() && all_up { 1.0 } else { 0.0 };
         let rate = rate.map(|r| format!(",rate={r}")).unwrap_or_default();
         let mut desc = format!(
-            "audiomixer name=mix ! audioconvert ! audio/x-raw,format=F32LE{rate} ! identity name=keeper ! volume name=master ! audioconvert ! {}{} name=sound ",
+            "audiomixer name=mix ! audioconvert ! audio/x-raw,format=F32LE{rate} ! identity name=keeper ! volume name=master ! audioconvert ! {}{}{} name=sound ",
+            if live && test_stuck() { "valve drop=true ! " } else { "" },
             if record.is_some() { "audio/x-raw,format=F32LE,channels=2 ! " } else { "" },
             // recording: in real time, its samples go into the file (below)
             if record.is_some() || silent { "fakesink sync=true" } else { SOUND_OUT }
@@ -799,7 +910,7 @@ impl Player {
         if let (false, None, Some(out)) = (silent, &record, pipeline.by_name("sound")) {
             name_stream(&out);
         }
-        let on_event = self.on_event.clone();
+        let on_event = on_event.clone();
         let start = Cell::new(start);
         let (ready, live) = (Rc::new(Cell::new(false)), Rc::new(Cell::new(live)));
         let (r, l) = (ready.clone(), live.clone());
@@ -999,9 +1110,14 @@ impl Player {
         self.cancel_mix();
         // a switch: the form of the song playing fades out on its own, this fades in
         let leaving = if onward { self.leave() } else { None };
+        // a new song: the one before goes quiet now and stops once this plays (see hush)
+        let hushed = if onward { None } else { self.hush() };
         if leaving.is_none() {
             self.stop_video();
-            self.other().reset();
+            // (a hushed deck is the other one now: it plays on, silent, for a moment)
+            if !matches!(hushed, Some(Leaving::Deck(_))) {
+                self.other().reset();
+            }
         }
         let d = self.deck();
         d.reset(); // the song before stops on a worker thread (see `retire`)
@@ -1012,16 +1128,64 @@ impl Player {
         let _ = d.pb().set_state(gst::State::Playing);
         if let Some(l) = leaving {
             self.fade_over(l, Coming::Deck(d));
+            return;
+        }
+        let r = d.clone();
+        self.stop_when_started(hushed, move || r.ready.get());
+        if uri.starts_with("file://") {
+            watch_deck_start(self.decks.clone(), self.active.clone(), self.master.clone(), d, uri.to_string(), at, 0);
         }
     }
 
     pub fn stop(&self) {
+        self.stop_but(None);
+    }
+
+    /// stop(), but a deck hushed for a start (see hush) plays on, silent, for its moment.
+    fn stop_but(&self, keep: Option<&Leaving>) {
         self.cancel_switch();
         self.stop_video();
         self.cancel_mix();
         for d in self.decks.borrow().iter() {
-            d.reset();
+            if !matches!(keep, Some(Leaving::Deck(k)) if Rc::ptr_eq(k, d)) {
+                d.reset();
+            }
         }
+    }
+
+    /// What's playing, silenced at once but still flowing until the next song
+    /// has started (see stop_when_started). Stopping it first let a Speaker EQ
+    /// chain go idle for a moment, and a stream joining right then was refused
+    /// ("start failed: Operation not permitted"), so a click needed a second
+    /// one (2026-11-02, #28). Crossfades never hit it: the old song still
+    /// plays when the next starts. None: nothing playing.
+    fn hush(&self) -> Option<Leaving> {
+        let l = self.leave()?;
+        l.set_volume(0.0);
+        Some(l)
+    }
+
+    /// Stops `hushed` once the song just started plays (`started`), or after HUSH_MAX.
+    fn stop_when_started(&self, hushed: Option<Leaving>, started: impl Fn() -> bool + 'static) {
+        let Some(l) = hushed else { return };
+        // a deck reset since (a cue, a click back to it) is in use again: left alone
+        let was = match &l {
+            Leaving::Deck(d) => Some(d.pb()),
+            Leaving::Pipe { .. } => None,
+        };
+        let since = Instant::now();
+        let mut l = Some(l);
+        glib::timeout_add_local(Duration::from_millis(100), move || {
+            if !started() && since.elapsed() < HUSH_MAX {
+                return glib::ControlFlow::Continue;
+            }
+            match l.take() {
+                Some(Leaving::Deck(d)) if Some(d.pb()) != was => {}
+                Some(l) => l.finish(),
+                None => {}
+            }
+            glib::ControlFlow::Break
+        });
     }
 
     pub fn playing(&self) -> bool {
