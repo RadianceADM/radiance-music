@@ -167,6 +167,11 @@ impl Ui {
         brand.append(&gtk::Label::builder().label("Radiance Music").css_classes(["brand"]).build());
         let side_header = adw::HeaderBar::builder().show_end_title_buttons(false).title_widget(&brand).build();
         for (page, label, icon, heading) in NAV {
+            // Speaker EQ is its own app: no entry (nor its "Sound" heading) when it isn't
+            // installed (the owner removed it 2026-11-02: it refused songs as they started, #28)
+            if page == "eq" && !crate::effects::available() {
+                continue;
+            }
             if let Some(h) = heading {
                 let head = gtk::ListBoxRow::builder().selectable(false).activatable(false).build();
                 head.set_child(Some(&gtk::Label::builder().label(h).xalign(0.0).css_classes(["nav-section"]).build()));
