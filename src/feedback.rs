@@ -178,6 +178,8 @@ pub enum Failure {
     TooMany(u64),
     /// The browser's sign-in: cancelled, or it took too long.
     SignInStopped(String),
+    /// The admin isn't taking these right now (switched off: 503).
+    Unavailable,
     Other(String),
 }
 
@@ -192,12 +194,14 @@ impl Failure {
                 format!("That's a lot of tries. Try again in {mins} minute{}.", if mins == 1 { "" } else { "s" })
             }
             Failure::SignInStopped(why) => why.clone(),
+            Failure::Unavailable => "Radiance Music's site isn't taking these right now. Try again later, or write to hello@radianceph.com.".into(),
             Failure::Other(why) => format!("It didn't go through ({why}). Try again in a moment."),
         }
     }
 }
 
-fn agent() -> &'static ureq::Agent {
+/// The admin's HTTP client (also Report a Problem's, report.rs).
+pub(crate) fn agent() -> &'static ureq::Agent {
     static AGENT: OnceLock<ureq::Agent> = OnceLock::new();
     AGENT.get_or_init(|| {
         ureq::Agent::config_builder()
@@ -210,7 +214,8 @@ fn agent() -> &'static ureq::Agent {
     })
 }
 
-fn answer(resp: Result<ureq::http::Response<ureq::Body>, ureq::Error>) -> Result<Value, Failure> {
+/// The admin's answer: its JSON, or what went wrong in the person's words.
+pub(crate) fn answer(resp: Result<ureq::http::Response<ureq::Body>, ureq::Error>) -> Result<Value, Failure> {
     let mut resp = resp.map_err(|_| Failure::Offline)?;
     let status = resp.status().as_u16();
     let retry = resp.headers().get("retry-after").and_then(|v| v.to_str().ok()).and_then(|v| v.trim().parse::<u64>().ok());
@@ -222,6 +227,7 @@ fn answer(resp: Result<ureq::http::Response<ureq::Body>, ureq::Error>) -> Result
         400 if body["error"] == "invalid_grant" => Err(Failure::SignInStopped("That sign-in didn't finish. Try again.".into())),
         400 | 422 => Err(Failure::Refused(said.unwrap_or_else(|| "Some answers weren't right: check them and send again.".into()))),
         429 => Err(Failure::TooMany(retry.unwrap_or(60))),
+        503 => Err(Failure::Unavailable),
         _ => Err(Failure::Other(format!("the site said {status}"))),
     }
 }
@@ -719,7 +725,9 @@ mod tests {
             assert_eq!(send("rmu_abc", &a), Err(Failure::TooMany(125)));
             assert!(Failure::TooMany(125).words().contains("3 minutes"));
             assert!(matches!(exchange("used", "v"), Err(Failure::SignInStopped(_))));
-            assert!(matches!(send("rmu_abc", &a), Err(Failure::Other(w)) if w.contains("503")));
+            // switched off on the admin (503): said in plain words, not as a status number
+            assert_eq!(send("rmu_abc", &a), Err(Failure::Unavailable));
+            assert!(Failure::Unavailable.words().contains("isn't taking these right now"));
         });
         // the admin's sign-in still off (503 "not ready yet"), then on (a redirect to Google)
         let (admin, _got) = fake_admin(vec![(503, "", json!({})), (302, "Location: https://accounts.google.com/o/oauth2/v2/auth\r\n", json!({}))]);

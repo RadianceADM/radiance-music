@@ -23,6 +23,7 @@ mod splash;
 mod splitting;
 mod guide;
 mod feedback;
+mod report;
 mod update;
 use backdrop::Backdrop;
 use lens::Lens;
@@ -2496,6 +2497,7 @@ impl Ui {
         app.append(Some("Open the Music Folder"), Some("win.music-folder"));
         app.append(Some("How to Use It"), Some("win.guide"));
         app.append(Some("Look for Updates"), Some("win.updates"));
+        app.append(Some("Report a Problem…"), Some("win.report"));
         app.append(Some("Rate Radiance Music"), Some("win.rate"));
         app.append(Some("About Radiance Music"), Some("win.about"));
         menu.append_section(None, &app);
@@ -2663,6 +2665,15 @@ impl Ui {
             }
         });
         self.window.add_action(&updates);
+        // Report a Problem: what goes is shown first, nothing leaves without Send (report.rs)
+        let report = gio::SimpleAction::new("report", None);
+        let me = Rc::downgrade(self);
+        report.connect_activate(move |_, _| {
+            if let Some(me) = me.upgrade() {
+                me.report_problem();
+            }
+        });
+        self.window.add_action(&report);
         let rate = gio::SimpleAction::new("rate", None);
         let me = Rc::downgrade(self);
         rate.connect_activate(move |_, _| {

@@ -33,6 +33,7 @@ mod net;
 mod onnx_split;
 mod player;
 mod relay;
+mod report;
 mod servers;
 mod session;
 mod settings;
@@ -1269,6 +1270,21 @@ fn main() -> glib::ExitCode {
     if args.get(1).map(String::as_str) == Some("--probe-xfade") {
         return probe_xfade(&args[2]);
     }
+    if args.get(1).map(String::as_str) == Some("--probe-report") {
+        // what Report a Problem would send (sizes only); sent ONLY to RADIANCE_FEEDBACK_URL (a test server)
+        let r = report::Report::gather();
+        println!("platform {}, version {}, system {:?}, install {}", r.platform, r.version, r.system, r.install);
+        println!("log: {} bytes, {} lines; home folder left in it: {}", r.log.len(), r.log.lines().count(), r.log.contains(&*glib::home_dir().to_string_lossy()));
+        if std::env::var_os("RADIANCE_FEEDBACK_URL").is_none() {
+            println!("not sent (set RADIANCE_FEEDBACK_URL to a test server to send)");
+            return glib::ExitCode::SUCCESS;
+        }
+        let note = args.get(2).cloned().unwrap_or_default();
+        return match report::send(&r, &note) {
+            Ok(code) => { println!("sent: {code}"); glib::ExitCode::SUCCESS }
+            Err(f) => { println!("not sent: {}", f.words()); glib::ExitCode::FAILURE }
+        };
+    }
     if args.get(1).map(String::as_str) == Some("--probe-start") && args.len() > 2 {
         return probe_start(&args[2..]);
     }
@@ -1385,6 +1401,10 @@ fn main() -> glib::ExitCode {
             // RADIANCE_SHOT_MIXER=1: the Mixer opened
             if std::env::var_os("RADIANCE_SHOT_MIXER").is_some() {
                 ui.shot_mixer();
+            }
+            // RADIANCE_SHOT_REPORT=1: Report a Problem open (nothing is sent)
+            if std::env::var_os("RADIANCE_SHOT_REPORT").is_some() {
+                ui.report_problem();
             }
             // RADIANCE_SHOT_SPLITTING=1: the Splitting window open
             if std::env::var_os("RADIANCE_SHOT_SPLITTING").is_some() {
