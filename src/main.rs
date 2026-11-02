@@ -1,7 +1,7 @@
 //! Radiance Music: search any song and play it. Lossless recordings from the free
 //! libraries (Internet Archive) come first; YouTube Music is the fallback. A liked
-//! song is saved (with its synced lyrics and album art), and the EQ is your
-//! Speaker EQ.
+//! song is saved (with its synced lyrics and album art), and the Mixer has its
+//! own low cut, high cut and reverb (fx.rs).
 //!
 //! SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -14,6 +14,7 @@ mod art;
 mod beat;
 mod db;
 mod effects;
+mod fx;
 mod genre;
 mod library;
 mod log;
@@ -908,6 +909,18 @@ fn probe_mixer(args: &[String]) -> glib::ExitCode {
     let next = args.iter().find_map(|a| a.strip_prefix("next=")).map(String::from);
     let xfade = num("xfade", 6.0);
     let cue_vocals = args.iter().any(|a| a.starts_with("cue_vocals=")).then(|| num("cue_vocals", 1.0));
+    // fx=LOW,HIGH,REVERB: the Mixer's effects from the start; fx_after=…: changed with the sliders
+    let fx = |k: &str| {
+        args.iter().find_map(|a| a.strip_prefix(&format!("{k}="))).and_then(|v| {
+            let n: Vec<f64> = v.split(',').filter_map(|x| x.parse().ok()).collect();
+            (n.len() == 3).then(|| effects::Sound { low_cut: n[0], high_cut: n[1], reverb: n[2] })
+        })
+    };
+    let fx_after = fx("fx_after");
+    if let Some(s) = fx("fx") {
+        effects::set(s);
+        println!("effects from the start: {s:?}");
+    }
     let whole = glib::filename_to_uri(song, None).ok().map(|u| u.to_string());
     println!("parts {:?}; from {at} s; all up for {after} s, then {wanted:?}; {length} s in all", parts.iter().map(|p| &p.0).collect::<Vec<_>>());
     let main = glib::MainLoop::new(None, false);
@@ -928,7 +941,10 @@ fn probe_mixer(args: &[String]) -> glib::ExitCode {
                 p.set_part(name, *g);
             }
             p.set_whole(wanted.iter().all(|(_, g)| *g >= 0.999));
-            println!("  {t:.1} s: sliders moved; the parts are heard: {}", p.hears_parts());
+            if let Some(s) = fx_after {
+                effects::set(s);
+            }
+            println!("  {t:.1} s: sliders moved{}; the parts are heard: {}", if fx_after.is_some() { " and the effects" } else { "" }, p.hears_parts());
         }
         if (t * 10.0).round() as u32 % 10 == 0 {
             let (makeup, peak, squeeze) = p.stems_level().unwrap_or((0.0, 0.0, 1.0));
@@ -1218,19 +1234,15 @@ fn main() -> glib::ExitCode {
         return probe_align(&args[2..]);
     }
     if args.get(1).map(String::as_str) == Some("--probe-effects") {
-        // read only: the device playing and its effects, as the Mixer shows them (from Speaker EQ)
-        match effects::effects() {
-            Some(p) => println!(
-                "{}: low cut {} Hz, high cut {} Hz, reverb {} %, its EQ chain {}",
-                p.name,
-                p.sound.low_cut,
-                p.sound.high_cut,
-                p.sound.reverb,
-                if p.running { "running" } else { "not running" }
-            ),
-            None if effects::available() => println!("the device playing isn't one Speaker EQ filters"),
-            None => println!("Speaker EQ isn't installed (no speaker-eq command)"),
-        }
+        // read only: the Mixer's effects as saved (the app's own, one setting for every speaker)
+        let s = settings::load().effects;
+        println!(
+            "low cut {} Hz, high cut {} Hz, reverb {} %{}",
+            s.low_cut,
+            s.high_cut,
+            s.reverb,
+            if s.is_off() { " (all off: the sound passes untouched)" } else { "" }
+        );
         return glib::ExitCode::SUCCESS;
     }
     if args.get(1).map(String::as_str) == Some("--probe-xfade") {

@@ -6,7 +6,7 @@ use super::*;
 use crate::session;
 
 /// The sidebar: (page, label, icon, heading above it).
-const NAV: [(&str, &str, &str, Option<&str>); 9] = [
+const NAV: [(&str, &str, &str, Option<&str>); 8] = [
     ("home", "Home", "go-home-symbolic", None),
     ("search", "Search", "system-search-symbolic", None),
     ("playing", "Now Playing", "audio-x-generic-symbolic", None),
@@ -15,8 +15,8 @@ const NAV: [(&str, &str, &str, Option<&str>); 9] = [
     ("albums", "Albums", "media-optical-symbolic", None),
     ("artists", "Artists", "avatar-default-symbolic", None),
     ("genres", "Genres", "view-grid-symbolic", None),
-    // its own app: opens Speaker EQ (the whole computer's sound)
-    ("eq", "Speaker EQ", "equalizer-symbolic", Some("Sound")),
+    // (Speaker EQ, a separate app, had an entry here: gone 2026-11-02; the Mixer's
+    // low cut, high cut and reverb are the app's own now, fx.rs)
 ];
 
 /// Search's tiles before anything is typed: (what it says, what it searches).
@@ -167,11 +167,6 @@ impl Ui {
         brand.append(&gtk::Label::builder().label("Radiance Music").css_classes(["brand"]).build());
         let side_header = adw::HeaderBar::builder().show_end_title_buttons(false).title_widget(&brand).build();
         for (page, label, icon, heading) in NAV {
-            // Speaker EQ is its own app: no entry (nor its "Sound" heading) when it isn't
-            // installed (the owner removed it 2026-11-02: it refused songs as they started, #28)
-            if page == "eq" && !crate::effects::available() {
-                continue;
-            }
             if let Some(h) = heading {
                 let head = gtk::ListBoxRow::builder().selectable(false).activatable(false).build();
                 head.set_child(Some(&gtk::Label::builder().label(h).xalign(0.0).css_classes(["nav-section"]).build()));
@@ -197,9 +192,6 @@ impl Ui {
                     }
                 } else if page == "new-playlist" {
                     me.new_playlist(None);
-                } else if page == "eq" {
-                    me.open_speaker_eq();
-                    me.sync_nav(); // the page you were on stays picked
                 } else if !page.is_empty() && me.stack.visible_child_name().as_deref() != Some(page.as_str()) {
                     me.stack.set_visible_child_name(&page);
                 }

@@ -1102,13 +1102,10 @@ pub struct Ui {
     part_meters: RefCell<Vec<(String, gtk::LevelBar)>>,
     six_check: RefCell<Option<gtk::CheckButton>>,
     part_gains: RefCell<HashMap<String, f64>>,
-    /// The Mixer's effects: the Speaker EQ's low cut, high cut and reverb for
-    /// the device playing (each 0 off .. 1 the most), which device that is
-    /// (None: not one of the EQ's), a change on its way, and when one was made.
+    /// The Mixer's effects: low cut, high cut and reverb, the app's own (fx.rs),
+    /// one setting for every speaker (each 0 off .. 1 the most); a save on its
+    /// way, and when one was made.
     fx: [gtk::Scale; 3],
-    fx_device: Cell<Option<usize>>,
-    /// That speaker's name, as Speaker EQ calls it.
-    fx_name: RefCell<Option<String>>,
     /// A phone-sized window (see the phone breakpoint): cards and the hero drawn smaller.
     phone: Cell<bool>,
     /// What the window-size breakpoints change in Now Playing and the bar:
@@ -1401,8 +1398,6 @@ impl Ui {
             six_check: RefCell::default(),
             part_gains: RefCell::new(split::PARTS.iter().map(|p| (p.to_string(), 1.0)).collect()),
             fx: std::array::from_fn(|_| gtk::Scale::with_range(gtk::Orientation::Horizontal, 0.0, 1.0, 0.02)),
-            fx_device: Cell::new(None),
-            fx_name: RefCell::new(None),
             phone: Cell::new(false),
             np_parts: RefCell::new(None),
             grid_columns: RefCell::default(),
@@ -2228,7 +2223,7 @@ impl Ui {
             self.mixer.append(&row);
             self.part_scales.borrow_mut().push((part.to_string(), scale));
         }
-        // the Speaker EQ's effects for the device playing (every song; off at the left)
+        // the app's own effects (fx.rs): every song, every speaker; off at the left
         for (i, name) in ["Low cut", "High cut", "Reverb"].into_iter().enumerate() {
             let row = gtk::Box::builder().spacing(10).margin_top(if i == 0 { 6 } else { 0 }).build();
             row.append(&gtk::Label::builder().label(name).xalign(0.0).width_chars(8).css_classes(["caption"]).build());
@@ -2624,17 +2619,8 @@ impl Ui {
                 me.update_drift();
             }
         });
-        // the device playing and its effects, read again now and then (the Mixer in step)
-        let me = Rc::downgrade(self);
-        glib::timeout_add_seconds_local(5, move || match me.upgrade() {
-            Some(me) => {
-                if me.window.is_visible() {
-                    me.refresh_effects();
-                }
-                glib::ControlFlow::Continue
-            }
-            None => glib::ControlFlow::Break,
-        });
+        // the Mixer's effects as saved, heard from the first song on
+        crate::effects::set(self.settings.borrow().effects);
         self.refresh_effects();
         // window actions
         let quit = gio::SimpleAction::new("quit", None);
@@ -3162,7 +3148,7 @@ impl Ui {
         self.mixer_lock.set(false);
     }
 
-    /// The Mixer's effects in the Speaker EQ's terms: low cut and high cut in Hz
+    /// The Mixer's effects in their own terms: low cut and high cut in Hz
     /// (off at 20 Hz and 20 kHz), reverb in %; each slider off at its left.
     fn fx_values(&self) -> (f64, f64, f64) {
         use crate::effects::{HIGH_CUT, LOW_CUT};
@@ -3172,7 +3158,7 @@ impl Ui {
         (low.round(), high.round(), (v(2) * 100.0).round())
     }
 
-    /// The sliders where the Speaker EQ has the effects.
+    /// The sliders where the effects are.
     fn fx_show(&self, s: &crate::effects::Sound) {
         use crate::effects::{HIGH_CUT, LOW_CUT};
         let at = [
@@ -3192,51 +3178,42 @@ impl Ui {
     fn fx_tooltips(&self) {
         let (low, high, reverb) = self.fx_values();
         let hz = |v: f64| if v >= 1000.0 { format!("{:.1} kHz", v / 1000.0) } else { format!("{v:.0} Hz") };
-        let device = self.fx_name.borrow().clone().unwrap_or_else(|| "speaker".into());
         self.fx[0].set_tooltip_text(Some(&if low <= crate::effects::LOW_CUT.0 + 0.5 { "Low cut: off".to_string() } else { format!("Low cut: takes out the bass below {}", hz(low)) }));
         self.fx[1].set_tooltip_text(Some(&if high >= crate::effects::HIGH_CUT.1 - 0.5 { "High cut: off".to_string() } else { format!("High cut: takes out the sounds above {}", hz(high)) }));
         self.fx[2].set_tooltip_text(Some(&if reverb < 0.5 { "Reverb: off".to_string() } else { format!("Reverb: {reverb:.0} %, a room around the music") }));
         for sc in &self.fx {
             let t = sc.tooltip_text().unwrap_or_default();
-            sc.set_tooltip_text(Some(&format!("{t}. The Speaker EQ's, for the {device}: everything playing on it.")));
+            sc.set_tooltip_text(Some(&format!("{t}. For every song, on every speaker.")));
         }
     }
 
-    /// An effect moved: the Speaker EQ set (saved, and heard at once) a moment later.
+    /// An effect moved: heard at once (every player reads it as the sound
+    /// passes, see fx.rs), saved a moment later.
     fn fx_changed(self: &Rc<Self>) {
         self.fx_touched.set(Some(Instant::now()));
+        let (low_cut, high_cut, reverb) = self.fx_values();
+        crate::effects::set(crate::effects::Sound { low_cut, high_cut, reverb });
         self.fx_tooltips();
         if self.fx_later.borrow().is_some() {
             return;
         }
         let me = Rc::downgrade(self);
-        let id = glib::timeout_add_local_once(Duration::from_millis(80), move || {
+        let id = glib::timeout_add_local_once(Duration::from_millis(400), move || {
             let Some(me) = me.upgrade() else { return };
             me.fx_later.borrow_mut().take();
-            let Some(device) = me.fx_device.get() else { return };
-            let (low, high, reverb) = me.fx_values();
-            bg(move || crate::effects::set_effects(device, low, high, reverb), |_| {});
+            me.settings.borrow_mut().effects = crate::effects::now();
+            settings::save(&me.settings.borrow());
         });
         *self.fx_later.borrow_mut() = Some(id);
     }
 
-    /// Which device plays now and its effects, read again (worker thread).
+    /// The sliders where the effects are now.
     fn refresh_effects(self: &Rc<Self>) {
-        let me = Rc::downgrade(self);
-        bg(crate::effects::effects, move |found| {
-            let Some(me) = me.upgrade() else { return };
-            let was = me.fx_device.get();
-            me.fx_device.set(found.as_ref().map(|p| p.device));
-            me.fx_name.replace(found.as_ref().map(|p| p.name.clone()));
-            // not while one is being moved (the saved values are a moment behind)
-            let moving = me.fx_later.borrow().is_some() || me.fx_touched.get().is_some_and(|t| t.elapsed() < Duration::from_secs(2));
-            if let (Some(p), false) = (found, moving) {
-                me.fx_show(&p.sound);
-            }
-            if was != me.fx_device.get() {
-                me.update_voice_status();
-            }
-        });
+        // not while one is being moved
+        if self.fx_later.borrow().is_some() || self.fx_touched.get().is_some_and(|t| t.elapsed() < Duration::from_secs(2)) {
+            return;
+        }
+        self.fx_show(&crate::effects::now());
     }
 
     /// The parts, mixed as the sliders say; all at full is the song itself
@@ -3712,20 +3689,14 @@ impl Ui {
         while let Some(r) = row {
             let name = r.widget_name();
             r.set_visible(match name.as_str() {
-                "fx" => self.fx_device.get().is_some(),
+                "fx" => true, // the app's own effects: every song, every speaker
                 "six" => split::SIX_PARTS_ON && ((parts && have.len() >= 4) || ticked),
                 n => have.contains(&n),
             });
             row = r.next_sibling();
         }
-        let device = self.fx_name.borrow().clone().filter(|_| self.fx_device.get().is_some());
-        self.mixer_row.set_subtitle(&match (parts, device.as_deref()) {
-            (true, Some(_)) => "Each part as loud as you like, and effects".to_string(),
-            (true, None) => "Each part as loud as you like".to_string(),
-            (false, Some(d)) => format!("Effects for the {d}"),
-            (false, None) => String::new(),
-        });
-        self.mixer_list.set_visible(parts || device.is_some());
+        self.mixer_row.set_subtitle(if parts { "Each part as loud as you like, and effects" } else { "Low cut, high cut and reverb" });
+        self.mixer_list.set_visible(true);
         let cur = self.current.borrow().clone();
         let splitting_key = self.splitting.borrow().as_ref().map(|t| t.key());
         // not while it's being split or waiting in line for it
@@ -6245,19 +6216,6 @@ impl Ui {
     }
 
     /// The sidebar shows the page that's open.
-    /// Speaker EQ, its own app (bass, mid, treble and presets for each speaker).
-    fn open_speaker_eq(self: &Rc<Self>) {
-        let me = Rc::downgrade(self);
-        bg(
-            || std::process::Command::new("gtk-launch").arg("io.github.radianceadm.SpeakerEq").status().is_ok_and(|s| s.success()),
-            move |ok| {
-                if let (false, Some(me)) = (ok, me.upgrade()) {
-                    me.toast("Speaker EQ isn't installed. It's its own app, for the whole computer's sound.");
-                }
-            },
-        );
-    }
-
     fn sync_nav(&self) {
         let page = match self.stack.visible_child_name().as_deref() {
             Some("playlist") => self.playlist_now.get().map(|id| format!("playlist:{id}")).unwrap_or_default(),
