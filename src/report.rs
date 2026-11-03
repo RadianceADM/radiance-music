@@ -9,9 +9,13 @@ use serde_json::{json, Value};
 
 use crate::feedback::{self, Failure};
 
-/// The note's and the log's limits, as the admin takes them.
+/// The limits, as the admin takes them (radianceph#43): the note in characters,
+/// the log in bytes (the admin's is 204,800), the system in characters.
 pub const MOST_NOTE: usize = 2000;
 pub const MOST_LOG: usize = 200_000;
+pub const MOST_SYSTEM: usize = 500;
+/// Sent instead of an empty log (the admin needs one).
+pub const NO_LOG: &str = "(the app's log is empty)\n";
 
 /// What will be sent, shown to the person before they send it.
 #[derive(Clone, Debug)]
@@ -31,7 +35,9 @@ impl Report {
 
     /// The body of POST /api/music/reports (an empty note left out).
     pub fn body(&self, note: &str) -> Value {
-        let mut v = json!({ "platform": self.platform, "version": self.version, "system": self.system, "log": self.log, "install": self.install });
+        let system: String = self.system.chars().take(MOST_SYSTEM).collect();
+        let log = if self.log.trim().is_empty() { NO_LOG } else { self.log.as_str() };
+        let mut v = json!({ "platform": self.platform, "version": self.version, "system": system, "log": log, "install": self.install });
         let note: String = note.trim().chars().take(MOST_NOTE).collect();
         if !note.is_empty() {
             v["note"] = json!(note);
@@ -183,5 +189,9 @@ mod tests {
         }
         let long = r.body(&"a".repeat(3000));
         assert_eq!(long["note"].as_str().unwrap().chars().count(), MOST_NOTE);
+        // the admin needs a log and a short system
+        let bare = Report { log: " \n".into(), system: "é".repeat(600), ..r };
+        assert_eq!(bare.body("")["log"], NO_LOG);
+        assert_eq!(bare.body("")["system"].as_str().unwrap().chars().count(), MOST_SYSTEM);
     }
 }

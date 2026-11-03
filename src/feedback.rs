@@ -226,6 +226,7 @@ pub(crate) fn answer(resp: Result<ureq::http::Response<ureq::Body>, ureq::Error>
         401 => Err(Failure::SignInAgain),
         400 if body["error"] == "invalid_grant" => Err(Failure::SignInStopped("That sign-in didn't finish. Try again.".into())),
         400 | 422 => Err(Failure::Refused(said.unwrap_or_else(|| "Some answers weren't right: check them and send again.".into()))),
+        413 => Err(Failure::Refused(said.unwrap_or_else(|| "That's too long to send: make it shorter and send again.".into()))),
         429 => Err(Failure::TooMany(retry.unwrap_or(60))),
         503 => Err(Failure::Unavailable),
         _ => Err(Failure::Other(format!("the site said {status}"))),
