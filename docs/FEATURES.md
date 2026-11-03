@@ -4,7 +4,7 @@ The same features on the computer (Linux and Windows) and the phone (Android). T
 screens are made for a phone, so they look and work differently; this list is about what each
 one **can do**, not how it looks. Kept in step with every change (owner, 2026-11-02).
 
-As of: computer **0.7.14**, phone **0.5.15** (released versions). Built but not released yet:
+As of: computer **0.7.15**, phone **0.5.15** (released versions). Built but not released yet:
 marked 🔜.
 
 ✅ has it · ❌ missing (a gap to close) · ➖ not needed there (the platform does it its own way)
@@ -110,8 +110,8 @@ marked 🔜.
 | Offline sign, things retry when back online | ✅ | ✅ | ✅ | |
 | Report a problem: link to GitHub Issues | ✅ | ✅ | ✅ | |
 | Email us from the app | ❌ | ❌ | ✅ | the computer shows the address only in the README |
-| Report a Problem with the app's log (names removed) | ❌ | ❌ | ❌ | next (#20 in the work list) |
-| Rating pop-up ("Are you enjoying…?") | 🔜 | 🔜 | 🔜 | built, waiting for its own release |
+| Report a Problem with the app's log (names removed) | ✅ | ✅ | 🔜 | computer since 0.7.15; the phone's comes with 0.5.16 |
+| Rating pop-up ("Are you enjoying…?") | ✅ | ✅ | 🔜 | computer since 0.7.15; the phone's comes with 0.5.16 |
 
 ## Gaps to close (keeps the three in step)
 
@@ -131,5 +131,3 @@ Windows only:
 - Gentle transfer while Bluetooth audio plays
 - The Splitting window says "about 2.5 GB" and shows a Linux log path; Windows downloads about 840 MB
 
-All three:
-- Report a Problem with the app's log (#20)

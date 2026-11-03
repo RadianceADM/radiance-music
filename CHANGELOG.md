@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.7.15 — 2026-11-03
+
+- **Report a Problem:** Menu → Report a Problem… sends us the app's recent log with a note from you, so we can see what went wrong. You see everything that goes before you press Send, with your name, your home folder and email addresses taken out, and you get a code (like RM-0123) to quote if you write to us.
+- **Tell us how it's going:** after a week and 30 songs, at the end of a song or a pause, Radiance Music may ask "Are you enjoying Radiance Music?", at most once a month. Rate it in five quick parts and add a comment; sending asks you to sign in with Google. Not Now and Don't Ask Again are always there, and Menu → Rate Radiance Music opens it any time.
+- Home's banner moves gently now: two soft lights drift under the sunset.
+
 ## v0.7.14 — 2026-11-02
 
 - **Low cut, high cut and reverb, built in:** the Mixer has them for every song now (split or not, music videos too), done by Radiance Music itself: no other app needed, one setting for every speaker, on Windows too. The part sliders still answer at once with them on.
