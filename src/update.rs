@@ -47,6 +47,8 @@ pub enum Install {
     Tarball,
     /// Our own Flatpak.
     Flatpak,
+    /// The Snap Store's snap: the store updates it by itself (packaging/snap).
+    Snap,
     /// A build from source, or a copy somewhere else: updated where it came from.
     Other,
 }
@@ -64,6 +66,9 @@ impl Install {
         }
         if std::env::var_os("FLATPAK_ID").is_some() || Path::new("/.flatpak-info").exists() {
             return Install::Flatpak;
+        }
+        if in_snap() {
+            return Install::Snap;
         }
         let Ok(exe) = std::env::current_exe() else { return Install::Other };
         if cfg!(windows) {
@@ -87,7 +92,7 @@ impl Install {
             Install::Windows(_) => Some("RadianceMusic-Setup.exe"),
             Install::Tarball => Some("RadianceMusic-linux-x86_64.tar.gz"),
             Install::Flatpak => Some("RadianceMusic.flatpak"),
-            Install::Other => None,
+            Install::Snap | Install::Other => None,
         }
     }
 
@@ -97,9 +102,15 @@ impl Install {
             Install::Windows(_) => "windows",
             Install::Tarball => "linux",
             Install::Flatpak => "flatpak",
+            Install::Snap => "snap",
             Install::Other => "other",
         }
     }
+}
+
+/// This copy runs as Radiance Music's snap (its launcher sets SNAP_NAME).
+pub fn in_snap() -> bool {
+    std::env::var_os("SNAP").is_some() && std::env::var("SNAP_NAME").is_ok_and(|n| n == "radiance-music")
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -403,6 +414,7 @@ pub fn put_on(install: &Install, file: &Path) -> Result<(), String> {
         Install::Windows(root) => windows_put_on(root, file, &version_of(file)),
         Install::Tarball => tarball_put_on(file),
         Install::Flatpak => flatpak_open_newest(),
+        Install::Snap => Err("the Snap Store updates this copy by itself".into()),
         Install::Other => Err("this copy updates where it came from".into()),
     }
 }

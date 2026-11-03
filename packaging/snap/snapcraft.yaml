@@ -1,0 +1,133 @@
+# Radiance Music's Snap, for the Snap Store (Ubuntu's App Center): owner 2026-11-02,
+# "Snap Store (Ubuntu App Center)", #21. Built by packaging/snap/build.sh on an
+# Ubuntu 26.04 machine with snapcraft (on ribs02: the VM in /srv/data/vm/ubuntu26).
+#
+# What the Flatpak carries, the snap carries too: yt-dlp with its YouTube challenge
+# solver, Deno, FFmpeg, the GStreamer plugins GNOME's runtime doesn't have (opusparse,
+# avdec_*), and a whole Python 3.14 with venv and ensurepip (core26 has no Python program)
+# for yt-dlp and the splitter's first-open setup.
+name: radiance-music
+title: Radiance Music
+base: core26
+adopt-info: radiance-music
+summary: Search any song and play it, lossless first, with lyrics and its parts
+description: |
+  Radiance Music plays any song you search for: lossless from free libraries first,
+  YouTube Music as the fallback. Liked songs are saved on your computer, with synced
+  lyrics (word by word), album art and the music video.
+
+  Split any song into its parts (vocals, drums, bass and the rest) right on your
+  computer, and mix them in the Mixer: sing along without the voice, or hear just the
+  bass line. Nothing leaves your computer.
+
+  - Lyrics that light word by word, and an editor to fix them
+  - Made for you mixes, song radio, autoplay and crossfades
+  - Low cut, high cut and reverb for every song
+  - Share a song as a story card or video
+  - Listening parties with friends on a Radiance Music Server
+
+  An open beta: tell us what breaks with Menu → Report a Problem…
+license: GPL-3.0-or-later
+website: https://music.radianceph.com
+contact: hello@radianceph.com
+issues: https://github.com/RadianceADM/radiance-music/issues
+source-code: https://github.com/RadianceADM/radiance-music
+icon: data/icons/io.github.radianceadm.Music.svg
+grade: stable
+confinement: strict
+
+platforms:
+  amd64:
+
+apps:
+  radiance-music:
+    # snap-launch: the app's data in the snap's common folder (see the file)
+    command: bin/snap-launch
+    desktop: usr/share/applications/io.github.radianceadm.Music.desktop
+    common-id: io.github.radianceadm.Music
+    extensions: [gnome]
+    plugs:
+      - audio-playback # its sound (PipeWire / PulseAudio)
+      - network # searching, streaming, saving
+      - network-bind # Share Songs with a Phone (47800-47809), the feedback sign-in's return
+      - home # liked songs go to Music/Radiance Music
+      - removable-media # music on another drive (connect it in Settings → Apps)
+    slots:
+      - mpris
+      - dbus-app
+
+slots:
+  # the top bar's media controls
+  mpris:
+    interface: mpris
+    name: RadianceMusic
+  # one copy at a time: a second start (or a radiancemusic:// link) goes to the open one
+  dbus-app:
+    interface: dbus
+    bus: session
+    name: io.github.radianceadm.Music
+
+layout:
+  # Ubuntu's ensurepip (python3 -m venv, the splitter's setup) takes pip from this fixed
+  # folder: the snap's copy (python3-pip-whl)
+  /usr/share/python-wheels:
+    bind: $SNAP/usr/share/python-wheels
+
+parts:
+  radiance-music:
+    plugin: rust
+    source: .
+    source-type: local
+    rust-channel: stable
+    build-packages:
+      - pkg-config
+    override-pull: |
+      craftctl default
+      craftctl set version="$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)"
+    override-build: |
+      craftctl default
+      install -Dm755 packaging/snap/snap-launch "$CRAFT_PART_INSTALL/bin/snap-launch"
+      install -Dm644 data/io.github.radianceadm.Music.desktop "$CRAFT_PART_INSTALL/usr/share/applications/io.github.radianceadm.Music.desktop"
+      sed -i 's|^Icon=.*|Icon=${SNAP}/meta/gui/icon.svg|' "$CRAFT_PART_INSTALL/usr/share/applications/io.github.radianceadm.Music.desktop"
+      install -Dm644 packaging/flatpak/io.github.radianceadm.Music.metainfo.xml "$CRAFT_PART_INSTALL/usr/share/metainfo/io.github.radianceadm.Music.metainfo.xml"
+    parse-info: [usr/share/metainfo/io.github.radianceadm.Music.metainfo.xml]
+
+  # yt-dlp with its YouTube challenge solver (yt-dlp-ejs); the newest when built. Not the
+  # python plugin: snapcraft 9.2's can't find core26's Python yet. Its own folder + a wrapper.
+  yt-dlp:
+    plugin: nil
+    source: packaging/snap/yt-dlp
+    build-packages: [python3-pip]
+    build-environment:
+      # the gnome extension points PYTHONPATH at its SDK's own (older) pip: not here
+      - PYTHONPATH: ""
+    override-build: |
+      /usr/bin/python3 -m pip install --no-cache-dir --break-system-packages --target "$CRAFT_PART_INSTALL/lib/yt-dlp" -r requirements.txt
+      rm -rf "$CRAFT_PART_INSTALL/lib/yt-dlp/bin"
+      install -Dm755 yt-dlp "$CRAFT_PART_INSTALL/bin/yt-dlp"
+
+  # Deno: yt-dlp solves YouTube's JavaScript challenges with it
+  deno:
+    plugin: dump
+    source: https://github.com/denoland/deno/releases/download/v2.9.8/deno-x86_64-unknown-linux-gnu.zip
+    source-checksum: sha256/e890975bc2549807bbcc0b584ffafda72cc7c93349dd99c80483dd784f6c4609
+    organize:
+      deno: bin/deno
+
+  # Ubuntu's FFmpeg (yt-dlp joins a video to its sound with it), the GStreamer plugins
+  # GNOME's runtime leaves out, and Python 3.14 with venv (the splitter's first-open
+  # setup runs `python3 -m venv`: core26 has no python3, so it's the snap's own)
+  extras:
+    plugin: nil
+    stage-packages:
+      - ffmpeg
+      - gstreamer1.0-libav
+      - gstreamer1.0-plugins-bad
+      - python3.14-venv
+    override-prime: |
+      craftctl default
+      ln -sf python3.14 "$CRAFT_PRIME/usr/bin/python3"
+    prime:
+      - -usr/share/doc
+      - -usr/share/man
+      - -usr/share/lintian

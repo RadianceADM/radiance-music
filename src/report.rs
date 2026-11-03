@@ -71,6 +71,14 @@ pub fn system() -> String {
             .find_map(|p| std::fs::read_to_string(p).ok())
             .and_then(|t| t.lines().find_map(|l| l.strip_prefix("PRETTY_NAME=").map(|v| v.trim_matches('"').to_string())))
             .unwrap_or_else(|| "Linux".into());
+        // in the snap, /etc is the snap's base ("Ubuntu Core 26") and the computer's own isn't
+        // readable without another permission: the kernel's version says enough
+        let os = if crate::update::in_snap() {
+            let kernel = std::fs::read_to_string("/proc/sys/kernel/osrelease").map(|k| k.trim().to_string()).unwrap_or_default();
+            format!("Linux {kernel} (Snap)")
+        } else {
+            os
+        };
         match std::env::var("XDG_CURRENT_DESKTOP").ok().filter(|d| !d.is_empty()) {
             Some(desktop) => format!("{os}, {}", desktop.replace(':', " ")),
             None => os,

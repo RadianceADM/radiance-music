@@ -1,0 +1,4 @@
+#!/bin/sh
+# yt-dlp from its own folder in the snap, on the snap's own Python 3.14 (core26 has none)
+export PYTHONPATH="$SNAP/lib/yt-dlp" # only its own: not GNOME's runtime's Python folders
+exec "$SNAP/usr/bin/python3.14" -m yt_dlp "$@"

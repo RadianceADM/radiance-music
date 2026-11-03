@@ -90,6 +90,13 @@ impl Ui {
             return; // screenshot copies keep out
         }
         let u = updater();
+        if u.install == Install::Snap {
+            // the Snap Store updates it (snapd, a few times a day): no pop-up of our own
+            if asked {
+                self.toast(&format!("The Snap Store keeps Radiance Music up to date by itself (this is {})", update::current()));
+            }
+            return;
+        }
         if !asked {
             bg(update::clean, |_| {}); // the download that updated to this version
             // what the last look found, at once (its pop-up waits its turn), then a new look if due
@@ -309,7 +316,7 @@ impl Ui {
         };
         let u = updater();
         match u.install.clone() {
-            Install::Other => self.update_page(step),
+            Install::Snap | Install::Other => self.update_page(step),
             Install::Flatpak => {
                 u.following.set(true);
                 self.set_update_step(Step::Downloading(r.clone(), 0.0));

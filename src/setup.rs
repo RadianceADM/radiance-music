@@ -299,7 +299,8 @@ fn quiet(program: &Path, args: &[&str]) -> Command {
     }
     let mut cmd = Command::new("nice");
     cmd.arg("-n").arg("19");
-    if Path::new("/usr/bin/ionice").exists() {
+    // (a snap may not run ionice: its confinement refuses it)
+    if Path::new("/usr/bin/ionice").exists() && !crate::update::in_snap() {
         cmd = Command::new("/usr/bin/ionice");
         cmd.args(["-c", "3", "nice", "-n", "19"]);
     }

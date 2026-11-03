@@ -1,0 +1,15 @@
+#!/bin/bash
+# Radiance Music in its Snap: the GNOME launcher keeps the app's data in the snap's
+# per-version folder, which snapd copies at every update and keeps for the last
+# versions. The library is small, but the splitter it sets up at the first open is
+# about 2.5 GB, so the data lives in the snap's common folder instead:
+# ~/snap/radiance-music/common/.local/share/radiance-music (same path every version).
+export XDG_DATA_HOME="$SNAP_USER_COMMON/.local/share"
+mkdir -p "$XDG_DATA_HOME"
+# The splitter's venv remembers the Python that made it: the snap's, by its "current"
+# path, which stays the same across updates ($SNAP has the version in it).
+export PATH="/snap/$SNAP_INSTANCE_NAME/current/usr/bin:$PATH"
+# GNOME's runtime puts its own Python folders on PYTHONPATH: the snap's Python (the
+# splitter's venv, yt-dlp) must use its own standard library, not those
+unset PYTHONPATH PYTHONHOME
+exec "$SNAP/bin/radiance-music" "$@"

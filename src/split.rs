@@ -394,10 +394,14 @@ fn here(local: &LocalSplitter) -> Command {
         cmd.env("SPLIT_THREADS", &threads).env("ALIGN_THREADS", &threads).env("OMP_NUM_THREADS", &threads).env("MKL_NUM_THREADS", &threads);
         return cmd;
     }
-    let idle = Path::new("/usr/bin/chrt").exists();
-    let mut cmd = Command::new(if idle { "/usr/bin/chrt" } else { local.python.as_str() });
+    // a snap may not run chrt (its confinement refuses it): nice alone, the lowest it allows
+    let snap = crate::update::in_snap();
+    let idle = Path::new("/usr/bin/chrt").exists() && !snap;
+    let mut cmd = Command::new(if idle { "/usr/bin/chrt" } else if snap { "nice" } else { local.python.as_str() });
     if idle {
         cmd.args(["--idle", "0", "nice", "-n", "19"]).arg(&local.python);
+    } else if snap {
+        cmd.args(["-n", "19"]).arg(&local.python);
     }
     cmd.env("SPLIT_THREADS", &threads).env("ALIGN_THREADS", &threads).env("OMP_NUM_THREADS", &threads).env("MKL_NUM_THREADS", &threads);
     cmd
