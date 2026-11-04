@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.7.16 — 2026-11-04
+
+- **A tray icon on Windows:** Radiance Music sits in the notification area by the clock while it's open (new icons start behind the ^ arrow: drag it onto the taskbar to keep it in sight). Click it to bring the window back; right-click for Play/Pause, Next, Previous, Show Radiance Music and Quit. Closing the window while music plays leaves it playing there; with nothing playing, closing still quits.
+- **The song carries on when the speaker changes (Windows):** a monitor with speakers switching off, headphones unplugged or another output picked used to skip to the next song ("its source didn't answer"). Now the same song carries on from where it was, and the music follows the speaker Windows plays to, coming back to the monitor's speakers when it wakes.
+- Windows: the splitter pack's unzipping uses a newer, fixed library (security alerts).
+- The Windows app is now built on a Windows PC.
+
 ## v0.7.15 — 2026-11-03
 
 - **Report a Problem:** Menu → Report a Problem… sends us the app's recent log with a note from you, so we can see what went wrong. You see everything that goes before you press Send, with your name, your home folder and email addresses taken out, and you get a code (like RM-0123) to quote if you write to us.
