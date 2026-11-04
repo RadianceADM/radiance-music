@@ -332,17 +332,33 @@ pub fn remove_from_playlist(id: i64, key: &str) {
 /// Every song's kept path from folder `from` to folder `to` (liked songs,
 /// history, the queue, playlists, saved videos).
 pub fn relocate(from: &std::path::Path, to: &std::path::Path) {
-    let raw = |p: &std::path::Path| format!("{}/", p.display());
-    let esc = |p: &std::path::Path| serde_json::to_string(&raw(p)).unwrap_or_default().trim_matches('"').to_string();
-    let (jf, jt, rf, rt) = (esc(from), esc(to), raw(from), raw(to));
+    let seps: &[char] = if std::path::MAIN_SEPARATOR == '/' { &['/'] } else { &[std::path::MAIN_SEPARATOR, '/'] };
+    let pairs = relocations(&from.display().to_string(), &to.display().to_string(), seps);
     write(|c| {
         let tx = c.unchecked_transaction()?;
-        for (table, column) in [("liked", "track"), ("plays", "track"), ("session", "queue"), ("playlist_songs", "track")] {
-            tx.execute(&format!("UPDATE {table} SET {column} = replace({column}, ?1, ?2)"), params![jf, jt])?;
+        for (raw_from, raw_to, json_from, json_to) in &pairs {
+            for (table, column) in [("liked", "track"), ("plays", "track"), ("session", "queue"), ("playlist_songs", "track")] {
+                tx.execute(&format!("UPDATE {table} SET {column} = replace({column}, ?1, ?2)"), params![json_from, json_to])?;
+            }
+            tx.execute("UPDATE videos SET file = replace(file, ?1, ?2) WHERE file != ''", params![raw_from, raw_to])?;
         }
-        tx.execute("UPDATE videos SET file = replace(file, ?1, ?2) WHERE file != ''", params![rf, rt])?;
         tx.commit()
     });
+}
+
+/// What `relocate` replaces: the old folder and the new, each followed by a path separator (as
+/// is, for the videos' file column, and as JSON text inside the tracks), for each separator the
+/// paths may use. Windows writes `\`: with only `/` it matched nothing there, so a moved library's
+/// songs still pointed at the old, empty folder (ribs03, 2026-11-04).
+fn relocations(from: &str, to: &str, seps: &[char]) -> Vec<(String, String, String, String)> {
+    let esc = |s: &str| serde_json::to_string(s).unwrap_or_default().trim_matches('"').to_string();
+    seps.iter()
+        .map(|sep| {
+            let (rf, rt) = (format!("{from}{sep}"), format!("{to}{sep}"));
+            let (jf, jt) = (esc(&rf), esc(&rt));
+            (rf, rt, jf, jt)
+        })
+        .collect()
 }
 
 // ------------------------------------------------------------------ plays and skips
@@ -371,6 +387,23 @@ pub fn add_skip(key: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_moved_library_is_found_with_windows_paths() {
+        // ribs03, 2026-11-04: Storage → move to D:, and Liked Songs still pointed at C:
+        let pairs = relocations(r"C:\Users\Radiance\Music\Radiance Music", r"D:\Music\Radiance Music", &['\\', '/']);
+        let track = r#"{"title":"Song","file":"C:\\Users\\Radiance\\Music\\Radiance Music\\Ana - Song.opus"}"#; // liked.track: JSON text
+        let moved = pairs.iter().fold(track.to_string(), |s, (_, _, jf, jt)| s.replace(jf.as_str(), jt.as_str()));
+        assert_eq!(moved, r#"{"title":"Song","file":"D:\\Music\\Radiance Music\\Ana - Song.opus"}"#);
+        let video = r"C:\Users\Radiance\Music\Radiance Music\Videos\v.mp4"; // videos.file: as is
+        let moved = pairs.iter().fold(video.to_string(), |s, (rf, rt, _, _)| s.replace(rf.as_str(), rt.as_str()));
+        assert_eq!(moved, r"D:\Music\Radiance Music\Videos\v.mp4");
+        // and on Linux, as before
+        let pairs = relocations("/home/me/Music/Radiance Music", "/mnt/big/Radiance Music", &['/']);
+        let track = r#"{"file":"/home/me/Music/Radiance Music/a.opus"}"#;
+        let moved = pairs.iter().fold(track.to_string(), |s, (_, _, jf, jt)| s.replace(jf.as_str(), jt.as_str()));
+        assert_eq!(moved, r#"{"file":"/mnt/big/Radiance Music/a.opus"}"#);
+    }
 
     fn song(id: &str) -> Track {
         Track { source: crate::track::Source::YouTube, id: id.into(), title: format!("Song {id}"), artist: "A & B".into(), album: String::new(), seconds: 200, art: String::new(), format: "Opus".into(), file: None, video: false, genres: None }

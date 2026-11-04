@@ -60,6 +60,9 @@ jobs:
       - name: Build
         run: bash packaging/windows/ribs03/build.sh
 
+      - name: Tests
+        run: cargo test --release 2>&1 | tail -25
+
       - name: The app folder
         run: bash packaging/windows/ribs03/win-pack.sh
 
@@ -70,8 +73,17 @@ jobs:
 
       # (signing, once SignPath is set up: RadianceMusic-Setup.exe)
 
-      - name: Its checksum
-        run: sha256sum rb/RadianceMusic-Setup.exe | tee rb/RadianceMusic-Setup.exe.sha256
+      - name: Its checksum, and the list of what's in the app folder (to compare builds)
+        run: |
+          sha256sum rb/RadianceMusic-Setup.exe | tee rb/RadianceMusic-Setup.exe.sha256
+          (cd rb/dist/RadianceMusic && find . -type f -printf '%P %s\n' | sort) > rb/dist-files.txt
+          wc -l rb/dist-files.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-files
+          path: rb/dist-files.txt
+          retention-days: 14
 
       - uses: actions/upload-artifact@v4
         with:
