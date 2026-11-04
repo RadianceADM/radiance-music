@@ -1,0 +1,7 @@
+# Every text file with Linux line endings, also on Windows checkouts (GitHub's Windows build): git's
+# CRLF there made gst-plugins.txt's names end in "\r", so the Windows app folder got no GStreamer
+# plugin at all (2026-11-04), and the build must be the same source as ribs03's.
+* text=auto eol=lf
+*.ico binary
+*.png binary
+*.svg text eol=lf

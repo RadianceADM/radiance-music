@@ -23,9 +23,12 @@ copy_deps() {
 # GStreamer: the plugins ribs02's folder has, and the plugin scanner
 missing=""
 while read -r p; do
+  p=${p%$'\r'}; [ -n "$p" ] || continue   # (a Windows checkout's line endings)
   if [ -e "$U/lib/gstreamer-1.0/$p" ]; then cp "$U/lib/gstreamer-1.0/$p" "$D/lib/gstreamer-1.0/"; else missing="$missing $p"; fi
 done < "$HERE/gst-plugins.txt"
 [ -n "$missing" ] && echo "plugins MSYS2 doesn't have:$missing"
+n=$(ls "$D/lib/gstreamer-1.0" | wc -l)
+[ "$n" -ge 150 ] || { echo "only $n GStreamer plugins: the app couldn't play"; exit 1; }
 cp $U/libexec/gstreamer-1.0/gst-plugin-scanner.exe "$D/libexec/gstreamer-1.0/"
 copy_deps "$D/bin/radiance-music.exe" "$D"/lib/gstreamer-1.0/*.dll "$D"/libexec/gstreamer-1.0/*.exe
 # GIO: its TLS module (https in GStreamer's downloads) and proxy modules
