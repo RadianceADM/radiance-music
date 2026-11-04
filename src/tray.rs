@@ -35,7 +35,8 @@ thread_local! {
 
 /// Puts the icon in the notification area (once; on the window's thread).
 pub fn start() {
-    if TRAY.with(|t| t.borrow().is_some()) {
+    // RADIANCE_NO_TRAY: without it (tests: what the icon costs)
+    if TRAY.with(|t| t.borrow().is_some()) || std::env::var_os("RADIANCE_NO_TRAY").is_some() {
         return;
     }
     let Some(icon) = icon() else {

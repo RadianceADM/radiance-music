@@ -16,6 +16,7 @@ use gtk::{gdk, gio, glib, graphene};
 
 mod backdrop;
 mod lens;
+mod lights;
 mod home;
 mod rms;
 mod sharing;
