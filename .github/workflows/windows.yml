@@ -1,0 +1,82 @@
+# Radiance Music for Windows, built on GitHub's own Windows machine from this repository, so that
+# SignPath (free code signing for open source) can check that the signed files come from this
+# source (owner, 2026-11-04: "Prepare it, I'll apply"). The same MSYS2 UCRT64 tools and scripts
+# as ribs03 (packaging/windows/ribs03). The signing steps run only once SignPath is set up:
+# repository variables SIGNPATH_ORGANIZATION_ID, SIGNPATH_PROJECT_SLUG, SIGNPATH_POLICY_SLUG and
+# the secret SIGNPATH_API_TOKEN; each signing request is approved by hand in SignPath.
+name: Windows build
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [windows-ci]
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-2025
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            git make diffutils unzip curl tar xz
+            mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-pkgconf mingw-w64-ucrt-x86_64-rust
+            mingw-w64-ucrt-x86_64-gtk4 mingw-w64-ucrt-x86_64-libadwaita
+            mingw-w64-ucrt-x86_64-gstreamer mingw-w64-ucrt-x86_64-gst-plugins-base
+            mingw-w64-ucrt-x86_64-gst-plugins-good mingw-w64-ucrt-x86_64-gst-plugins-bad
+            mingw-w64-ucrt-x86_64-gst-libav mingw-w64-ucrt-x86_64-opus
+            mingw-w64-ucrt-x86_64-nsis mingw-w64-ucrt-x86_64-ntldd
+
+      - name: Where things go
+        run: |
+          W=$(cygpath -u "$GITHUB_WORKSPACE")
+          echo "SRC=$W" >> "$GITHUB_ENV"
+          echo "RB=$W/rb" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_DIR=$W/rb/target" >> "$GITHUB_ENV"
+          echo "versions: $(rustc --version), gtk $(pkgconf --modversion gtk4), libadwaita $(pkgconf --modversion libadwaita-1), gstreamer $(pkgconf --modversion gstreamer-1.0)"
+
+      - name: Deno and FFmpeg (built from source) kept between runs; yt-dlp is fetched new each time
+        uses: actions/cache@v4
+        with:
+          path: |
+            rb/tools/deno.exe
+            rb/tools/ffmpeg.exe
+            rb/tools/ffprobe.exe
+          key: tools-ffmpeg-9.0.2-deno-2.9.8-${{ hashFiles('packaging/windows/ribs03/tools.sh') }}
+
+      - name: Fetch and check the tools
+        run: bash packaging/windows/ribs03/tools.sh
+
+      - name: Build
+        run: bash packaging/windows/ribs03/build.sh
+
+      - name: The app folder
+        run: bash packaging/windows/ribs03/win-pack.sh
+
+      # (signing, once SignPath is set up: radiance-music.exe here, before it goes into the installer)
+
+      - name: The installer
+        run: bash packaging/windows/ribs03/win-installer.sh
+
+      # (signing, once SignPath is set up: RadianceMusic-Setup.exe)
+
+      - name: Its checksum
+        run: sha256sum rb/RadianceMusic-Setup.exe | tee rb/RadianceMusic-Setup.exe.sha256
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RadianceMusic-Setup-unsigned
+          path: |
+            rb/RadianceMusic-Setup.exe
+            rb/RadianceMusic-Setup.exe.sha256
+          retention-days: 14

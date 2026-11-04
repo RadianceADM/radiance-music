@@ -4,10 +4,12 @@
 # plugin set as ribs02's cross-build pack (/srv/build/win/win-pack.sh: gst-plugins.txt is its list).
 set -uo pipefail
 U=/ucrt64
-EXE=/c/rb/target/release/radiance-music.exe
-D=/c/rb/dist/RadianceMusic
-T=/c/rb/tools
-S=/c/rb/src/radiance-music
+RB=${RB:-/c/rb}
+EXE=${EXE:-${CARGO_TARGET_DIR:-$RB/target}/release/radiance-music.exe}
+D=${DIST:-$RB/dist/RadianceMusic}
+T=${TOOLS:-$RB/tools}
+S=${SRC:-$RB/src/radiance-music}
+HERE=$(cd "$(dirname "$0")" && pwd)
 rm -rf "$D"; mkdir -p "$D/bin" "$D/lib/gstreamer-1.0" "$D/libexec/gstreamer-1.0" "$D/share/glib-2.0/schemas" "$D/share/icons" "$D/lib/gio/modules" "$T"
 strip -o "$D/bin/radiance-music.exe" "$EXE" || exit 1
 # the DLLs every .exe/.dll here needs, from MSYS2's UCRT64 (Windows' own are skipped); read from
@@ -22,7 +24,7 @@ copy_deps() {
 missing=""
 while read -r p; do
   if [ -e "$U/lib/gstreamer-1.0/$p" ]; then cp "$U/lib/gstreamer-1.0/$p" "$D/lib/gstreamer-1.0/"; else missing="$missing $p"; fi
-done < /c/rb/gst-plugins.txt
+done < "$HERE/gst-plugins.txt"
 [ -n "$missing" ] && echo "plugins MSYS2 doesn't have:$missing"
 cp $U/libexec/gstreamer-1.0/gst-plugin-scanner.exe "$D/libexec/gstreamer-1.0/"
 copy_deps "$D/bin/radiance-music.exe" "$D"/lib/gstreamer-1.0/*.dll "$D"/libexec/gstreamer-1.0/*.exe
@@ -36,7 +38,7 @@ if [ -d $U/lib/gdk-pixbuf-2.0 ]; then
   cp -r $U/lib/gdk-pixbuf-2.0 "$D/lib/"
   copy_deps "$D"/lib/gdk-pixbuf-2.0/*/loaders/*.dll
 fi
-# the tools the app runs: yt-dlp, Deno (YouTube's challenges), FFmpeg (ribs02's small static build)
+# the tools the app runs: yt-dlp, Deno (YouTube's challenges), FFmpeg (a small static build): tools.sh
 for t in yt-dlp.exe deno.exe ffmpeg.exe ffprobe.exe; do
   [ -f "$T/$t" ] || { echo "missing tool $T/$t"; exit 1; }
   cp "$T/$t" "$D/bin/"

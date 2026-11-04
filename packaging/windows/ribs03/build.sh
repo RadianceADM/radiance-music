@@ -1,16 +1,19 @@
 #!/bin/bash
-# ribs03 (MSYS2 UCRT64, through run.ps1 at idle priority): Radiance Music's release build (#39).
-# The source comes from the laptop as C:\rb\src.tgz (unpacked fresh into C:\rb\src\radiance-music).
+# MSYS2 UCRT64: Radiance Music's Windows release build (#39). On ribs03 (through run.ps1 at idle
+# priority) the source comes from the laptop as C:\rb\src.tgz, unpacked fresh; on GitHub's build
+# machine (.github/workflows/windows.yml) RB and SRC point into the checkout.
 set -uo pipefail
-S=/c/rb/src/radiance-music
-if [ -f /c/rb/src.tgz ]; then
-  rm -rf "$S" && mkdir -p "$S" && tar -xzf /c/rb/src.tgz -C "$S" && rm /c/rb/src.tgz
+RB=${RB:-/c/rb}
+S=${SRC:-$RB/src/radiance-music}
+if [ -f "$RB/src.tgz" ] && [ -z "${SRC:-}" ]; then
+  rm -rf "$S" && mkdir -p "$S" && tar -xzf "$RB/src.tgz" -C "$S" && rm "$RB/src.tgz"
 fi
 cd "$S" || exit 1
-export CARGO_TARGET_DIR=/c/rb/target
-cargo build --release "$@" > /c/rb/build.log 2>&1
+export CARGO_TARGET_DIR=${CARGO_TARGET_DIR:-$RB/target}
+mkdir -p "$RB"
+cargo build --release "$@" > "$RB/build.log" 2>&1
 code=$?
-grep -E "^(error|warning)" -A8 /c/rb/build.log | head -80
-tail -3 /c/rb/build.log
+grep -E "^(error|warning)" -A8 "$RB/build.log" | head -80
+tail -3 "$RB/build.log"
 echo "exit=$code"
 exit $code
