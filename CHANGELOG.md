@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.7.18 — 2026-11-04
+
+- **No more lag on Windows:** 0.7.16 and 0.7.17 kept a PC's processor busy all the time (about one and a half cores, even with nothing playing), so other windows lagged. It was Home's drifting lights: they're drawn a lighter way now, move only while Radiance Music is the window in front, and stand still while you work in another app or it's minimized. They look the same.
+
 ## v0.7.17 — 2026-11-04
 
 - **Splitting works on Windows again for songs from the internet:** No vocals, Vocals only and the Mixer's parts said "Couldn't split … right now" for every song that wasn't saved on the PC, because the work file's folder was written the wrong way. They split now (a song took about 2 minutes on a 6-core PC).
