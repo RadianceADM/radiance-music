@@ -663,6 +663,12 @@ fn count_play(t: &Track) {
     COUNTS.with(|c| c.borrow_mut().get_or_insert_with(crate::db::counts).entry(t.key()).or_default().0 += 1);
 }
 
+/// Windows' sound output lost its device (WASAPI: AUDCLNT_E_DEVICE_INVALIDATED), not a bad song.
+fn sound_device_gone(error: &str) -> bool {
+    let e = error.to_lowercase();
+    e.contains("audclnt_e_device_invalidated") || e.contains("88890004")
+}
+
 fn count_skip(t: &Track) {
     crate::db::add_skip(&t.key());
     COUNTS.with(|c| c.borrow_mut().get_or_insert_with(crate::db::counts).entry(t.key()).or_default().1 += 1);
@@ -918,6 +924,13 @@ pub struct Ui {
     lyrics_offline: Cell<bool>,
     /// Songs that wouldn't play, in a row (see `unavailable`)
     fails: Cell<u32>,
+    /// Times in a row the song started again after the sound device went away (#38)
+    sound_tries: Cell<u32>,
+    /// The song is being started again on another speaker (until it plays)
+    reopening: Cell<bool>,
+    /// Windows: the speaker the music went to when it started (see speaker.rs)
+    #[cfg(windows)]
+    out_speaker: RefCell<Option<String>>,
     /// The sunrise is held for the first start's setup (the guide waits for it)
     setup_holding: Cell<bool>,
     /// The first start's splitter setup, waiting to try again (when the internet's back, or soon)
@@ -1218,6 +1231,10 @@ impl Ui {
             online: Cell::new(true),
             lyrics_offline: Cell::new(false),
             fails: Cell::new(0),
+            sound_tries: Cell::new(0),
+            reopening: Cell::new(false),
+            #[cfg(windows)]
+            out_speaker: RefCell::new(None),
             setup_holding: Cell::new(false),
             setup_waiting: RefCell::default(),
             split: adw::OverlaySplitView::builder()
@@ -1489,8 +1506,8 @@ impl Ui {
                 u.save_session(); // (still starting: where you were isn't back yet, keep it as it was)
             }
             // closed while music plays: it plays on (the media controls, or opening the app, bring it
-            // back; on Windows the controls are its own, and opening it again reaches this copy
-            // through one_copy in main.rs)
+            // back; on Windows the tray icon does (tray.rs), and opening it again reaches this copy
+            // through one_copy in main.rs); with nothing playing it quits
             let playing = u.player.borrow().as_ref().is_some_and(|p| p.playing());
             if playing && !u.quitting.get() && std::env::var_os("RADIANCE_SHOT").is_none() {
                 w.set_visible(false);
@@ -1827,6 +1844,8 @@ impl Ui {
             ("the internet is too slow right now", true)
         } else if any(&["missing plugin", "no decoder", "not-negotiated", "not negotiated", "no element"]) {
             ("this computer can't play this kind of file", false)
+        } else if sound_device_gone(&e) {
+            ("the sound device went away: check your speakers or headphones", true)
         } else if any(&["unavailable", "private video", "removed", "copyright", "not available", "terminated"]) {
             ("it isn't on YouTube anymore", false)
         } else {
@@ -1844,6 +1863,8 @@ impl Ui {
         let unsaved: Vec<Track> = self.liked.borrow().iter().filter(|t| t.file.is_none() && library::saves(t)).cloned().collect();
         unsaved.into_iter().for_each(|t| self.save_liked(t));
         self.start_media_controls();
+        #[cfg(windows)]
+        self.follow_speaker();
         // YouTube songs need yt-dlp: missing, it's said now (not "Loading…" at the first song)
         if std::env::var_os("RADIANCE_SHOT").is_none() {
             let me = Rc::downgrade(self);
@@ -5609,6 +5630,12 @@ impl Ui {
         match ev {
             Event::Ready => {
                 self.fails.set(0);
+                self.sound_tries.set(0);
+                self.reopening.set(false);
+                #[cfg(windows)]
+                {
+                    *self.out_speaker.borrow_mut() = crate::speaker::default_id();
+                }
                 if !self.online.get() && self.current.borrow().as_ref().is_some_and(|t| t.file.is_none()) {
                     self.set_online(true, true); // it came from the internet, so that's back
                 }
@@ -5625,11 +5652,64 @@ impl Ui {
                 self.skip(1);
                 self.feedback_moment(); // a song's end: a free moment for the feedback pop-up
             }
+            Event::Error(e) if sound_device_gone(&e) && self.sound_tries.get() < 3 => self.carry_on(),
             Event::Error(e) => {
                 let title = self.current.borrow().as_ref().map(|t| t.title.clone()).unwrap_or_default();
                 self.unavailable(&title, &e);
             }
         }
+    }
+
+    /// The sound device went away mid-song (Windows: headphones, a speaker or HDMI unplugged
+    /// or switched; it skipped the song before, #38): the same song again from where it was,
+    /// on the device Windows uses now. Three tries, a moment apart; then it says why.
+    fn carry_on(self: &Rc<Self>) {
+        let tries = self.sound_tries.get() + 1;
+        self.sound_tries.set(tries);
+        self.reopen(&format!("the sound device went away (try {tries})"), 400 * tries as u64);
+    }
+
+    /// The song again from where it is, on the speaker Windows plays to now (`after_ms`
+    /// later: a moment for Windows to settle on it).
+    fn reopen(self: &Rc<Self>, why: &str, after_ms: u64) {
+        self.reopening.set(true);
+        let at = self.player.borrow().as_ref().and_then(|p| p.position()).unwrap_or(0.0);
+        let song = self.current.borrow().as_ref().map(|t| t.title.clone()).unwrap_or_default();
+        crate::log::note(&format!("{why}: “{song}” carries on at {at:.0} s"));
+        if let Some(p) = self.player.borrow().as_ref() {
+            p.stop(); // lets go of the speaker it was on
+        }
+        let gen = self.play_gen.get();
+        let me = Rc::downgrade(self);
+        glib::timeout_add_local_once(Duration::from_millis(after_ms), move || {
+            let Some(me) = me.upgrade() else { return };
+            if me.play_gen.get() != gen {
+                return; // another song was picked meanwhile
+            }
+            me.restore_at.set((at > 1.0).then_some(at));
+            me.play_current();
+        });
+    }
+
+    /// Windows: the music follows the speaker Windows plays to (#38). The sound output stays
+    /// on the speaker it opened on; once a second, while music plays, a look at Windows'
+    /// default: moved (the monitor with the speakers back on, headphones in, another output
+    /// picked), the song carries on there, from where it was.
+    #[cfg(windows)]
+    fn follow_speaker(self: &Rc<Self>) {
+        let me = Rc::downgrade(self);
+        glib::timeout_add_local(Duration::from_secs(1), move || {
+            let Some(me) = me.upgrade() else { return glib::ControlFlow::Break };
+            let playing = me.player.borrow().as_ref().is_some_and(|p| p.playing());
+            if playing && !me.reopening.get() && !me.in_party() {
+                let now = crate::speaker::default_id();
+                let was = me.out_speaker.borrow().clone();
+                if now.is_some() && was.is_some() && now != was {
+                    me.reopen("Windows' speaker changed", 300);
+                }
+            }
+            glib::ControlFlow::Continue
+        });
     }
 
     /// A song that won't play: why, in plain words, and on to the next one. Not when every
@@ -6896,6 +6976,14 @@ fn part_volumes(sliders: &HashMap<String, f64>, six: bool) -> HashMap<String, f6
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_lost_sound_device_isnt_a_bad_song() {
+        // ribs03's app.log, 2026-11-03 (#38)
+        assert!(sound_device_gone("IAudioClient::GetCurrentPadding failed (88890004): AUDCLNT_E_DEVICE_INVALIDATED"));
+        assert!(!sound_device_gone("Internal data stream error."));
+        assert!(!sound_device_gone("Could not resolve host: www.youtube.com"));
+    }
 
     #[test]
     fn every_part_gets_a_volume() {

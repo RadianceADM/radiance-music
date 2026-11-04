@@ -29,6 +29,12 @@ mod mpris;
 #[path = "smtc.rs"]
 mod mpris;
 mod net;
+// Windows' notification area: the app's icon while it's open (#37)
+#[cfg(windows)]
+mod tray;
+// Windows: the default speaker, which the music follows (#38)
+#[cfg(windows)]
+mod speaker;
 #[cfg(feature = "onnx-split")]
 mod onnx_split;
 mod player;

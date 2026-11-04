@@ -19,10 +19,9 @@ pub enum Command {
     Pause,
     Next,
     Previous,
-    /// Show the window again.
-    #[allow(dead_code)] // Windows' controls don't ask for it (Linux's do)
+    /// Show the window again (the tray icon asks).
     Raise,
-    #[allow(dead_code)]
+    /// Quit for real (the tray icon's menu).
     Quit,
 }
 
@@ -66,6 +65,7 @@ impl Mpris {
     /// `command` is called for what the controls ask, `state` for what they show.
     pub fn start(command: impl Fn(Command) + 'static, state: impl Fn() -> State + 'static) -> Rc<Mpris> {
         COMMAND.with(|c| *c.borrow_mut() = Some(Rc::new(command)));
+        crate::tray::start(); // the tray icon is there from the start, the controls once the window is shown
         let me = Rc::new(Mpris { controls: RefCell::new(None), shown: RefCell::new(None), state: Box::new(state) });
         // the window has a handle once it's shown: until then, look again now and then
         let weak = Rc::downgrade(&me);
@@ -110,12 +110,7 @@ impl Mpris {
                 MediaControlEvent::Previous => Command::Previous,
                 _ => return, // seeking from the flyout: not offered (as on Linux)
             };
-            glib::MainContext::default().invoke(move || {
-                let f = COMMAND.with(|c| c.borrow().clone());
-                if let Some(f) = f {
-                    f(command);
-                }
-            });
+            glib::MainContext::default().invoke(move || run(command));
         });
         if attached.is_err() {
             crate::log::note("media controls: couldn't listen to them");
@@ -128,10 +123,11 @@ impl Mpris {
 
     /// Tells the controls what changed (call it freely: only real changes go out).
     pub fn changed(&self) {
+        let now = (self.state)();
+        crate::tray::show(&now);
         if !self.connect() {
             return;
         }
-        let now = (self.state)();
         let was = self.shown.replace(Some(now.clone()));
         let mut controls = self.controls.borrow_mut();
         let Some(controls) = controls.as_mut() else { return };
@@ -156,6 +152,14 @@ impl Mpris {
             };
             let _ = controls.set_playback(playback);
         }
+    }
+}
+
+/// Does what the controls (or the tray icon) asked: on the window's thread.
+pub fn run(command: Command) {
+    let f = COMMAND.with(|c| c.borrow().clone());
+    if let Some(f) = f {
+        f(command);
     }
 }
 

@@ -83,7 +83,10 @@ const START_TRIES: u32 = 3;
 fn test_stuck() -> bool {
     static LEFT: std::sync::OnceLock<std::sync::atomic::AtomicU32> = std::sync::OnceLock::new();
     let left = LEFT.get_or_init(|| std::sync::atomic::AtomicU32::new(std::env::var("RADIANCE_TEST_STUCK").ok().and_then(|n| n.parse().ok()).unwrap_or(0)));
-    left.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_sub(1)).is_ok()
+    // (Rust 1.99, ribs03's, calls it try_update; ribs02's 1.96 only knows this name)
+    #[allow(deprecated)]
+    let taken = left.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_sub(1)).is_ok();
+    taken
 }
 
 /// The state a start was asked to reach (paused after a restore, say).
