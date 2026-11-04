@@ -159,6 +159,18 @@ impl Lights {
     }
 }
 
+/// Whether `w`'s window can be seen: the one in front and not minimized (moving things stop
+/// otherwise: on GTK 4.24 every frame redraws the whole window). Home's lights and Now Playing's
+/// backdrop ask it.
+pub fn seen(w: &impl IsA<gtk::Widget>) -> bool {
+    let Some(win) = w.root().and_downcast::<gtk::Window>() else { return true };
+    let gtk_says = win.is_active() && !win.is_suspended();
+    #[cfg(windows)]
+    return gtk_says && in_front(&win);
+    #[cfg(not(windows))]
+    return gtk_says;
+}
+
 /// Windows: the window is the one in front and not minimized, as Windows itself says (GTK's
 /// own "active" stays on there when it's minimized or behind another app).
 #[cfg(windows)]

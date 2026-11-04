@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.7.19 — 2026-11-05
+
+- **Now Playing doesn't hold the processor any more (Windows lag, continued):** its moving background (the art flowing with the beat) drew itself 60 times a second, about a whole core on Windows. It draws 20 times a second now, still following every beat, and stands still while Radiance Music is behind another window or minimized. Home's lights already do the same since 0.7.18.
+
 ## v0.7.18 — 2026-11-04
 
 - **No more lag on Windows:** 0.7.16 and 0.7.17 kept a PC's processor busy all the time (about one and a half cores, even with nothing playing), so other windows lagged. It was Home's drifting lights: they're drawn a lighter way now, move only while Radiance Music is the window in front, and stand still while you work in another app or it's minimized. They look the same.

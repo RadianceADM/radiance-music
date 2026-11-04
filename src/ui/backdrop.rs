@@ -22,6 +22,11 @@ use gtk::{gdk, graphene, gsk};
 
 const FADE_US: f64 = 900_000.0;
 
+/// Drawn at most 20 times a second (the flow and the beat are worked out every frame, so a kick
+/// still swells it within 50 ms): on GTK 4.24 (Windows 0.7.16+) each frame redraws the whole
+/// window, and 60 of them a second held a core (owner, ribs03, 2026-11-05).
+const DRAW_US: i64 = 50_000;
+
 /// The most the art is ever blown up: the whole picture covers the page's
 /// diagonal (so no corner shows as it turns) times this, at the most.
 const MAX_ZOOM: f32 = 1.15;
@@ -65,6 +70,10 @@ mod imp {
         pub last: Cell<Option<i64>>,
         pub drifting: Cell<bool>,
         pub tick: RefCell<Option<gtk::TickCallbackId>>,
+        /// When it was last drawn (frame time, µs), and the once-a-second look that starts it
+        /// again when the window can be seen (lights::seen).
+        pub drawn: Cell<i64>,
+        pub look: RefCell<Option<glib::SourceId>>,
         /// The song's beat and bass, and where the song was at a frame time: (seconds, µs).
         pub pulse: RefCell<Option<Rc<Pulse>>>,
         pub song_at: Cell<Option<(f64, i64)>>,
@@ -195,6 +204,23 @@ impl Backdrop {
             self.imp().swell.set(0.0);
         }
         self.ensure_ticking();
+        // stopped while the window can't be seen: a look once a second starts it again
+        let imp = self.imp();
+        if on && imp.look.borrow().is_none() {
+            let weak = self.downgrade();
+            let id = glib::timeout_add_local(std::time::Duration::from_secs(1), move || {
+                let Some(w) = weak.upgrade() else { return glib::ControlFlow::Break };
+                if !w.imp().drifting.get() {
+                    w.imp().look.borrow_mut().take();
+                    return glib::ControlFlow::Break;
+                }
+                if super::lights::seen(&w) {
+                    w.ensure_ticking();
+                }
+                glib::ControlFlow::Continue
+            });
+            imp.look.replace(Some(id));
+        }
     }
 
     fn fading(&self) -> bool {
@@ -215,6 +241,12 @@ impl Backdrop {
         let id = self.add_tick_callback(|w, clock| {
             let imp = w.imp();
             let now = clock.frame_time();
+            if !w.fading() && !super::lights::seen(w) {
+                // behind another app or minimized: no frames at all (the look starts it again)
+                imp.last.set(None);
+                imp.tick.borrow_mut().take();
+                return glib::ControlFlow::Break;
+            }
             if imp.drifting.get() {
                 let dt = imp.last.get().map(|last| (now - last) as f64 / 1e6).unwrap_or(0.0).min(0.1);
                 imp.last.set(Some(now));
@@ -239,7 +271,10 @@ impl Backdrop {
                 imp.t.set(imp.t.get() + dt * (1.0 + BASS_SPEEDS * imp.bass.get() + imp.push.get()));
                 imp.push.set(imp.push.get() * (-dt / PUSH_SETTLES_S).exp());
             }
-            w.queue_draw();
+            if w.fading() || now - imp.drawn.get() >= DRAW_US {
+                imp.drawn.set(now);
+                w.queue_draw();
+            }
             if imp.drifting.get() || w.fading() {
                 glib::ControlFlow::Continue
             } else {
