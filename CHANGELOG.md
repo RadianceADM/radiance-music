@@ -4,6 +4,7 @@
 
 - **No more lag on Windows:** 0.7.16 and 0.7.17 kept a PC's processor busy all the time (about one and a half cores, even with nothing playing), so other windows lagged. It was Home's drifting lights: they're drawn a lighter way now, move only while Radiance Music is the window in front, and stand still while you work in another app or it's minimized. They look the same.
 - Windows: the program file now carries its own details and icon (Radiance Music, Radiance Innovation Centers, its version), as Windows expects of an app.
+- **The update pop-up offers the newest version:** it offered what it found the day before (and could download a version two releases old); it looks again every time the app opens now. Its round icon no longer stretches into a tall bar.
 
 ## v0.7.17 — 2026-11-04
 

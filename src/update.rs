@@ -31,8 +31,6 @@ use serde_json::{json, Value};
 use crate::net;
 
 const LATEST: &str = "https://api.github.com/repos/RadianceADM/radiance-music/releases/latest";
-/// Looked up at most this often.
-pub const EVERY: Duration = Duration::from_secs(6 * 60 * 60);
 /// "Remind me later": a day (owner, 2026-10-31).
 pub const LATER: Duration = Duration::from_secs(24 * 60 * 60);
 /// The count of updates (no name, no address: the platform and the version).
@@ -213,11 +211,6 @@ fn now() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
 }
 
-/// Whether it's time to look again (6 hours since the last look).
-pub fn due() -> bool {
-    now().saturating_sub(load()["checked"].as_u64().unwrap_or(0)) >= EVERY.as_secs()
-}
-
 /// What the last look found (shown at once at the next start, before looking again).
 pub fn remembered() -> Option<Release> {
     Release::from_json(&load()["release"])
@@ -272,13 +265,15 @@ pub fn file(r: &Release, install: &Install) -> PathBuf {
     folder().join(format!("{}-{}", r.version, install.asset().unwrap_or("download")))
 }
 
-/// Downloads of versions that are on now (or older) aren't needed any more.
+/// Downloads of versions that are on now (or older) aren't needed any more, nor ones older
+/// than the newest the last look found (a newer one replaces them).
 pub fn clean() {
     let Ok(dir) = fs::read_dir(folder()) else { return };
+    let newest = remembered().map(|r| r.version);
     for f in dir.flatten() {
         let name = f.file_name().to_string_lossy().to_string();
         let version = name.split('-').next().unwrap_or_default();
-        if !newer(version, current()) {
+        if !newer(version, current()) || newest.as_deref().is_some_and(|n| newer(n, version)) {
             if f.path().is_dir() {
                 let _ = fs::remove_dir_all(f.path());
             } else {

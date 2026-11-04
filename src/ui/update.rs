@@ -99,15 +99,10 @@ impl Ui {
         }
         if !asked {
             bg(update::clean, |_| {}); // the download that updated to this version
-            // what the last look found, at once (its pop-up waits its turn), then a new look if due
-            if let Some(r) = update::remembered().filter(|r| update::newer(&r.version, update::current())) {
-                let step = if update::ready(&r, &u.install) { Step::Ready(r) } else { Step::Out(r) };
-                self.offer(step, false);
-            }
-            if !update::due() {
-                return;
-            }
         }
+        // a new look at every start: what the last look found was offered at once before, and a
+        // look only once a day, so a day-old version was offered (and downloaded) with two newer
+        // ones out (owner's laptop, 0.7.13 offering 0.7.15 with 0.7.17 out, 2026-11-04)
         let me = Rc::downgrade(self);
         let install = u.install.clone();
         let wait = if asked { 0 } else { 8 }; // after the start, not during it
@@ -130,6 +125,10 @@ impl Ui {
                             crate::log::note(&format!("updates: {e}"));
                             if asked {
                                 me.toast(&format!("Couldn't look for updates: {e}"));
+                            } else if let Some(r) = update::remembered().filter(|r| update::newer(&r.version, update::current())) {
+                                // offline: what the last look found
+                                let ready = update::ready(&r, &updater().install);
+                                me.offer(if ready { Step::Ready(r) } else { Step::Out(r) }, false);
                             }
                         }
                     }
@@ -462,8 +461,10 @@ fn downloading_words(r: &Release, done: f64, install: &Install) -> String {
 
 /// The step's icon in a soft orange circle, its title and what it means.
 fn head(body: &gtk::Box, icon: &str, title: &str, text: &str) {
-    let mark = gtk::Box::builder().halign(gtk::Align::Start).css_classes(["update-mark"]).build();
-    mark.append(&gtk::Image::builder().icon_name(icon).pixel_size(28).hexpand(true).vexpand(true).halign(gtk::Align::Center).valign(gtk::Align::Center).build());
+    // a 56 px circle: fixed, never expanding (the icon's own expand stretched it into a tall
+    // bar filling the pop-up's spare height: owner's screenshot, 2026-11-04)
+    let mark = gtk::Box::builder().halign(gtk::Align::Start).valign(gtk::Align::Start).width_request(56).height_request(56).css_classes(["update-mark"]).build();
+    mark.append(&gtk::Image::builder().icon_name(icon).pixel_size(28).halign(gtk::Align::Center).valign(gtk::Align::Center).build());
     body.append(&mark);
     body.append(&gtk::Label::builder().label(title).wrap(true).xalign(0.0).margin_top(6).css_classes(["title-2"]).build());
     body.append(&gtk::Label::builder().label(text).wrap(true).xalign(0.0).css_classes(["dim-label"]).build());
