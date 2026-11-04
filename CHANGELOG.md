@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.7.17 — 2026-11-04
+
+- **Splitting works on Windows again for songs from the internet:** No vocals, Vocals only and the Mixer's parts said "Couldn't split … right now" for every song that wasn't saved on the PC, because the work file's folder was written the wrong way. They split now (a song took about 2 minutes on a 6-core PC).
+- **Only offered where it can work:** while a music video plays, No vocals and Vocals only are greyed out (music videos play as they are), and offline, a song from the internet isn't offered for splitting.
+
 ## v0.7.16 — 2026-11-04
 
 - **A tray icon on Windows:** Radiance Music sits in the notification area by the clock while it's open (new icons start behind the ^ arrow: drag it onto the taskbar to keep it in sight). Click it to bring the window back; right-click for Play/Pause, Next, Previous, Show Radiance Music and Quit. Closing the window while music plays leaves it playing there; with nothing playing, closing still quits.

@@ -4,7 +4,7 @@ The same features on the computer (Linux and Windows) and the phone (Android). T
 screens are made for a phone, so they look and work differently; this list is about what each
 one **can do**, not how it looks. Kept in step with every change (owner, 2026-11-02).
 
-As of: computer **0.7.16**, phone **0.5.15** (released versions). Built but not released yet:
+As of: computer **0.7.17**, phone **0.5.15** (released versions). Built but not released yet:
 marked 🔜.
 
 ✅ has it · ❌ missing (a gap to close) · ➖ not needed there (the platform does it its own way)
