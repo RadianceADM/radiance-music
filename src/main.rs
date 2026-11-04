@@ -300,19 +300,21 @@ fn probe_mix(query: &str) -> glib::ExitCode {
 /// `radiance-music --probe-split QUERY`: splits the first YouTube Music result
 /// on the split server (settings.json), into the cache. No sound.
 fn probe_split(query: &str) -> glib::ExitCode {
-    let Some(server) = settings::load().split else {
-        println!("no split server in settings.json");
+    // a YouTube song as the app splits it: through the relay, on the split server or this computer
+    let (server, local) = (settings::load().split, settings::load().local_split);
+    if server.is_none() && local.is_none() {
+        println!("no split server and no splitter on this computer in settings.json");
         return glib::ExitCode::FAILURE;
-    };
+    }
     let Some(t) = youtube::search(query).into_iter().next() else { return glib::ExitCode::FAILURE };
     let relay = relay::Relay::start().expect("relay");
     let s = youtube::stream(&t.id).expect("stream");
     let uri = relay.add(s.url, s.size, s.mime);
     let at = std::time::Instant::now();
-    println!("splitting {} – {} on {}…", t.artist, t.title, server.host);
-    let local = settings::load().local_split;
+    let on = server.as_ref().map(|s| s.host.clone()).unwrap_or_else(|| "this computer".into());
+    println!("splitting {} – {} on {on}…", t.artist, t.title);
     let report: split::Progress = std::sync::Arc::new(|p| eprintln!("progress {:.0}%", p * 100.0));
-    match split::split(&t, &uri, Some(&server), local.as_ref(), report) {
+    match split::split(&t, &uri, server.as_ref(), local.as_ref(), report) {
         Ok(()) => {
             for v in [split::Voice::NoVocals, split::Voice::VocalsOnly] {
                 let p = split::ready(&t, v);

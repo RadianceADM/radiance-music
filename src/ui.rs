@@ -3750,6 +3750,7 @@ impl Ui {
             let there = self.splits_on_server(t).is_some();
             (self.can_split() || there)
                 && !t.video
+                && (self.online.get() || t.file.is_some()) // offline, a song from the internet can't be fetched
                 && Self::shown_parts(t).is_empty()
                 && splitting_key.as_deref() != Some(t.key().as_str())
                 && !queued(t)
@@ -3757,12 +3758,19 @@ impl Ui {
         });
         self.split_button.set_visible(can);
         let waiting = self.split_queue.borrow().len();
+        // the vocals choices only where they can work (owner, 2026-11-04: "do not offer if not possible")
+        self.voice_group.set_sensitive(true);
+        let video = cur.as_ref().is_some_and(|t| t.video);
         let text = if Self::split_paused() && waiting > 0 {
             format!("Splitting is paused ({waiting} waiting). Resume it on Liked Songs or in the menu.")
         } else if !self.can_split() && !cur.as_ref().is_some_and(|t| self.splits_on_server(t).is_some() || !Self::shown_parts(t).is_empty()) {
             self.voice_group.set_sensitive(false);
             // (not over a server's split, in the same card)
             if self.has_away() { String::new() } else { "No vocals / Vocals only and the Mixer's parts need splitting: set it up in the menu, Splitting…".to_string() }
+        } else if video {
+            // a music video is never split (it plays with its picture): nothing to offer for it
+            self.voice_group.set_sensitive(false);
+            "Music videos play as they are: No vocals and Vocals only are for songs.".to_string()
         } else if let Some(t) = self.splitting.borrow().as_ref() {
             let host = self.settings.borrow().split.as_ref().map(|s| s.host.clone());
             let more = if waiting > 0 { format!(" ({waiting} more waiting)") } else { String::new() };
@@ -4271,7 +4279,7 @@ impl Ui {
                 let t1 = t.clone();
                 add(&mine, &format!("Split on {}", s.name), "split", Box::new(move |me| me.split_on_server(&t1)));
             }
-        } else if self.can_split() && !t.video && !split::done(&t) {
+        } else if self.can_split() && !t.video && !split::done(&t) && (self.online.get() || t.file.is_some()) {
             let t1 = t.clone();
             add(&mine, "Split Vocals", "split", Box::new(move |me| {
                 me.split_now(&t1);

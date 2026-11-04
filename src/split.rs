@@ -229,13 +229,21 @@ fn upload_file(uri: &str, work: &Path, job: &str) -> Result<PathBuf, String> {
         return Ok(to);
     }
     let ogg = work.join(format!("{job}.opus"));
-    let src = if uri.starts_with("http") { format!("souphttpsrc location=\"{uri}\"") } else { format!("filesrc location=\"{}\"", local_path.clone().unwrap_or_default().display()) };
-    if run(&format!("{src} ! matroskademux ! opusparse ! oggmux ! filesink location=\"{}\"", ogg.display())).is_ok() {
+    let src = if uri.starts_with("http") { format!("souphttpsrc location=\"{uri}\"") } else { format!("filesrc location=\"{}\"", gst_path(&local_path.clone().unwrap_or_default())) };
+    if run(&format!("{src} ! matroskademux ! opusparse ! oggmux ! filesink location=\"{}\"", gst_path(&ogg))).is_ok() {
         return Ok(ogg);
     }
     let flac = work.join(format!("{job}.flac"));
-    run(&format!("uridecodebin uri=\"{uri}\" ! audioconvert ! flacenc ! filesink location=\"{}\"", flac.display()))?;
+    run(&format!("uridecodebin uri=\"{uri}\" ! audioconvert ! flacenc ! filesink location=\"{}\"", gst_path(&flac)))?;
     Ok(flac)
+}
+
+/// A path as a pipeline description takes it. GStreamer's parser reads `\` as an escape,
+/// so a Windows path lost its backslashes ("C:UsersRadiance…"), nothing could be written
+/// and every song split from the internet failed there ("Element failed to change its
+/// state", ribs03 2026-11-04); Windows takes `/` in paths as well.
+fn gst_path(p: &Path) -> String {
+    p.display().to_string().replace('\\', "/")
 }
 
 /// Progress, 0 to 1, as the work goes (called from worker threads).
@@ -616,4 +624,16 @@ pub fn align_on_server(t: &Track, server: &SplitServer, given: &serde_json::Valu
     );
     let _ = fs::remove_file(&tmp);
     String::from_utf8(said?).map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_windows_path_survives_a_pipeline_description() {
+        // ribs03's split work folder (2026-11-04): the backslashes were read as escapes
+        assert_eq!(gst_path(Path::new(r"C:\Users\Radiance\AppData\Local\radiance-music\job.opus")), "C:/Users/Radiance/AppData/Local/radiance-music/job.opus");
+        assert_eq!(gst_path(Path::new("/home/me/.local/share/radiance-music/job.flac")), "/home/me/.local/share/radiance-music/job.flac");
+    }
 }
