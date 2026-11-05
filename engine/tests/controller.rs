@@ -641,7 +641,9 @@ fn the_liked_page_filters_like_the_linux_app() {
     let page = c.liked_page("");
     assert_eq!(titles(&page.songs), ["Another", "Cielo", "Halo"], "A to Z");
     assert_eq!(page.note, format!("3 songs, saved in {}", radiance_engine::library::music_dir().display()));
-    assert_eq!(page.fix, None, "nothing missing");
+    // songs all here; a build that saves YouTube songs also counts their music videos missing
+    let videos_count = radiance_engine::library::saves(&liked[0]);
+    assert_eq!(page.fix, videos_count.then(|| "Fix missing (3)".to_string()));
     let page = c.liked_page("beyonce");
     assert_eq!(titles(&page.songs), ["Halo"], "accents and capitals aside");
     assert_eq!(page.note, "1 of your 3 liked songs matches “beyonce”");
