@@ -90,3 +90,19 @@ public class TrayTextTests
         Assert.Equal("Radiance Music", TrayText.Tooltip("", ""));
     }
 }
+
+public class AzLightTests
+{
+    [Fact]
+    public void TheLastLetterAtTheTopLights()
+    {
+        Assert.Equal(2, AzLight.Pick(new double[] { -300, -10, 30, 400 }));
+    }
+
+    [Fact]
+    public void NoneAtTheTopLightsTheFirst()
+    {
+        Assert.Equal(0, AzLight.Pick(new double[] { 120, 400 }));
+        Assert.Null(AzLight.Pick(Array.Empty<double>()));
+    }
+}

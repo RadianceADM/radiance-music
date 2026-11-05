@@ -21,7 +21,8 @@ internal sealed class PlayerBar : Grid
     private readonly Border art = new() { Width = 56, Height = 56, CornerRadius = new CornerRadius(4) };
     private readonly TextBlock title = new() { Text = "Nothing playing", Style = (Style)Application.Current.Resources["BodyStrongTextBlockStyle"], TextTrimming = TextTrimming.CharacterEllipsis, TextWrapping = TextWrapping.NoWrap };
     private readonly TextBlock byline = new() { Style = (Style)Application.Current.Resources["CaptionTextBlockStyle"], Foreground = (Brush)Application.Current.Resources["TextFillColorSecondaryBrush"], TextTrimming = TextTrimming.CharacterEllipsis, TextWrapping = TextWrapping.NoWrap };
-    private readonly Button shuffle, previous, play, next, repeat, mute;
+    private readonly Button shuffle, previous, play, next, repeat, mute, heart;
+    private readonly FontIcon heartIcon = new() { Glyph = "\uEB51", FontSize = 15 };
     private readonly FontIcon playIcon = new() { Glyph = "\uE768", FontSize = 18 };
     private readonly FontIcon repeatIcon = new() { Glyph = "\uE8EE", FontSize = 15 };
     private readonly FontIcon muteIcon = new() { Glyph = "\uE767", FontSize = 15 };
@@ -91,9 +92,14 @@ internal sealed class PlayerBar : Grid
             at.Text = SeekModel.Clock(e.NewValue);
         };
 
-        // the volume
+        // the heart and the volume
+        heart = Round(heartIcon, "Like: saves the song", () =>
+        {
+            if (hub.Engine.Now().Song is { } s) hub.Engine.ToggleLike(s.Key);
+        });
         mute = Round(muteIcon, "Mute", ToggleMute);
         var end = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Center };
+        end.Children.Add(heart);
         end.Children.Add(mute);
         end.Children.Add(volume);
         SetColumn(end, 2);
@@ -147,7 +153,10 @@ internal sealed class PlayerBar : Grid
         var song = now.Song;
         title.Text = song?.Title ?? "Nothing playing";
         byline.Text = song?.Byline ?? "";
-        foreach (var c in new Control[] { play, previous, bar }) c.IsEnabled = song != null;
+        foreach (var c in new Control[] { play, previous, bar, heart }) c.IsEnabled = song != null;
+        heartIcon.Glyph = now.Liked ? "\uEB52" : "\uEB51";
+        heartIcon.Foreground = now.Liked ? (Brush)Application.Current.Resources["SystemFillColorCriticalBrush"] : (Brush)Application.Current.Resources["TextFillColorPrimaryBrush"];
+        ToolTipService.SetToolTip(heart, now.Liked ? "Liked. Click to remove from Liked" : "Like: saves the song");
         previous.IsEnabled = now.CanPrevious;
         next.IsEnabled = now.CanNext;
         playIcon.Glyph = now.Playing ? "\uE769" : "\uE768";

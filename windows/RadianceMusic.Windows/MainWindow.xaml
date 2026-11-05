@@ -34,9 +34,28 @@
                 <NavigationViewItem Content="Now Playing" Tag="playing">
                     <NavigationViewItem.Icon><FontIcon Glyph="&#xE8D6;" /></NavigationViewItem.Icon>
                 </NavigationViewItem>
+                <NavigationViewItemHeader Content="Library" />
+                <NavigationViewItem Content="Liked Songs" Tag="liked">
+                    <NavigationViewItem.Icon><FontIcon Glyph="&#xEB52;" /></NavigationViewItem.Icon>
+                </NavigationViewItem>
+                <NavigationViewItem Content="History" Tag="history">
+                    <NavigationViewItem.Icon><FontIcon Glyph="&#xE81C;" /></NavigationViewItem.Icon>
+                </NavigationViewItem>
+                <NavigationViewItem Content="Albums" Tag="albums">
+                    <NavigationViewItem.Icon><FontIcon Glyph="&#xE93C;" /></NavigationViewItem.Icon>
+                </NavigationViewItem>
+                <NavigationViewItem Content="Artists" Tag="artists">
+                    <NavigationViewItem.Icon><FontIcon Glyph="&#xE77B;" /></NavigationViewItem.Icon>
+                </NavigationViewItem>
+                <NavigationViewItem Content="Genres" Tag="genres">
+                    <NavigationViewItem.Icon><FontIcon Glyph="&#xE8FD;" /></NavigationViewItem.Icon>
+                </NavigationViewItem>
+                <NavigationViewItemHeader x:Name="PlaylistsHeader" Content="Playlists" />
             </NavigationView.MenuItems>
             <Grid>
                 <Frame x:Name="Pages" />
+                <InfoBar x:Name="Toast" VerticalAlignment="Bottom" HorizontalAlignment="Center" Margin="20,0,20,20"
+                         MaxWidth="720" IsOpen="False" Severity="Informational" IsClosable="True" />
                 <InfoBar x:Name="Notice" VerticalAlignment="Bottom" HorizontalAlignment="Center" Margin="20,0,20,20"
                          MaxWidth="720" IsOpen="False" Severity="Warning" IsClosable="True">
                     <InfoBar.ActionButton>
