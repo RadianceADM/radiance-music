@@ -1700,8 +1700,8 @@ impl Ui {
                     me.save_session();
                     let player = me.player.borrow();
                     let before = Before {
-                        queue: me.queue.borrow().clone(),
-                        index: me.index.get(),
+                        queue: me.queue.borrow().tracks().to_vec(),
+                        index: me.queue.borrow().index(),
                         current: me.current.borrow().clone(),
                         at: player.as_ref().and_then(|p| p.position()).or(me.restore_at.get()).unwrap_or(0.0),
                         playing: player.as_ref().is_some_and(|p| p.playing()),
@@ -2015,9 +2015,7 @@ impl Ui {
         self.quality_known.set(false);
         self.restored.set(false);
         self.restore_at.set(None);
-        *self.queue.borrow_mut() = vec![t.clone()];
-        *self.unshuffled.borrow_mut() = None;
-        self.index.set(0);
+        self.queue.borrow_mut().restore(vec![t.clone()], 0);
         *self.current.borrow_mut() = Some(t.clone());
         self.on_half.set(None);
         self.on_stems.set(false);
@@ -2201,8 +2199,7 @@ impl Ui {
         }
         if let (true, Some(b)) = (back, link.before.take()) {
             if let Some(t) = b.current {
-                *self.queue.borrow_mut() = b.queue;
-                self.index.set(b.index);
+                self.queue.borrow_mut().set_tracks(b.queue, b.index);
                 let gen = self.play_gen.get() + 1;
                 self.play_gen.set(gen);
                 *self.current.borrow_mut() = Some(t.clone());

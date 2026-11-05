@@ -19,6 +19,8 @@ license.workspace = true
 [dependencies]
 # the engine (engine/): everything that isn't a screen; its video sink is GTK's (feature gtk)
 radiance-engine = { path = "engine", features = ["gtk"] }
+# the pure behaviour (core/): the queue, …
+radiance-core = { path = "core" }
 gtk = { package = "gtk4", version = "0.11", features = ["v4_14"] }
 adw = { package = "libadwaita", version = "0.9", features = ["v1_7"] }
 gst = { package = "gstreamer", version = "0.25" }

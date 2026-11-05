@@ -4,4 +4,5 @@
 //! SPDX-License-Identifier: GPL-3.0-or-later
 
 pub mod lyrics;
+pub mod queue;
 pub mod track;

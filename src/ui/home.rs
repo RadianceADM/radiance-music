@@ -946,8 +946,7 @@ impl Ui {
         let s = session::load();
         self.history.replace(s.history);
         let Some(t) = s.queue.get(s.index).cloned() else { return };
-        *self.queue.borrow_mut() = s.queue;
-        self.index.set(s.index);
+        self.queue.borrow_mut().set_tracks(s.queue, s.index);
         let t = self.saved_copy(&t);
         *self.current.borrow_mut() = Some(t.clone());
         self.show_current(&t);
@@ -972,8 +971,8 @@ impl Ui {
         }
         let position = self.player.borrow().as_ref().and_then(|p| p.position()).or(self.restore_at.get()).unwrap_or(0.0);
         session::save(&session::Session {
-            queue: self.queue.borrow().clone(),
-            index: self.index.get(),
+            queue: self.queue.borrow().tracks().to_vec(),
+            index: self.queue.borrow().index(),
             position,
             history: self.history.borrow().clone(),
         });

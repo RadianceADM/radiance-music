@@ -36,6 +36,7 @@ use crate::relay::Relay;
 use crate::settings::{self, Settings, Transition, FADE_RANGE};
 use crate::split::{self, Voice};
 use crate::track::{clock, file_key, letter_of, matches, Source, Track};
+use radiance_core::queue::{self, Queue, Removed, Repeat, Step};
 use crate::{align, archive, art, genre, library, mix, servers, storage, youtube, APP_ID};
 
 
@@ -286,40 +287,19 @@ fn texture(px: art::Pixels) -> gdk::Texture {
 /// often, less (1 for a song with no plays or skips; between 0.2 and 8).
 fn liking(t: &Track) -> f64 {
     let (plays, skips) = counts_of(t);
-    ((1.0 + plays as f64) / (1.0 + 2.0 * skips as f64)).clamp(0.2, 8.0)
+    queue::liking(plays as u32, skips as u32)
 }
 
 /// Skipped more than played (at least twice): left out of mixes and radios.
 fn often_skipped(t: &Track) -> bool {
     let (plays, skips) = counts_of(t);
-    skips >= 2 && skips > plays
+    queue::often_skipped(plays as u32, skips as u32)
 }
 
-/// A shuffle that still listens to you: random, but songs you play a lot tend
-/// to come early and songs you skip tend to come late (each song's place is
-/// u^(1/w), u random, w how much you like it: weighted random order).
+/// A shuffle that still listens to you (core's queue::shuffled), its randomness from the clock.
 fn shuffled(v: Vec<Track>) -> Vec<Track> {
-    let mut x = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(7) | 1;
-    let mut keyed: Vec<(f64, Track)> = v
-        .into_iter()
-        .map(|t| {
-            x ^= x << 13;
-            x ^= x >> 7;
-            x ^= x << 17;
-            let u = ((x >> 11) as f64 / (1u64 << 53) as f64).max(1e-12);
-            (u.powf(1.0 / liking(&t)), t)
-        })
-        .collect();
-    keyed.sort_by(|a, b| b.0.total_cmp(&a.0));
-    keyed.into_iter().map(|(_, t)| t).collect()
-}
-
-/// Repeat: off, the whole queue, or this song.
-#[derive(Clone, Copy, PartialEq)]
-enum Repeat {
-    Off,
-    All,
-    One,
+    let seed = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(7);
+    queue::shuffled(v, liking, seed)
 }
 
 /// A saved song's own cover, else the source's.
@@ -1075,17 +1055,14 @@ pub struct Ui {
     next: gtk::Button,
     shuffle: gtk::ToggleButton,
     repeat_button: gtk::Button,
-    repeat: Cell<Repeat>,
-    /// The queue in its own order, while shuffle is on.
-    unshuffled: RefCell<Option<Vec<Track>>>,
     seek: gtk::Scale,
     pos: gtk::Label,
     len: gtk::Label,
     // playing
     player: RefCell<Option<Player>>,
     relay: Option<Relay>,
-    queue: RefCell<Vec<Track>>,
-    index: Cell<usize>,
+    /// The songs, the one playing, Shuffle's order and Repeat (core's queue).
+    queue: RefCell<Queue>,
     current: RefCell<Option<Track>>,
     kbps: Cell<u32>,
     quality_known: Cell<bool>,
@@ -1385,15 +1362,12 @@ impl Ui {
                 .css_classes(["flat", "circular"])
                 .build(),
             repeat_button: button("media-playlist-repeat-symbolic", "Repeat: off"),
-            repeat: Cell::new(Repeat::Off),
-            unshuffled: RefCell::default(),
             seek: gtk::Scale::builder().orientation(gtk::Orientation::Horizontal).hexpand(true).draw_value(false).build(),
             pos: label(&["numeric", "caption"]),
             len: label(&["numeric", "caption"]),
             player: RefCell::new(None),
             relay: Relay::start().ok(),
             queue: RefCell::default(),
-            index: Cell::new(0),
             current: RefCell::new(None),
             kbps: Cell::new(0),
             quality_known: Cell::new(false),
@@ -2927,12 +2901,7 @@ impl Ui {
 
     /// The song after this one, if one plays next (repeat-one replays instead).
     fn next_track(&self) -> Option<Track> {
-        if self.repeat.get() == Repeat::One {
-            return None;
-        }
-        let queue = self.queue.borrow();
-        let i = self.index.get() + 1;
-        queue.get(i).cloned().or_else(|| (self.repeat.get() == Repeat::All && queue.len() > 1).then(|| queue[0].clone()))
+        self.queue.borrow().next().cloned()
     }
 
     /// The saved copy of a liked song, else the song itself.
@@ -3098,9 +3067,12 @@ impl Ui {
         if !self.player.borrow().as_ref().is_some_and(|p| p.mixing()) {
             return;
         }
-        let len = self.queue.borrow().len();
-        let i = self.index.get() + 1;
-        self.index.set(if i < len { i } else { 0 });
+        {
+            let mut q = self.queue.borrow_mut();
+            let i = q.index() + 1;
+            let next = if i < q.len() { i } else { 0 };
+            q.set_index(next);
+        }
         self.cued.replace(None);
         self.plan.replace(None);
         let gen = self.play_gen.get() + 1;
@@ -3381,9 +3353,10 @@ impl Ui {
             return;
         }
         let at = self.player.borrow().as_ref().and_then(|p| p.position()).unwrap_or(0.0);
-        let i = self.index.get();
-        if let Some(slot) = self.queue.borrow_mut().get_mut(i) {
-            *slot = other.clone();
+        {
+            let mut q = self.queue.borrow_mut();
+            let i = q.index();
+            q.set_at(i, other.clone());
         }
         // the way back is known already
         self.counterpart.replace(Some((other.key(), cur.clone())));
@@ -4163,7 +4136,7 @@ impl Ui {
             Place::List(list, i) | Place::Liked(list, i) | Place::Playlist(_, list, i) => self.play_list((**list).clone(), *i),
             Place::Server(list, i) => self.play_from_server(list, *i),
             Place::Queue(i) => {
-                self.index.set(*i);
+                self.queue.borrow_mut().set_index(*i);
                 self.play_current();
             }
             Place::Again(t) => self.play_again(t),
@@ -4467,9 +4440,8 @@ impl Ui {
             self.play_list(vec![t.clone()], 0);
             return;
         }
-        let at = (self.index.get() + 1).min(self.queue.borrow().len());
-        self.queue.borrow_mut().insert(at, t.clone());
-        self.index.set(at);
+        let at = self.queue.borrow_mut().insert_next(t.clone());
+        self.queue.borrow_mut().set_index(at);
         self.play_current(); // lists the queue again too
         self.replan();
         self.save_session();
@@ -4480,8 +4452,7 @@ impl Ui {
             self.play_list(vec![t.clone()], 0);
             return;
         }
-        let at = (self.index.get() + 1).min(self.queue.borrow().len());
-        self.queue.borrow_mut().insert(at, t.clone());
+        self.queue.borrow_mut().insert_next(t.clone());
         self.queue_changed();
         self.prefetch_next();
         self.toast(&format!("“{}” plays next", t.title));
@@ -4499,25 +4470,18 @@ impl Ui {
     }
 
     fn unqueue(self: &Rc<Self>, i: usize) {
-        let len = self.queue.borrow().len();
-        if i >= len {
-            return;
-        }
-        let cur = self.index.get();
-        self.queue.borrow_mut().remove(i);
-        if i < cur {
-            self.index.set(cur - 1);
-        } else if i == cur {
+        let removed = self.queue.borrow_mut().remove(i);
+        match removed {
+            None => return,
             // the song playing: on to the next one (now at the same place)
-            if cur < len - 1 {
-                self.play_current();
-            } else {
+            Some(Removed::Current { play: true }) => self.play_current(),
+            Some(Removed::Current { play: false }) => {
                 if let Some(p) = self.player.borrow().as_ref() {
                     p.stop();
                 }
                 *self.current.borrow_mut() = None;
-                self.index.set(cur.saturating_sub(1));
             }
+            Some(Removed::Before | Removed::After) => {}
         }
         self.queue_changed();
     }
@@ -4535,14 +4499,16 @@ impl Ui {
             self.queue_group.remove(&r);
         }
         self.render_recent();
-        let queue = self.queue.borrow().clone();
-        let cur = self.index.get();
+        let (queue, cur) = {
+            let q = self.queue.borrow();
+            (q.tracks().to_vec(), q.index())
+        };
         let playing = self.current.borrow().is_some();
         let ahead = queue.len().saturating_sub(cur + usize::from(playing));
         self.queue_group.set_description(Some(&if queue.is_empty() || (!playing && ahead == 0) {
             "Nothing queued. Play a song, or right-click any song and pick Add to Queue.".to_string()
         } else if ahead == 0 {
-            if self.settings.borrow().autoplay && self.repeat.get() == Repeat::Off {
+            if self.settings.borrow().autoplay && self.queue.borrow().repeat() == Repeat::Off {
                 "Autoplay is adding songs like this one next.".to_string()
             } else {
                 "Nothing after this song. Right-click any song and pick Add to Queue, or start a Song Radio (or turn on Autoplay in the menu).".to_string()
@@ -4635,22 +4601,16 @@ impl Ui {
     /// The queue's song at `from` moves to just before `to` (never above the
     /// song playing).
     fn move_in_queue(self: &Rc<Self>, from: usize, to: usize) {
-        let first = self.index.get() + usize::from(self.current.borrow().is_some());
-        let len = self.queue.borrow().len();
-        if from < first || from >= len {
+        let playing = self.current.borrow().is_some();
+        let (first, len, title) = {
+            let q = self.queue.borrow();
+            (q.index() + usize::from(playing), q.len(), q.get(from).map(|t| t.title.clone()).unwrap_or_default())
+        };
+        // (never above the song playing; not moved: where it was)
+        if !self.queue.borrow_mut().move_item(from, to, playing) {
             return;
         }
         let to = to.clamp(first, len);
-        if to == from || to == from + 1 {
-            return; // where it was
-        }
-        let title = {
-            let mut q = self.queue.borrow_mut();
-            let t = q.remove(from);
-            let title = t.title.clone();
-            q.insert(if to > from { to - 1 } else { to }, t);
-            title
-        };
         crate::log::note(&format!("queue: “{title}” moved from place {} to {}", from + 1 - first, if to > from { to - first } else { to + 1 - first }));
         self.queue_changed();
         self.prefetch_next();
@@ -4735,8 +4695,7 @@ impl Ui {
             queue.extend(list.into_iter().filter(|x| x.key() != seed.key() && !x.same_song(&seed) && !often_skipped(x)));
             let n = queue.len() - 1;
             if me.current.borrow().as_ref().is_some_and(|c| c.key() == seed.key()) {
-                *me.queue.borrow_mut() = queue; // it's playing already: just what comes after
-                me.index.set(0);
+                me.queue.borrow_mut().set_tracks(queue, 0); // it's playing already: just what comes after
                 me.queue_changed();
                 me.prefetch_next();
             } else {
@@ -5221,20 +5180,8 @@ impl Ui {
         self.note_skip_if_early(); // another song picked mid-song
         self.restored.set(false);
         self.restore_at.set(None);
-        if self.shuffle.is_active() && queue.len() > 1 {
-            // the song picked first, the rest in a random order
-            *self.unshuffled.borrow_mut() = Some(queue.clone());
-            let mut rest = queue;
-            let first = rest.remove(i.min(rest.len() - 1));
-            let mut order = vec![first];
-            order.extend(shuffled(rest));
-            *self.queue.borrow_mut() = order;
-            self.index.set(0);
-        } else {
-            *self.unshuffled.borrow_mut() = None;
-            *self.queue.borrow_mut() = queue;
-            self.index.set(i);
-        }
+        // with Shuffle on: the song picked first, the rest in a random order
+        self.queue.borrow_mut().play_list(queue, i, shuffled);
         self.play_current();
     }
 
@@ -5243,32 +5190,19 @@ impl Ui {
     fn shuffle_changed(self: &Rc<Self>) {
         let on = self.shuffle.is_active();
         self.shuffle.set_tooltip_text(Some(if on { "Shuffle: on" } else { "Shuffle" }));
-        let cur = self.index.get();
-        if on {
-            let queue = self.queue.borrow().clone();
-            if queue.len() > cur + 2 {
-                *self.unshuffled.borrow_mut() = Some(queue.clone());
-                let mut order = queue[..=cur].to_vec();
-                order.extend(shuffled(queue[cur + 1..].to_vec()));
-                *self.queue.borrow_mut() = order;
-            }
-        } else if let Some(original) = self.unshuffled.borrow_mut().take() {
-            let key = self.current.borrow().as_ref().map(|t| t.key());
-            let at = key.and_then(|k| original.iter().position(|t| t.key() == k)).unwrap_or(0);
-            *self.queue.borrow_mut() = original;
-            self.index.set(at);
-        }
+        let key = self.current.borrow().as_ref().map(|t| t.key());
+        self.queue.borrow_mut().set_shuffle(on, key.as_deref(), shuffled);
         self.queue_changed();
         self.prefetch_next();
     }
 
     fn next_repeat(self: &Rc<Self>) {
-        let (mode, icon, tip) = match self.repeat.get() {
-            Repeat::Off => (Repeat::All, "media-playlist-repeat-symbolic", "Repeat: the whole queue"),
-            Repeat::All => (Repeat::One, "media-playlist-repeat-song-symbolic", "Repeat: this song"),
-            Repeat::One => (Repeat::Off, "media-playlist-repeat-symbolic", "Repeat: off"),
+        let mode = self.queue.borrow_mut().cycle_repeat();
+        let (icon, tip) = match mode {
+            Repeat::All => ("media-playlist-repeat-symbolic", "Repeat: the whole queue"),
+            Repeat::One => ("media-playlist-repeat-song-symbolic", "Repeat: this song"),
+            Repeat::Off => ("media-playlist-repeat-symbolic", "Repeat: off"),
         };
-        self.repeat.set(mode);
         self.replan();
         self.repeat_button.set_icon_name(icon);
         self.repeat_button.set_tooltip_text(Some(tip));
@@ -5287,7 +5221,7 @@ impl Ui {
             self.leave_party(false); // a song of your own picked: out of the party
             self.toast("You left the party to play your own music");
         }
-        let Some(t) = self.queue.borrow().get(self.index.get()).cloned() else { return };
+        let Some(t) = self.queue.borrow().at_index().cloned() else { return };
         // the saved copy when there is one: instant, and works offline
         let t = self
             .liked
@@ -5365,11 +5299,11 @@ impl Ui {
     /// radio) come after it, so the music carries on. Not with Repeat on; never
     /// songs played lately, ones you keep skipping, or ones already queued.
     fn autoplay_if_last(self: &Rc<Self>) {
-        if !self.settings.borrow().autoplay || self.repeat.get() != Repeat::Off || std::env::var_os("RADIANCE_SHOT").is_some() {
+        if !self.settings.borrow().autoplay || self.queue.borrow().repeat() != Repeat::Off || std::env::var_os("RADIANCE_SHOT").is_some() {
             return;
         }
         let Some(seed) = self.current.borrow().clone() else { return };
-        if self.index.get() + 1 < self.queue.borrow().len() || self.autoplay_for.borrow().as_deref() == Some(seed.key().as_str()) {
+        if self.queue.borrow().index() + 1 < self.queue.borrow().len() || self.autoplay_for.borrow().as_deref() == Some(seed.key().as_str()) {
             return;
         }
         *self.autoplay_for.borrow_mut() = Some(seed.key());
@@ -5378,17 +5312,13 @@ impl Ui {
         bg(move || mix::radio(&s), move |found| {
             let Some(me) = me.upgrade() else { return };
             // still the last song, still that one
-            let still = me.current.borrow().as_ref().is_some_and(|c| c.key() == seed.key()) && me.index.get() + 1 >= me.queue.borrow().len();
+            let still = me.current.borrow().as_ref().is_some_and(|c| c.key() == seed.key()) && me.queue.borrow().index() + 1 >= me.queue.borrow().len();
             if !still || !me.settings.borrow().autoplay {
                 return;
             }
             let queued: HashSet<String> = me.queue.borrow().iter().map(|t| t.key()).collect();
             let lately: HashSet<String> = crate::session::recent(&me.history.borrow()).into_iter().take(30).map(|t| t.key()).collect();
-            let more: Vec<Track> = found
-                .into_iter()
-                .filter(|t| !queued.contains(&t.key()) && !lately.contains(&t.key()) && !t.same_song(&seed) && !often_skipped(t))
-                .take(25)
-                .collect();
+            let more = queue::autoplay_picks(found, &queued, &lately, &seed, often_skipped);
             if more.is_empty() {
                 return;
             }
@@ -5494,7 +5424,10 @@ impl Ui {
 
     /// The next YouTube song's stream, found while this one plays: no wait between songs.
     fn prefetch_next(self: &Rc<Self>) {
-        let next = self.queue.borrow().get(self.index.get() + 1).cloned();
+        let next = {
+            let q = self.queue.borrow();
+            q.get(q.index() + 1).cloned()
+        };
         if let Some(t) = next {
             let saved = self.liked.borrow().iter().any(|x| x.key() == t.key() && x.file.is_some());
             if t.source == Source::YouTube && !saved && self.fresh_stream(&t.id).is_none() {
@@ -5656,7 +5589,7 @@ impl Ui {
                 self.update_quality();
                 self.set_controls();
             }
-            Event::Ended if self.repeat.get() == Repeat::One => self.play_current(),
+            Event::Ended if self.queue.borrow().repeat() == Repeat::One => self.play_current(),
             Event::Ended => {
                 self.skip(1);
                 self.feedback_moment(); // a song's end: a free moment for the feedback pop-up
@@ -5742,8 +5675,7 @@ impl Ui {
         if why.contains("yt-dlp isn't installed") {
             self.cant_work("YouTube songs can't play: yt-dlp, which gets them, isn't installed", "https://github.com/RadianceADM/radiance-music#to-play-music");
         }
-        let len = self.queue.borrow().len();
-        let more = self.index.get() + 1 < len || self.repeat.get() == Repeat::All;
+        let more = self.queue.borrow().can_next();
         if more && !every_song && fails < 3 {
             self.toast(&format!("“{title}” can't play: {reason}. On to the next song."));
             self.skip(1);
@@ -5812,31 +5744,28 @@ impl Ui {
         if by > 0 {
             self.note_skip_if_early();
         }
-        let len = self.queue.borrow().len();
         let at = self.player.borrow().as_ref().and_then(|p| p.position()).unwrap_or(0.0);
-        if by < 0 && at > 3.0 {
-            if let Some(p) = self.player.borrow().as_ref() {
-                p.seek(0.0); // back: the start of this song first
-            }
-            return;
-        }
-        let mut i = self.index.get() as i64 + by as i64;
-        if i as usize >= len && by > 0 && self.repeat.get() == Repeat::All && len > 0 {
-            i = 0; // repeat the queue: from the top
-        }
-        if i < 0 || i as usize >= len {
-            if by > 0 {
+        let step = self.queue.borrow_mut().skip(by, at);
+        match step {
+            Step::Restart => {
                 if let Some(p) = self.player.borrow().as_ref() {
-                    p.stop(); // the end of the list
+                    p.seek(0.0); // back: the start of this song first
                 }
-                self.ran_out.set(true); // Autoplay's songs, if they're on their way, start when they come
-                self.set_controls();
             }
-            return;
+            Step::End => {
+                if by > 0 {
+                    if let Some(p) = self.player.borrow().as_ref() {
+                        p.stop(); // the end of the list
+                    }
+                    self.ran_out.set(true); // Autoplay's songs, if they're on their way, start when they come
+                    self.set_controls();
+                }
+            }
+            Step::Play(_) => {
+                self.ran_out.set(false);
+                self.play_current();
+            }
         }
-        self.ran_out.set(false);
-        self.index.set(i as usize);
-        self.play_current();
     }
 
     fn set_controls(&self) {
@@ -5846,9 +5775,8 @@ impl Ui {
         self.play.set_sensitive(has);
         self.play.set_icon_name(if playing { "media-playback-pause-symbolic" } else { "media-playback-start-symbolic" });
         self.play.set_tooltip_text(Some(if playing { "Pause" } else { "Play" }));
-        let (i, len) = (self.index.get(), self.queue.borrow().len());
         self.prev.set_sensitive(has);
-        self.next.set_sensitive(has && (i + 1 < len || self.repeat.get() == Repeat::All));
+        self.next.set_sensitive(has && self.queue.borrow().can_next());
         // in a party: Next skips for everyone (when you control it); there's no going back
         if let Some((control, song, playing)) = self.party_buttons() {
             // (the party's play / pause, not this computer's short waits to stay in step)
