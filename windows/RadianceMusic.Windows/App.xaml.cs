@@ -44,7 +44,7 @@ public partial class App : Application
         {
             if (Program.Dev.Shot == null)
                 Win32.Message("Radiance Music is already open. Close it to use Radiance Music (beta).", "Radiance Music (beta)");
-            Trace("another copy runs: quitting");
+            Trace("another copy runs: it comes forward, this one quits");
             Exit();
             return;
         }
@@ -57,13 +57,13 @@ public partial class App : Application
         var icon = Path.Combine(AppContext.BaseDirectory, "radiance-music.ico");
         tray = new Tray(Hub, icon);
         keys = new MediaKeys(Hub, WinRT.Interop.WindowNative.GetWindowHandle(Window));
-        Trace("tray and media keys");
+        Trace($"tray icon added: {tray.Added}; media keys: on");
         if (Program.Dev.Shot != null) _ = Shot.TakeAsync(Window, Program.Dev);
         if (Program.Dev.PlayTest) Hub.Engine.PlayFrom(ListKind.Recent, 0);
     }
 
     /// <summary>Developer runs (--shot, --play-test): each step of the start in the crash note.</summary>
-    private static void Trace(string step)
+    internal static void Trace(string step)
     {
         if (Program.Dev.Shot != null || Program.Dev.PlayTest) Crash.Note($"[{Environment.ProcessId}] {step}");
     }
@@ -83,6 +83,10 @@ public partial class App : Application
     /// <summary>Another copy asked: this window comes forward (on the UI thread).</summary>
     private sealed class Others(DispatcherQueue ui) : ShowListener
     {
-        public void Show(string? link) => ui.TryEnqueue(() => Window?.BringToFront());
+        public void Show(string? link) => ui.TryEnqueue(() =>
+        {
+            Trace("another copy asked: this window comes forward");
+            Window?.BringToFront();
+        });
     }
 }

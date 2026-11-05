@@ -23,6 +23,9 @@ internal sealed class Tray : IDisposable
     private string tip = "Radiance Music";
     private bool added;
 
+    /// <summary>The icon is in the notification area.</summary>
+    public bool Added => added;
+
     public Tray(EngineHub hub, string iconPath)
     {
         this.hub = hub;
