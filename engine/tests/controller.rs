@@ -290,7 +290,7 @@ fn now_id(c: &Controller) -> String {
 fn a_list_plays_and_moves_on() {
     let _l = setup();
     let (c, _f, rx) = with_songs("files one", vec![wav("move-a", 1.5), wav("move-b", 1.5)]);
-    c.play_from(ListRef::Songs, 0);
+    c.play_from(ListRef::Songs, 0, "yt:file-move-a");
     assert!(until(3.0, || c.now().playing), "never played");
     assert_eq!(now_id(&c), "file-move-a");
     assert!(wait_for(&rx, Change::Position, 2.0));
@@ -308,8 +308,8 @@ fn the_song_picked_last_wins() {
     slow.seconds = 2;
     let (c, fake, _rx) = with_songs("files two", vec![slow, wav("picked-last", 3.0)]);
     fake.streams.lock().unwrap().insert("slow".into(), (Duration::from_millis(400), Ok(format!("file://{}", late.file.unwrap()))));
-    c.play_from(ListRef::Songs, 0);
-    c.play_from(ListRef::Songs, 1);
+    c.play_from(ListRef::Songs, 0, "yt:slow");
+    c.play_from(ListRef::Songs, 1, "yt:file-picked-last");
     std::thread::sleep(Duration::from_millis(1000));
     assert_eq!(now_id(&c), "file-picked-last");
     assert!(c.now().playing);
@@ -321,7 +321,7 @@ fn a_song_that_wont_play_is_skipped_then_it_stops_after_three() {
     let _l = setup();
     let gone: Vec<Track> = (1..=4).map(|i| song(Source::YouTube, &format!("gone{i}"), &format!("Gone {i}"))).collect();
     let (c, _f, rx) = with_songs("files three", gone);
-    c.play_from(ListRef::Songs, 0);
+    c.play_from(ListRef::Songs, 0, "yt:gone1");
     let mut problems = 0;
     let end = Instant::now() + Duration::from_secs(6);
     while problems < 3 && Instant::now() < end {
@@ -332,7 +332,7 @@ fn a_song_that_wont_play_is_skipped_then_it_stops_after_three() {
     assert_eq!(problems, 3);
     assert!(until(1.0, || c.queue().1 == 2));
     assert!(!c.now().playing);
-    assert_eq!(c.problem().as_deref(), Some("3 songs in a row wouldn't play: its source didn't answer"));
+    assert_eq!(c.problem().map(|p| p.text).as_deref(), Some("3 songs in a row wouldn't play: its source didn't answer"));
     assert!(!wait_for(&rx, Change::Problem, 0.7), "a fourth try");
     c.quit();
 }
@@ -341,7 +341,7 @@ fn a_song_that_wont_play_is_skipped_then_it_stops_after_three() {
 fn back_restarts_after_three_seconds() {
     let _l = setup();
     let (c, _f, _rx) = with_songs("files four", vec![wav("back-a", 2.0), wav("back-b", 6.0)]);
-    c.play_from(ListRef::Songs, 1);
+    c.play_from(ListRef::Songs, 1, "yt:file-back-b");
     assert!(until(6.0, || c.now().at >= 3.5), "never got to 3.5 s");
     c.skip(-1);
     assert!(until(1.0, || c.now().at < 1.0), "didn't go back to the start");
@@ -356,7 +356,7 @@ fn repeat_one_plays_it_again() {
     c.cycle_repeat();
     c.cycle_repeat();
     assert!(until(1.0, || c.now().repeat == Repeat::One));
-    c.play_from(ListRef::Songs, 0);
+    c.play_from(ListRef::Songs, 0, "yt:file-again");
     assert!(until(3.0, || c.now().at >= 1.0));
     assert!(until(3.0, || c.now().playing && c.now().at < 0.7), "didn't start again");
     assert_eq!(now_id(&c), "file-again");
@@ -368,7 +368,7 @@ fn repeat_one_plays_it_again() {
 fn the_session_comes_back_paused() {
     let _l = setup();
     let (c, _f, _rx) = with_songs("files six", vec![wav("kept", 6.0)]);
-    c.play_from(ListRef::Songs, 0);
+    c.play_from(ListRef::Songs, 0, "yt:file-kept");
     assert!(until(3.0, || c.now().at >= 0.5));
     c.seek(2.0);
     assert!(until(1.0, || c.now().at >= 2.0));
@@ -390,7 +390,7 @@ fn lyrics_lines_light_with_the_song() {
     let (c, fake, rx) = with_songs("files seven", vec![wav("sung", 3.0)]);
     let line = |s: f64, e: f64, t: &str| Line { start: s, end: e, text: t.into(), words: vec![Word { start: s, end: e, text: t.into() }], singer: None };
     *fake.lyrics.lock().unwrap() = Some(Lyrics::Timed { lines: vec![line(0.0, 1.0, "one"), line(1.2, 2.5, "two")], exact: false });
-    c.play_from(ListRef::Songs, 0);
+    c.play_from(ListRef::Songs, 0, "yt:file-sung");
     assert!(wait_for(&rx, Change::Lyrics, 3.0)); // looking for them…
     assert!(until(3.0, || matches!(c.lyrics(), LyricsState::Lines(l) if l.len() == 2)), "{:?}", c.lyrics());
     assert!(until(2.0, || c.now().at > 0.2 && c.now().lit == [0]));
@@ -412,5 +412,75 @@ fn art_files_are_cached_pngs() {
     let (wash, blob) = c.backdrop_files(&cover.display().to_string()).expect("the backdrop's files");
     assert!(wash.exists() && blob.exists());
     assert_eq!(c.art_file("/no/such/cover.jpg", 300), None);
+    c.quit();
+}
+
+// ---------------------------------------------------------------------------------- the review's fixes
+
+#[test]
+fn next_while_picked_up_starts_the_next_song_from_its_start() {
+    let _l = setup();
+    let (c, _f, _rx) = with_songs("files eight", vec![wav("picked-a", 6.0), wav("picked-b", 6.0)]);
+    c.play_from(ListRef::Songs, 0, "yt:file-picked-a");
+    assert!(until(4.0, || c.now().at >= 1.6), "A never got to 1.6 s");
+    c.quit();
+    let (heard, _rx) = listener();
+    let again = Controller::start(heard, Arc::new(Fake::default())).unwrap();
+    assert!(!again.now().playing); // picked up, paused, at A's place
+    assert!(again.now().at >= 1.6);
+    again.skip(1);
+    assert!(until(3.0, || now_id(&again) == "file-picked-b" && again.now().playing), "Next didn't start the next song");
+    assert!(until(1.0, || again.now().at > 0.0));
+    assert!(again.now().at < 1.2, "the next song started at the last one's place: {}", again.now().at);
+    again.toggle_play();
+    assert!(until(1.0, || !again.now().playing), "Pause didn't pause");
+    again.quit();
+}
+
+#[test]
+fn try_again_starts_over_after_three_failures() {
+    let _l = setup();
+    let gone: Vec<Track> = (1..=4).map(|i| song(Source::YouTube, &format!("again{i}"), &format!("Again {i}"))).collect();
+    let (c, _f, rx) = with_songs("files nine", gone);
+    c.play_from(ListRef::Songs, 0, "yt:again1");
+    assert!(until(6.0, || c.problem().is_some_and(|p| p.retry)), "never stopped");
+    assert_eq!(c.problem().unwrap().text, "3 songs in a row wouldn't play: its source didn't answer");
+    while rx.try_recv().is_ok() {}
+    c.retry();
+    assert!(wait_for(&rx, Change::Problem, 3.0));
+    let p = c.problem().unwrap();
+    assert_eq!(p.text, "“Again 3” can't play: its source didn't answer. On to the next song.");
+    assert!(!p.retry, "a note that goes on to the next song has no Try Again");
+    c.quit();
+}
+
+#[test]
+fn a_click_plays_the_song_clicked_even_if_the_list_moved() {
+    let _l = setup();
+    let (c, _f, _rx) = with_songs("files ten", vec![wav("moved-a", 3.0), wav("moved-b", 3.0), wav("moved-c", 3.0)]);
+    // the click was on c, at index 1 as the screen showed it then
+    c.play_from(ListRef::Songs, 1, "yt:file-moved-c");
+    assert!(until(3.0, || now_id(&c) == "file-moved-c"));
+    // a song that's no longer in the list: nothing happens
+    c.play_from(ListRef::Songs, 0, "yt:nowhere");
+    std::thread::sleep(Duration::from_millis(400));
+    assert_eq!(now_id(&c), "file-moved-c");
+    c.quit();
+}
+
+#[test]
+fn mute_keeps_the_saved_volume() {
+    let _l = setup();
+    let (heard, _rx) = listener();
+    let c = Controller::start(heard, Arc::new(Fake::default())).unwrap();
+    c.set_volume(0.4);
+    assert!(until(1.0, || (c.now().volume - 0.4).abs() < 1e-9));
+    c.set_muted(true);
+    assert!(until(1.0, || c.now().muted));
+    assert!((c.now().volume - 0.4).abs() < 1e-9, "muting changed the volume");
+    assert!((radiance_engine::settings::load().volume - 0.4).abs() < 1e-9, "muting saved 0");
+    c.set_muted(false);
+    assert!(until(1.0, || !c.now().muted));
+    assert!((c.now().volume - 0.4).abs() < 1e-9);
     c.quit();
 }

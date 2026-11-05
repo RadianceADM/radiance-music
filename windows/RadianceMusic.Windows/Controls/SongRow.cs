@@ -13,8 +13,12 @@ internal sealed class SongRow : Grid
 {
     private readonly Border cover;
 
+    /// <summary>The song's key (a click plays this song, wherever it is in the list by then).</summary>
+    public string Key { get; }
+
     public SongRow(MusicEngine engine, SongView song)
     {
+        Key = song.Key;
         ColumnSpacing = 12;
         Padding = new Thickness(0, 6, 0, 6);
         ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(40) });

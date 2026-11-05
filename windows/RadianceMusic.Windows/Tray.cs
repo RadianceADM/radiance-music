@@ -5,7 +5,9 @@ namespace RadianceMusic;
 /// <summary>
 /// The notification-area icon while the app is open (the GTK app's tray.rs, #37): its tooltip is the
 /// song, a click shows the window, its menu (Windows' own, as tray.rs's) is Play/Pause, Next,
-/// Previous, Show Radiance Music, Quit. A message-only window of its own hears it, on the UI thread.
+/// Previous, Show Radiance Music, Quit. A hidden window of its own (never shown; not message-only, so
+/// it hears Explorer's "TaskbarCreated" and the icon comes back after Explorer restarts) hears it, on
+/// the UI thread.
 /// </summary>
 internal sealed class Tray : IDisposable
 {
@@ -32,7 +34,7 @@ internal sealed class Tray : IDisposable
         proc = OnMessage;
         var wc = new WndClassEx { cbSize = (uint)Marshal.SizeOf<WndClassEx>(), lpfnWndProc = proc, hInstance = GetModuleHandle(null), lpszClassName = "RadianceMusicBetaTray" };
         RegisterClassEx(ref wc);
-        window = CreateWindowEx(0, wc.lpszClassName, "", 0, 0, 0, 0, 0, -3 /* HWND_MESSAGE */, 0, wc.hInstance, 0);
+        window = CreateWindowEx(0x80 /* WS_EX_TOOLWINDOW */, wc.lpszClassName, "", 0x80000000 /* WS_POPUP */, 0, 0, 0, 0, 0, 0, wc.hInstance, 0);
         var size = GetSystemMetrics(49 /* SM_CXSMICON */);
         icon = LoadImage(0, iconPath, 1 /* IMAGE_ICON */, size, size, 0x10 /* LR_LOADFROMFILE */);
         taskbarCreated = RegisterWindowMessage("TaskbarCreated");
@@ -99,6 +101,7 @@ internal sealed class Tray : IDisposable
         AppendMenu(menu, 0, Quit, "Quit");
         SetForegroundWindow(window);
         var picked = TrackPopupMenuEx(menu, 0x100 /* TPM_RETURNCMD */ | 0x2 /* TPM_RIGHTBUTTON */, x, y, window, 0);
+        PostMessage(window, 0 /* WM_NULL: the menu closes on a click elsewhere (KB135788) */, 0, 0);
         DestroyMenu(menu);
         switch (picked)
         {
@@ -183,4 +186,6 @@ internal sealed class Tray : IDisposable
     private static extern bool DestroyMenu(nint menu);
     [DllImport("user32.dll")]
     private static extern bool SetForegroundWindow(nint hwnd);
+    [DllImport("user32.dll")]
+    private static extern bool PostMessage(nint hwnd, uint msg, nint wParam, nint lParam);
 }

@@ -27,8 +27,25 @@ BrandingText "${NAME} ${VERSION}"
 !insertmacro MUI_UNPAGE_INSTFILES
 !insertmacro MUI_LANGUAGE "English"
 Section "Radiance Music (beta)"
-  ; an update replaces the app's own files
-  RMDir /r "$INSTDIR"
+  ; an update replaces the app's own files; a folder of something else is never emptied
+  IfFileExists "$INSTDIR\RadianceMusicBeta.exe" ours
+  FindFirst $0 $1 "$INSTDIR\*.*"
+  others:
+    StrCmp $1 "" empty
+    StrCmp $1 "." next
+    StrCmp $1 ".." next
+    FindClose $0
+    MessageBox MB_ICONSTOP "$INSTDIR already has other files in it. Pick an empty folder, or the one Radiance Music (beta) is in."
+    Abort
+  next:
+    FindNext $0 $1
+    Goto others
+  empty:
+    FindClose $0
+    Goto install
+  ours:
+    RMDir /r "$INSTDIR"
+  install:
   SetOutPath "$INSTDIR"
   File /r "${DIST}\*"
   CreateShortcut "$SMPROGRAMS\Radiance Music (beta).lnk" "$INSTDIR\RadianceMusicBeta.exe" "" "$INSTDIR\radiance-music.ico"

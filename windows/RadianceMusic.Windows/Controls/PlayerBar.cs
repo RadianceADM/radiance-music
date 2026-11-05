@@ -31,7 +31,6 @@ internal sealed class PlayerBar : Grid
     private readonly TextBlock length = new() { Style = (Style)Application.Current.Resources["CaptionTextBlockStyle"], Foreground = (Brush)Application.Current.Resources["TextFillColorSecondaryBrush"], VerticalAlignment = VerticalAlignment.Center, MinWidth = 36 };
     private readonly StackPanel songWords;
     private bool setting;
-    private double unmuted = 1;
     private string artFor = "";
 
     public PlayerBar(EngineHub hub)
@@ -139,16 +138,8 @@ internal sealed class PlayerBar : Grid
         foreach (var e in new UIElement[] { shuffle, repeat, mute, byline, at, length }) e.Visibility = phone;
     }
 
-    private void ToggleMute()
-    {
-        var level = hub.Engine.Now().Volume;
-        if (level > 0)
-        {
-            unmuted = level;
-            hub.Engine.SetVolume(0);
-        }
-        else hub.Engine.SetVolume(unmuted > 0 ? unmuted : 1);
-    }
+    /// <summary>Mute or not (the engine's: the volume kept as it was, never louder on unmute).</summary>
+    private void ToggleMute() => hub.Engine.SetMuted(!hub.Engine.Now().Muted);
 
     private void Render()
     {
@@ -173,8 +164,8 @@ internal sealed class PlayerBar : Grid
         ToolTipService.SetToolTip(repeat, tip);
         repeat.Opacity = now.Repeat == RepeatMode.Off ? 0.55 : 1;
         Tint(repeat, now.Repeat != RepeatMode.Off);
-        muteIcon.Glyph = now.Volume <= 0 ? "\uE74F" : now.Volume < 0.34 ? "\uE993" : now.Volume < 0.67 ? "\uE994" : "\uE767";
-        ToolTipService.SetToolTip(mute, now.Volume <= 0 ? "Unmute" : "Mute");
+        muteIcon.Glyph = now.Muted || now.Volume <= 0 ? "\uE74F" : now.Volume < 0.34 ? "\uE993" : now.Volume < 0.67 ? "\uE994" : "\uE767";
+        ToolTipService.SetToolTip(mute, now.Muted ? "Unmute" : "Mute");
         setting = true;
         volume.Value = now.Volume * 100;
         bar.Maximum = Math.Max(1, now.Length);

@@ -69,7 +69,7 @@ public sealed partial class SearchPage : Page
     {
         if (hub == null || sender is not ListView list || e.ClickedItem is not SongRow row) return;
         var kind = (string)list.Tag switch { "Mine" => ListKind.Mine, "Lossless" => ListKind.Lossless, _ => ListKind.Songs };
-        hub.Engine.PlayFrom(kind, (uint)list.Items.IndexOf(row));
+        hub.Engine.PlayFrom(kind, (uint)list.Items.IndexOf(row), row.Key);
     }
 
     private void Render()

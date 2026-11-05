@@ -52,7 +52,8 @@ public sealed partial class HomePage : Page
         HeroButtons.Children.Clear();
         if (home.Mix.Length > 0)
         {
-            HeroButtons.Children.Add(Labeled("\uE768", "Play your mix", true, () => hub.Engine.PlayFrom(ListKind.Mix, 0)));
+            var first = home.Mix[0].Key;
+            HeroButtons.Children.Add(Labeled("\uE768", "Play your mix", true, () => hub.Engine.PlayFrom(ListKind.Mix, 0, first)));
             HeroButtons.Children.Add(Labeled("\uE8B1", "Shuffle", false, () => hub.Engine.ShuffleFrom(ListKind.Mix)));
         }
         else
@@ -83,9 +84,9 @@ public sealed partial class HomePage : Page
         var cards = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4 };
         for (var i = 0; i < Math.Min(songs.Length, RowCards); i++)
         {
-            var index = (uint)i;
+            var (index, key) = ((uint)i, songs[i].Key);
             var card = new SongCard(hub.Engine, songs[i], cardSize);
-            card.Click += (_, _) => hub.Engine.PlayFrom(list, index);
+            card.Click += (_, _) => hub.Engine.PlayFrom(list, index, key);
             cards.Children.Add(card);
         }
         var scroll = new ScrollViewer { HorizontalScrollBarVisibility = ScrollBarVisibility.Auto, VerticalScrollBarVisibility = ScrollBarVisibility.Disabled, HorizontalScrollMode = ScrollMode.Enabled, VerticalScrollMode = ScrollMode.Disabled, Content = cards, Padding = new Thickness(0, 0, 0, 12) };

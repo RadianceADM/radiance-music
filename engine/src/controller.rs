@@ -87,8 +87,10 @@ pub struct NowState {
     pub can_next: bool,
     pub shuffle: bool,
     pub repeat: Repeat,
-    /// 0 to 1.
+    /// 0 to 1 (the level kept; muted or not).
     pub volume: f64,
+    /// Muted: silent, the volume kept as it was.
+    pub muted: bool,
     pub lossless: bool,
     /// A stream's bit rate (0: a file, or not known).
     pub kbps: u32,
@@ -105,6 +107,14 @@ pub enum LyricsState {
     None,
     Plain(String),
     Lines(Vec<Line>),
+}
+
+/// What went wrong, in plain words; `retry`: it stopped (Try Again starts the song over; a note
+/// that went on to the next song has none), as the GTK app's toasts.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Problem {
+    pub text: String,
+    pub retry: bool,
 }
 
 /// Home: the greeting, the mix's note, and its rows.
@@ -124,7 +134,7 @@ struct View {
     results: Results,
     home: HomeState,
     online: bool,
-    problem: Option<String>,
+    problem: Option<Problem>,
     now: NowState,
     queue: (Vec<Track>, usize),
     lyrics: LyricsState,
@@ -268,13 +278,25 @@ impl Controller {
     }
 
     /// What went wrong last (a song that won't play), in plain words.
-    pub fn problem(&self) -> Option<String> {
+    pub fn problem(&self) -> Option<Problem> {
         self.shared.view(|v| v.problem.clone())
     }
 
-    /// Plays `list` (as shown) from song `i`; the queue: from its song `i`.
-    pub fn play_from(&self, list: ListRef, i: usize) {
-        self.post(move |e| e.play_from(list, i));
+    /// Plays `list` (as shown) from song `i`, whose key is `key` (the song clicked: if the list
+    /// moved since, the song with that key; gone from it, nothing); the queue: from its song `i`.
+    pub fn play_from(&self, list: ListRef, i: usize, key: &str) {
+        let key = key.to_string();
+        self.post(move |e| e.play_from(list, i, &key));
+    }
+
+    /// Try Again (after it stopped): the song over, the count of failures from 0, as the GTK app.
+    pub fn retry(&self) {
+        self.post(|e| e.retry());
+    }
+
+    /// Mute (silent) or not; the volume stays as it was.
+    pub fn set_muted(&self, on: bool) {
+        self.post(move |e| e.set_muted(on));
     }
 
     /// "Shuffle": `list` in a random order (the songs you play most tend to come first).
@@ -420,6 +442,7 @@ struct Engine {
     /// Each song's (plays, skips).
     counts: RefCell<HashMap<String, (usize, usize)>>,
     settings: RefCell<Settings>,
+    muted: Cell<bool>,
     /// The song's timed lines (the lit ones go in NowState).
     lines: RefCell<Vec<Line>>,
     last_save: Cell<Option<Instant>>,
@@ -453,6 +476,7 @@ impl Engine {
             autoplay_for: RefCell::default(),
             counts: RefCell::default(),
             settings: RefCell::new(settings::load()),
+            muted: Cell::new(false),
             lines: RefCell::default(),
             last_save: Cell::new(None),
         }
@@ -482,7 +506,7 @@ impl Engine {
             }
             Err(err) => {
                 crate::log::note(&format!("the player didn't start: {err}"));
-                self.shared.view(|v| v.problem = Some(format!("The player didn't start: {err}")));
+                self.shared.view(|v| v.problem = Some(Problem { text: format!("The player didn't start: {err}"), retry: false }));
             }
         }
         self.restore_session();
@@ -549,18 +573,32 @@ impl Engine {
         })
     }
 
-    fn play_from(self: &Rc<Self>, list: ListRef, i: usize) {
+    fn play_from(self: &Rc<Self>, list: ListRef, i: usize, key: &str) {
+        let tracks = self.list(list);
+        // the song clicked: at its place, or (the list moved since) wherever it is now; gone: nothing
+        let Some(i) = tracks.get(i).filter(|t| t.key() == key).map(|_| i).or_else(|| tracks.iter().position(|t| t.key() == key)) else { return };
         if list == ListRef::Queue {
-            if i < self.queue.borrow().len() {
-                self.queue.borrow_mut().set_index(i);
-                self.play_current();
-            }
+            self.restored.set(false);
+            self.restore_at.set(None);
+            self.queue.borrow_mut().set_index(i);
+            self.play_current();
             return;
         }
-        let tracks = self.list(list);
-        if i < tracks.len() {
-            self.play_list(tracks, i);
+        self.play_list(tracks, i);
+    }
+
+    fn retry(self: &Rc<Self>) {
+        self.fails.set(0);
+        self.play_current();
+    }
+
+    fn set_muted(&self, on: bool) {
+        self.muted.set(on);
+        let level = if on { 0.0 } else { self.settings.borrow().volume };
+        if let Some(p) = self.player.borrow().as_ref() {
+            p.set_volume(level);
         }
+        self.publish_now();
     }
 
     fn shuffle_from(self: &Rc<Self>, list: ListRef) {
@@ -810,19 +848,19 @@ impl Engine {
         }
         let more = self.queue.borrow().can_next();
         if trouble::after_failure(fails, more, every_song) == After::Next {
-            self.say(trouble::next_song_text(title, reason));
+            self.say(trouble::next_song_text(title, reason), false);
             self.skip(1);
             return;
         }
         if let Some(p) = self.player.borrow().as_ref() {
             p.stop();
         }
-        self.say(trouble::cant_play_text(title, reason, fails, every_song));
+        self.say(trouble::cant_play_text(title, reason, fails, every_song), true);
         self.publish_now();
     }
 
-    fn say(&self, text: String) {
-        self.shared.view(|v| v.problem = Some(text));
+    fn say(&self, text: String, retry: bool) {
+        self.shared.view(|v| v.problem = Some(Problem { text, retry }));
         self.shared.tell(Change::Problem);
     }
 
@@ -882,6 +920,9 @@ impl Engine {
             }
             Step::Play(_) => {
                 self.ran_out.set(false);
+                // another song than the one picked up: from its start, and Play/Pause as usual
+                self.restored.set(false);
+                self.restore_at.set(None);
                 self.play_current();
             }
         }
@@ -899,6 +940,7 @@ impl Engine {
 
     fn set_volume(&self, level: f64) {
         let level = level.clamp(0.0, 1.0);
+        self.muted.set(false); // a new level unmutes, as the GTK app's slider
         self.settings.borrow_mut().volume = level;
         settings::save(&self.settings.borrow());
         if let Some(p) = self.player.borrow().as_ref() {
@@ -1006,6 +1048,7 @@ impl Engine {
             shuffle: q.shuffle(),
             repeat: q.repeat(),
             volume: self.settings.borrow().volume,
+            muted: self.muted.get(),
             lossless: song.as_ref().is_some_and(|t| t.lossless()),
             kbps: self.kbps.get(),
             lit,

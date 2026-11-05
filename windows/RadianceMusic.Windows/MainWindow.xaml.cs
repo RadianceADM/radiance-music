@@ -91,18 +91,19 @@ public sealed partial class MainWindow : Window
     private void OnChange(ChangeKind what)
     {
         if (what != ChangeKind.Problem) return;
-        var text = hub.Engine.Problem();
-        if (string.IsNullOrEmpty(text)) return;
-        // as the GTK app's toast: what happened, Try Again, gone after 10 s
-        Notice.Message = text;
+        if (hub.Engine.Problem() is not { } problem) return;
+        // as the GTK app's toasts: it stopped: Try Again, 10 s; it went on to the next song: 4 s, no button
+        Notice.Message = problem.Text;
+        Notice.ActionButton.Visibility = problem.Retry ? Visibility.Visible : Visibility.Collapsed;
         Notice.IsOpen = true;
         noticeTimer.Stop();
+        noticeTimer.Interval = TimeSpan.FromSeconds(problem.Retry ? 10 : 4);
         noticeTimer.Start();
     }
 
     private void OnTryAgain(object sender, RoutedEventArgs e)
     {
         Notice.IsOpen = false;
-        hub.Engine.PlayFrom(ListKind.Queue, hub.Engine.Queue().Index);
+        hub.Engine.Retry();
     }
 }

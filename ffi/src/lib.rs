@@ -127,9 +127,17 @@ pub struct NowView {
     pub shuffle: bool,
     pub repeat: RepeatMode,
     pub volume: f64,
+    pub muted: bool,
     pub lossless: bool,
     pub kbps: u32,
     pub lit: Vec<u32>,
+}
+
+/// What went wrong; `retry`: it stopped (show Try Again).
+#[derive(Clone, Debug, uniffi::Record)]
+pub struct ProblemView {
+    pub text: String,
+    pub retry: bool,
 }
 
 /// Search's lists, with the notes the GTK app shows over them (None: still searching).
@@ -246,8 +254,19 @@ impl MusicEngine {
         self.inner.refresh_mix();
     }
 
-    pub fn play_from(&self, list: ListKind, index: u32) {
-        self.inner.play_from(list.into(), index as usize);
+    /// The song clicked: its place in the list as shown, and its key (the list may have moved).
+    pub fn play_from(&self, list: ListKind, index: u32, key: String) {
+        self.inner.play_from(list.into(), index as usize, &key);
+    }
+
+    /// Try Again: the song over, the failures counted from 0.
+    pub fn retry(&self) {
+        self.inner.retry();
+    }
+
+    /// Mute or not; the volume stays as it was.
+    pub fn set_muted(&self, on: bool) {
+        self.inner.set_muted(on);
     }
 
     pub fn shuffle_from(&self, list: ListKind) {
@@ -299,6 +318,7 @@ impl MusicEngine {
                 radiance_core::queue::Repeat::One => RepeatMode::One,
             },
             volume: n.volume,
+            muted: n.muted,
             lossless: n.lossless,
             kbps: n.kbps,
             lit: n.lit.iter().map(|&i| i as u32).collect(),
@@ -347,8 +367,8 @@ impl MusicEngine {
         self.inner.online()
     }
 
-    pub fn problem(&self) -> Option<String> {
-        self.inner.problem()
+    pub fn problem(&self) -> Option<ProblemView> {
+        self.inner.problem().map(|p| ProblemView { text: p.text, retry: p.retry })
     }
 
     /// A cover as a PNG file (blocks while it's fetched: call it off the UI thread).
