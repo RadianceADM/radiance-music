@@ -9,7 +9,7 @@ namespace RadianceMusic;
 /// read the engine's snapshots again. Commands go straight to the engine (it posts them to its
 /// own thread, so they're safe from any thread).
 /// </summary>
-public sealed class EngineHub : EngineListener
+internal sealed class EngineHub : EngineListener
 {
     private readonly DispatcherQueue ui;
     private readonly Coalescer<ChangeKind> pending = new();

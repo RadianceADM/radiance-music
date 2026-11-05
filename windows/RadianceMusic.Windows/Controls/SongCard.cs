@@ -6,7 +6,7 @@ using RadianceMusic.Native;
 namespace RadianceMusic.Controls;
 
 /// <summary>A song as a card on Home: its cover (rounded), title and names, one line each.</summary>
-public sealed class SongCard : Button
+internal sealed class SongCard : Button
 {
     private readonly Border cover;
 

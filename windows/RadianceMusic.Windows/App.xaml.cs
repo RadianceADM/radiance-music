@@ -7,7 +7,7 @@ namespace RadianceMusic;
 
 public partial class App : Application
 {
-    public static EngineHub Hub { get; private set; } = null!;
+    internal static EngineHub Hub { get; private set; } = null!;
     public static MainWindow? Window { get; private set; }
     private static Tray? tray;
     private static MediaKeys? keys;

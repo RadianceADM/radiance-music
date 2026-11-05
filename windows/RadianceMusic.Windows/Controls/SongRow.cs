@@ -9,7 +9,7 @@ namespace RadianceMusic.Controls;
 /// A song in a list (Search): its cover, title, names, quality badge and length, as the GTK app's
 /// row (ui.rs track_row, quality_badge's words). One line each, "…" when long. A button: Click plays.
 /// </summary>
-public sealed class SongRow : Button
+internal sealed class SongRow : Button
 {
     private readonly Image art = new() { Stretch = Stretch.UniformToFill };
 

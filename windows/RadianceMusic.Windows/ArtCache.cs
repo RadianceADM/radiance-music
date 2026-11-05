@@ -5,7 +5,7 @@ namespace RadianceMusic;
 
 /// <summary>Covers for the screens: the engine makes each a PNG once (off the UI thread), and the
 /// last 200 stay decoded at their size.</summary>
-public static class ArtCache
+internal static class ArtCache
 {
     private const int Most = 200;
     private static readonly Dictionary<string, BitmapImage> images = new();

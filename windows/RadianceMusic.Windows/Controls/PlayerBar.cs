@@ -13,7 +13,7 @@ namespace RadianceMusic.Controls;
 /// volume at the end. The heart and the quality badge come with liking (stage 2). Under 860 px the
 /// volume slider makes room; under 600 the bar keeps only the song and Previous/Play/Next.
 /// </summary>
-public sealed class PlayerBar : Grid
+internal sealed class PlayerBar : Grid
 {
     private const double Narrow = 860, Phone = 600;
     private readonly EngineHub hub;

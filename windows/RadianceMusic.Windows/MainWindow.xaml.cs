@@ -16,7 +16,7 @@ public sealed partial class MainWindow : Window
     private readonly DispatcherTimer noticeTimer = new() { Interval = TimeSpan.FromSeconds(10) };
     private string page = "home";
 
-    public MainWindow(EngineHub hub)
+    internal MainWindow(EngineHub hub)
     {
         this.hub = hub;
         InitializeComponent();
