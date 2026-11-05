@@ -29,9 +29,10 @@ tungstenite = { version = "0.29", default-features = false, features = ["handsha
 # the feedback pop-up's sign-in (feedback.rs): PKCE's S256 and its random secrets
 sha2 = "0.10"
 getrandom = "0.3"
-# the splitter without Python (owner 2026-11-02): Demucs as ONNX, as the phone runs it;
-# ONNX Runtime's library is loaded at run time (not linked), so builds don't need it
-ort = { version = "=2.0.0-rc.15", optional = true, default-features = false, features = ["load-dynamic", "std"] }
+# splitting without Python (owner 2026-11-02): the two-part split (spleeter.rs, #43) and the
+# Demucs prototype (onnx_split.rs) as ONNX, as the phone runs them; ONNX Runtime's library is
+# loaded at run time (not linked; two_part.rs fetches it), so builds don't need it
+ort = { version = "=2.0.0-rc.15", default-features = false, features = ["load-dynamic", "std"] }
 # the GTK app's music videos: GTK 4's paintable (player.rs load_video)
 gtk = { package = "gtk4", version = "0.11", features = ["v4_14"], optional = true }
 
@@ -39,7 +40,7 @@ gtk = { package = "gtk4", version = "0.11", features = ["v4_14"], optional = tru
 default = []
 # the GTK app's video sink (a GdkPaintable); the Windows app (WinUI) shows videos its own way
 gtk = ["dep:gtk", "dep:gst-plugin-gtk4"]
-onnx-split = ["dep:ort"]
+onnx-split = []
 save-youtube = []
 
 [target.'cfg(windows)'.dependencies]

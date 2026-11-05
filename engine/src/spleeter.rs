@@ -7,8 +7,20 @@
 //! spectrum into Vocals and Music, the higher bins taking each frame's average share. Vocals and
 //! Music add up to the song.
 
+use std::path::Path;
+use std::sync::OnceLock;
+
+use ort::environment::Environment;
+use ort::session::{builder::GraphOptimizationLevel, Session};
+use ort::value::Tensor;
 use realfft::num_complex::Complex32;
 use realfft::RealFftPlanner;
+
+use crate::audio_io::{decode, write_ogg};
+
+/// The two models' files (in two_part.rs' folder).
+pub const VOCALS: &str = "vocals.fp16.onnx";
+pub const MUSIC: &str = "accompaniment.fp16.onnx";
 
 /// A frame's length and the step between frames (samples).
 pub const N: usize = 4096;
@@ -18,7 +30,6 @@ pub const F: usize = 1024;
 pub const T: usize = 512;
 const BINS: usize = N / 2 + 1;
 const EPS: f32 = 1e-10;
-pub const RATE: usize = 44_100;
 
 /// The periodic Hann window.
 fn window() -> Vec<f32> {
@@ -121,6 +132,66 @@ pub fn separate(x: [&[f32]; 2], run: &mut Run, report: &dyn Fn(f64)) -> Result<(
     Ok(([cut(&vocals[0]), cut(&vocals[1])], [cut(&music[0]), cut(&music[1])]))
 }
 
+/// ONNX Runtime allows one environment per program: made at the first split, kept.
+static ENV: OnceLock<Result<Environment, String>> = OnceLock::new();
+
+fn environment(runtime: &Path) -> Result<&'static Environment, String> {
+    ENV.get_or_init(|| ort::init_from(runtime).map_err(|e| format!("ONNX Runtime: {e}"))?.build().map_err(|e| format!("ONNX Runtime: {e}")))
+        .as_ref()
+        .map_err(Clone::clone)
+}
+
+fn session(env: &Environment, model: &Path, threads: usize) -> Result<Session, String> {
+    let name = model.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let fail = |e: String| format!("the model {name}: {e}");
+    let mut b = Session::builder(env)
+        .map_err(|e| fail(e.to_string()))?
+        .with_optimization_level(GraphOptimizationLevel::Level3)
+        .map_err(|e| fail(e.to_string()))?
+        .with_intra_threads(threads)
+        .map_err(|e| fail(e.to_string()))?
+        .with_inter_threads(1)
+        .map_err(|e| fail(e.to_string()))?;
+    b.commit_from_file(model).map_err(|e| fail(e.to_string()))
+}
+
+/// One model's answer for a block: its output, as the loudness it was given is shaped.
+fn answer(session: &mut Session, mag: &[f32]) -> Result<Vec<f32>, String> {
+    let input = Tensor::from_array(([2usize, 1, T, F], mag.to_vec())).map_err(|e| e.to_string())?;
+    let outputs = session.run(ort::inputs![input]).map_err(|e| e.to_string())?;
+    let (_, y) = outputs[0].try_extract_tensor::<f32>().map_err(|e| e.to_string())?;
+    Ok(y.to_vec())
+}
+
+/// Splits `song` into `out` (made if missing) as vocals.ogg and music.ogg; their names.
+/// `runtime`: ONNX Runtime's library; `models`: the folder with [VOCALS] and [MUSIC].
+pub fn split(runtime: &Path, models: &Path, song: &Path, out: &Path, threads: usize, report: &dyn Fn(f64)) -> Result<Vec<String>, String> {
+    let env = environment(runtime)?;
+    let mut voice = session(env, &models.join(VOCALS), threads)?;
+    let mut rest = session(env, &models.join(MUSIC), threads)?;
+    report(0.02);
+    let x = decode(song)?;
+    let (l, r): (Vec<f32>, Vec<f32>) = x.chunks_exact(2).map(|f| (f[0], f[1])).unzip();
+    let mut run = |mag: &[f32]| Ok((answer(&mut voice, mag)?, answer(&mut rest, mag)?));
+    let (vocals, music) = separate([&l, &r], &mut run, &|p| report(0.02 + 0.9 * p))?;
+    std::fs::create_dir_all(out).map_err(|e| e.to_string())?;
+    let both = |p: &[Vec<f32>; 2]| -> Vec<f32> { p[0].iter().zip(&p[1]).flat_map(|(a, b)| [*a, *b]).collect() };
+    let (vocals, music) = (both(&vocals), both(&music));
+    // both at once, each its own encoder
+    let names = std::thread::scope(|s| {
+        let jobs: Vec<_> = [("vocals", &vocals), ("music", &music)]
+            .into_iter()
+            .map(|(name, data)| {
+                let path = out.join(format!("{name}.ogg"));
+                s.spawn(move || write_ogg(&path, data).map(|_| format!("{name}.ogg")))
+            })
+            .collect();
+        jobs.into_iter().map(|j| j.join().map_err(|_| "a writer stopped".to_string()).and_then(|r| r)).collect::<Result<Vec<_>, _>>()
+    })?;
+    report(1.0);
+    Ok(names)
+}
+
 /// Each bin's share of the voice and of the rest, from the models' two answers: squared, so
 /// the two shares add up to 1.
 pub fn shares(yv: &[f32], ya: &[f32]) -> (Vec<f32>, Vec<f32>) {
@@ -136,6 +207,7 @@ pub fn shares(yv: &[f32], ya: &[f32]) -> (Vec<f32>, Vec<f32>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::audio_io::RATE;
 
     /// How close `b` is to `a`, in dB (higher is closer).
     fn closeness(a: &[f32], b: &[f32]) -> f64 {
@@ -199,6 +271,35 @@ mod tests {
         assert!(closeness(&x, &vocals[1]) > 60.0);
         assert!(music[1].iter().all(|s| s.abs() < 1e-3));
         assert_eq!(last.get(), 1.0, "it says when it's done");
+    }
+
+    /// The real models against the Python reference (ribs02 split-bench/spleeter_ort.py): run with
+    /// RADIANCE_SPLEETER_CHECK=DIR holding libonnxruntime.so (or onnxruntime.dll), the two models,
+    /// clip.wav (44.1 kHz stereo) and the reference's vocals.f32 / music.f32 (interleaved).
+    #[test]
+    #[ignore]
+    fn the_real_models_match_the_python_reference() {
+        let Some(dir) = std::env::var_os("RADIANCE_SPLEETER_CHECK").map(std::path::PathBuf::from) else { return };
+        let runtime = ["libonnxruntime.so", "onnxruntime.dll"].iter().map(|n| dir.join(n)).find(|p| p.exists()).expect("the runtime");
+        let env = environment(&runtime).unwrap();
+        let (mut voice, mut rest) = (session(env, &dir.join(VOCALS), 4).unwrap(), session(env, &dir.join(MUSIC), 4).unwrap());
+        let x = decode(&dir.join("clip.wav")).unwrap();
+        let (l, r): (Vec<f32>, Vec<f32>) = x.chunks_exact(2).map(|f| (f[0], f[1])).unzip();
+        let started = std::time::Instant::now();
+        let mut run = |mag: &[f32]| Ok((answer(&mut voice, mag)?, answer(&mut rest, mag)?));
+        let (vocals, music) = separate([&l, &r], &mut run, &|_| {}).unwrap();
+        let took = started.elapsed().as_secs_f64();
+        let read = |name: &str| -> Vec<f32> { std::fs::read(dir.join(name)).unwrap().chunks_exact(4).map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]])).collect() };
+        let both = |p: &[Vec<f32>; 2]| -> Vec<f32> { p[0].iter().zip(&p[1]).flat_map(|(a, b)| [*a, *b]).collect() };
+        let (v, m) = (both(&vocals), both(&music));
+        let (rv, rm) = (read("vocals.f32"), read("music.f32"));
+        assert_eq!(v.len(), rv.len(), "as long as the reference");
+        let (dv, dm) = (closeness(&rv, &v), closeness(&rm, &m));
+        let song: Vec<f32> = v.iter().zip(&m).map(|(a, b)| a + b).collect();
+        let whole = closeness(&x, &song);
+        eprintln!("{:.1} s for {:.0} s; vocals {dv:.1} dB, music {dm:.1} dB from the reference; parts vs song {whole:.1} dB", took, l.len() as f64 / RATE as f64);
+        assert!(dv > 30.0 && dm > 30.0, "vocals {dv:.1} dB, music {dm:.1} dB");
+        assert!(whole > 40.0);
     }
 
     #[test]
