@@ -3955,6 +3955,7 @@ impl Ui {
             Place::List(list, i) | Place::Liked(list, i) | Place::Playlist(_, list, i) => self.play_list((**list).clone(), *i),
             Place::Server(list, i) => self.play_from_server(list, *i),
             Place::Queue(i) => {
+                self.leave_picked_up();
                 self.queue.borrow_mut().set_index(*i);
                 self.play_current();
             }
@@ -4259,6 +4260,7 @@ impl Ui {
             self.play_list(vec![t.clone()], 0);
             return;
         }
+        self.leave_picked_up();
         let at = self.queue.borrow_mut().insert_next(t.clone());
         self.queue.borrow_mut().set_index(at);
         self.play_current(); // lists the queue again too
@@ -4293,8 +4295,12 @@ impl Ui {
         match removed {
             None => return,
             // the song playing: on to the next one (now at the same place)
-            Some(Removed::Current { play: true }) => self.play_current(),
+            Some(Removed::Current { play: true }) => {
+                self.leave_picked_up();
+                self.play_current();
+            }
             Some(Removed::Current { play: false }) => {
+                self.leave_picked_up();
                 if let Some(p) = self.player.borrow().as_ref() {
                     p.stop();
                 }
@@ -4995,10 +5001,16 @@ impl Ui {
 
     // ------------------------------------------------------------------ playing
 
-    fn play_list(self: &Rc<Self>, queue: Vec<Track>, i: usize) {
-        self.note_skip_if_early(); // another song picked mid-song
+    /// Another song starts: last time's song, picked up at the start (see `restored`), is left.
+    /// Its saved place isn't the new song's, and Play goes on with this one, not last time's.
+    fn leave_picked_up(&self) {
         self.restored.set(false);
         self.restore_at.set(None);
+    }
+
+    fn play_list(self: &Rc<Self>, queue: Vec<Track>, i: usize) {
+        self.note_skip_if_early(); // another song picked mid-song
+        self.leave_picked_up();
         // with Shuffle on: the song picked first, the rest in a random order
         self.queue.borrow_mut().play_list(queue, i, shuffled);
         self.play_current();
@@ -5580,6 +5592,7 @@ impl Ui {
             }
             Step::Play(_) => {
                 self.ran_out.set(false);
+                self.leave_picked_up(); // Next right after opening: the next song from its start
                 self.play_current();
             }
         }

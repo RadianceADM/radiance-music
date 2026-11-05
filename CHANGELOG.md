@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **Next right after opening starts the next song from its start:** with last time's song shown (picked up at its saved place), pressing Next, picking another song in the queue, Play again, or removing that song from the queue started the next one at the old song's place, and the first Pause then started it over (#46).
+
 ## v0.7.19 — 2026-11-05
 
 - **Now Playing doesn't hold the processor any more (Windows lag, continued):** its moving background (the art flowing with the beat) drew itself 60 times a second, about a whole core on Windows. It draws 20 times a second now, still following every beat, and stands still while Radiance Music is behind another window or minimized. Home's lights already do the same since 0.7.18.
