@@ -94,7 +94,6 @@ public sealed class Backdrop : Grid
         brush.Stretch = CompositionStretch.Fill;
         var s = compositor.CreateSpriteVisual();
         s.Brush = brush;
-        s.AnchorPoint = new Vector2(0.5f, 0.5f);
         return s;
     }
 
@@ -111,8 +110,9 @@ public sealed class Backdrop : Grid
         var rest = MaxZoom - Swell * 1.1f - 0.02f;
         var side = diag * rest;
         Place(c.Whole, side, 0);
-        Wave(c.Whole, "Offset.X", w / 2, 0.012f * w, 11, 0);
-        Wave(c.Whole, "Offset.Y", h / 2, 0.012f * h, 9, 1);
+        // (the offsets are the top-left corner's: the centre minus half the side)
+        Wave(c.Whole, "Offset.X", w / 2 - side / 2, 0.012f * w, 11, 0);
+        Wave(c.Whole, "Offset.Y", h / 2 - side / 2, 0.012f * h, 9, 1);
         Wave(c.Whole, "Scale.X", 1, 0.02f / rest, 7, 0);
         Wave(c.Whole, "Scale.Y", 1, 0.02f / rest, 7, 0);
         Turn(c.Whole, 3, 0);
@@ -122,9 +122,10 @@ public sealed class Backdrop : Grid
             var p = Patches[i];
             var k = i * 2.1;
             var s = c.Patches[i];
-            Place(s, longer * p.Part, 0);
-            Wave(s, "Offset.X", w * p.X, 0.12f * w, 11 + k, k);
-            Wave(s, "Offset.Y", h * p.Y, 0.12f * h, 13 - k, k + 0.7);
+            var patch = longer * p.Part;
+            Place(s, patch, 0);
+            Wave(s, "Offset.X", w * p.X - patch / 2, 0.12f * w, 11 + k, k);
+            Wave(s, "Offset.Y", h * p.Y - patch / 2, 0.12f * h, 13 - k, k + 0.7);
             Wave(s, "Scale.X", 1, 0.06f, 7 + k, k);
             Wave(s, "Scale.Y", 1, 0.06f, 7 + k, k);
             Turn(s, p.Turn, 90 * i);
