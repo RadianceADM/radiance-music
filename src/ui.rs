@@ -4579,26 +4579,20 @@ impl Ui {
     }
 
     fn toggle_like(self: &Rc<Self>, t: &Track) {
-        let key = t.key();
-        let found = self.liked.borrow().iter().position(|x| x.key() == key);
-        if let Some(i) = found {
-            let gone = self.liked.borrow_mut().remove(i);
-            library::store(&self.liked.borrow());
-            if gone.file.is_some() {
-                self.toast(&format!("Removed “{}” from Liked; its saved copy is in the Trash", gone.title));
-            } else {
-                self.toast(&format!("Removed “{}” from Liked", gone.title));
+        let like = crate::liking::toggle(&mut self.liked.borrow_mut(), t);
+        match like {
+            crate::liking::Like::Unliked { gone } => {
+                self.toast(&words::unliked_toast(&gone.title, gone.file.is_some()));
+                bg(move || library::unsave(&gone), |_| {});
             }
-            bg(move || library::unsave(&gone), |_| {});
-        } else {
-            let mut t = t.clone();
-            t.file = None;
-            self.liked.borrow_mut().insert(0, t.clone());
-            library::store(&self.liked.borrow());
-            if library::saves(&t) {
-                self.save_liked(t);
-            } else {
-                self.toast(&format!("Liked “{}”", t.title));
+            crate::liking::Like::Liked { save } => {
+                let mut t = t.clone();
+                t.file = None;
+                if save {
+                    self.save_liked(t);
+                } else {
+                    self.toast(&words::liked_toast(&t.title));
+                }
             }
         }
         self.refresh_hearts();
@@ -4627,7 +4621,7 @@ impl Ui {
                     };
                     if kept {
                         library::store(&me.liked.borrow());
-                        me.toast(&format!("Saved “{title}”"));
+                        me.toast(&words::saved_toast(&title));
                         let saved = me.liked.borrow().iter().find(|x| x.key() == key).cloned();
                         if let Some(t) = saved {
                             me.request_split(&t); // liked songs get split too
@@ -4640,7 +4634,7 @@ impl Ui {
                 }
                 Err(e) => {
                     debug(&format!("save {title}: {e}"));
-                    me.toast(&format!("Couldn't save “{title}” right now. It tries again next time the app opens."));
+                    me.toast(&words::save_failed(&title));
                 }
             }
             me.render_liked();
@@ -4720,15 +4714,8 @@ impl Ui {
 
     /// Liked songs not on this computer: (their song file, their music video).
     fn missing(&self) -> (usize, usize) {
-        let liked = self.liked.borrow();
-        let songs = liked.iter().filter(|t| library::saves(t) && t.file.as_ref().is_none_or(|f| !Path::new(f).exists())).count();
-        let videos = if cfg!(feature = "save-youtube") {
-            let have = crate::db::songs_with_video(); // a saved video, or known to have none
-            liked.iter().filter(|t| t.source == Source::YouTube && !t.video && !have.contains(&t.key())).count()
-        } else {
-            0
-        };
-        (songs, videos)
+        let (songs, videos) = crate::liking::missing(&self.liked.borrow());
+        (songs.len(), videos)
     }
 
     /// The "Fix missing" button: shown with how many are missing, while any are.
@@ -4737,23 +4724,19 @@ impl Ui {
         let n = songs.max(videos);
         self.fix_button.set_visible(n > 0 && std::env::var_os("RADIANCE_SHOT").is_none());
         let busy = !self.saving.borrow().is_empty() || self.extras_running.get();
-        self.fix_button.set_label(&if busy { format!("Fixing… {n} left") } else { format!("Fix missing ({n})") });
+        self.fix_button.set_label(&words::fix_label(n, busy));
         self.fix_button.set_sensitive(!busy);
     }
 
     /// Saves what's missing: the songs first (one at a time), then each one's
     /// music video, lyrics file and cover (the background saver, at once).
     fn fix_missing(self: &Rc<Self>) {
-        let (songs, videos) = self.missing();
-        let todo: Vec<Track> = self.liked.borrow().iter().filter(|t| library::saves(t) && t.file.as_ref().is_none_or(|f| !Path::new(f).exists())).cloned().collect();
+        let (todo, videos) = crate::liking::missing(&self.liked.borrow());
+        let songs = todo.len();
         todo.into_iter().for_each(|t| self.save_liked(t));
         self.save_extras(Duration::from_secs(1));
         crate::log::note(&format!("fix missing: {songs} songs, {videos} videos"));
-        self.toast(&match (songs, videos) {
-            (0, v) => format!("Saving {v} music videos in the background"),
-            (s, 0) => format!("Saving {s} songs in the background"),
-            (s, v) => format!("Saving {s} songs and {v} music videos in the background"),
-        });
+        self.toast(&words::fixing_toast(songs, videos));
         self.show_missing();
     }
 

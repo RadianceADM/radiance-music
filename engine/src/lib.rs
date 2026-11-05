@@ -26,6 +26,7 @@ pub mod history;
 pub mod home;
 pub mod library;
 pub mod limiter;
+pub mod liking;
 pub mod log;
 pub mod lyrics;
 pub mod mix;

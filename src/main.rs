@@ -18,6 +18,7 @@ use radiance_engine::feedback;
 use radiance_engine::genre;
 use radiance_engine::history;
 use radiance_engine::library;
+use radiance_engine::liking;
 use radiance_engine::log;
 use radiance_engine::lyrics;
 use radiance_engine::mix;

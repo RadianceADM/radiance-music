@@ -29,6 +29,12 @@ fn setup() -> std::sync::MutexGuard<'static, ()> {
             std::env::set_var(var, d);
         }
         std::env::set_var("RADIANCE_SILENT", "1");
+        // a home of their own too: GLib's Trash is the one on the home's disk (unliking trashes files)
+        std::env::set_var("HOME", &base);
+        // saved songs go to a music folder of the tests' own
+        let music = base.join("music");
+        std::fs::create_dir_all(&music).unwrap();
+        radiance_engine::library::set_music_dir(Some(music));
     });
     LOCK.lock().unwrap_or_else(|e| e.into_inner())
 }
@@ -46,6 +52,8 @@ pub struct Fake {
     pub searches: AtomicUsize,
     pub streams: Mutex<HashMap<String, (Duration, Result<String, String>)>>,
     pub lyrics: Mutex<Option<Lyrics>>,
+    /// How long a download (a liked song being saved) takes.
+    pub download_wait: Mutex<Duration>,
 }
 
 fn kind_name(k: Kind) -> &'static str {
@@ -84,6 +92,14 @@ impl Sources for Fake {
     }
     fn lyrics(&self, _t: &Track) -> Lyrics {
         self.lyrics.lock().unwrap().clone().unwrap_or(Lyrics::None)
+    }
+    fn download(&self, _url: &str, to: &std::path::Path) -> Result<(), String> {
+        let wait = *self.download_wait.lock().unwrap();
+        std::thread::sleep(wait);
+        std::fs::write(to, b"fLaC a test song").map_err(|e| e.to_string())
+    }
+    fn genres(&self, _t: &Track) -> Vec<String> {
+        Vec::new()
     }
 }
 
@@ -369,7 +385,8 @@ fn the_session_comes_back_paused() {
     let _l = setup();
     let (c, _f, _rx) = with_songs("files six", vec![wav("kept", 6.0)]);
     c.play_from(ListRef::Songs, 0, "yt:file-kept");
-    assert!(until(3.0, || c.now().at >= 0.5));
+    // (this song's own place: a song picked up from an earlier test can show one already)
+    assert!(until(3.0, || c.now().playing && now_id(&c) == "file-kept" && c.now().at >= 0.5));
     c.seek(2.0);
     assert!(until(1.0, || c.now().at >= 2.0));
     c.quit();
@@ -483,4 +500,108 @@ fn mute_keeps_the_saved_volume() {
     assert!(until(1.0, || !c.now().muted));
     assert!((c.now().volume - 0.4).abs() < 1e-9);
     c.quit();
+}
+
+// ------------------------------------------------------------------ liking and saving (stage 2)
+
+/// Toasts as they come (each once), for `secs`.
+fn toasts_for(c: &Controller, rx: &Receiver<(Change, Instant)>, secs: f64) -> Vec<String> {
+    let mut got = vec![];
+    let end = Instant::now() + Duration::from_secs_f64(secs);
+    while let Some(left) = end.checked_duration_since(Instant::now()) {
+        if let Ok((Change::Toast, _)) = rx.recv_timeout(left) {
+            while let Some(t) = c.toast() {
+                got.push(t);
+            }
+        }
+    }
+    got
+}
+
+fn saved_files(title: &str) -> usize {
+    std::fs::read_dir(radiance_engine::library::music_dir()).map(|d| d.flatten().filter(|e| e.file_name().to_string_lossy().contains(title)).count()).unwrap_or(0)
+}
+
+/// A controller whose Search's lossless list is `songs` (searched as `q`).
+fn with_lossless(q: &str, songs: Vec<Track>) -> (Controller, Arc<Fake>, Receiver<(Change, Instant)>) {
+    let fake = Arc::new(Fake::default());
+    fake.finds(Kind::Lossless, q, songs);
+    let (heard, rx) = listener();
+    let c = Controller::start(heard, fake.clone()).unwrap();
+    c.search(q);
+    let end = Instant::now() + Duration::from_secs(5);
+    while c.results().lossless.as_ref().is_none_or(|v| v.is_empty()) && Instant::now() < end {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    (c, fake, rx)
+}
+
+#[test]
+fn liking_puts_the_song_first_and_says_so() {
+    let _g = setup();
+    let one = song(Source::Archive, "https://example.invalid/liked-one.flac", "Liked One");
+    let (c, _fake, rx) = with_lossless("liking one", vec![one.clone()]);
+    c.toggle_like(&one.key());
+    assert!(wait_for(&rx, Change::Liked, 5.0), "Liked Songs changed");
+    assert!(until(3.0, || c.liked().first().is_some_and(|(t, _)| t.key() == one.key())), "first in Liked Songs");
+    let toasts = toasts_for(&c, &rx, 3.0);
+    assert!(toasts.contains(&"Saved “Liked One”".to_string()), "{toasts:?}");
+    assert!(saved_files("Liked One") >= 1, "its file is in the music folder");
+    assert_eq!(c.liked()[0].1, radiance_core::library::Saved::Saved);
+    // a YouTube song in a build that doesn't save them: kept, and it streams
+    let yt = song(Source::YouTube, "liking-yt", "Streams On");
+    if !radiance_engine::library::saves(&yt) {
+        let (c2, _f2, rx2) = { drop(c); with_songs("liking yt", vec![yt.clone()]) };
+        c2.toggle_like(&yt.key());
+        assert!(toasts_for(&c2, &rx2, 2.0).contains(&"Liked “Streams On”".to_string()));
+        assert_eq!(c2.liked()[0].1, radiance_core::library::Saved::Streams);
+        c2.toggle_like(&yt.key());
+        let _ = toasts_for(&c2, &rx2, 1.0);
+    } else {
+        c.toggle_like(&one.key());
+        let _ = toasts_for(&c, &rx, 1.0);
+    }
+}
+
+#[test]
+fn unliking_removes_it_and_says_so() {
+    let _g = setup();
+    let two = song(Source::Archive, "https://example.invalid/liked-two.flac", "Liked Two");
+    let (c, _fake, rx) = with_lossless("liking two", vec![two.clone()]);
+    c.toggle_like(&two.key());
+    assert!(toasts_for(&c, &rx, 3.0).contains(&"Saved “Liked Two”".to_string()));
+    c.toggle_like(&two.key());
+    let toasts = toasts_for(&c, &rx, 2.0);
+    assert!(toasts.contains(&"Removed “Liked Two” from Liked; its saved copy is in the Trash".to_string()), "{toasts:?}");
+    assert!(c.liked().iter().all(|(t, _)| t.key() != two.key()));
+    assert!(until(3.0, || saved_files("Liked Two") == 0), "its file went to the Trash");
+}
+
+#[test]
+fn unliking_while_saving_leaves_nothing() {
+    let _g = setup();
+    let three = song(Source::Archive, "https://example.invalid/liked-three.flac", "Liked Three");
+    let (c, fake, rx) = with_lossless("liking three", vec![three.clone()]);
+    *fake.download_wait.lock().unwrap() = Duration::from_millis(1500);
+    c.toggle_like(&three.key());
+    assert!(until(1.0, || c.liked().first().is_some_and(|(_, s)| *s == radiance_core::library::Saved::Saving)), "it shows as saving");
+    c.toggle_like(&three.key());
+    let toasts = toasts_for(&c, &rx, 4.0);
+    assert!(!toasts.iter().any(|t| t.starts_with("Saved")), "{toasts:?}");
+    assert_eq!(saved_files("Liked Three"), 0, "nothing left behind");
+}
+
+#[test]
+fn the_bar_heart_follows_the_song() {
+    let _g = setup();
+    let a = wav("heart", 30.0);
+    let (c, _fake, rx) = with_songs("heart", vec![a.clone()]);
+    c.play_from(ListRef::Songs, 0, &a.key());
+    assert!(until(5.0, || c.now().song.is_some_and(|t| t.key() == a.key())));
+    assert!(!c.now().liked);
+    c.toggle_like(&a.key());
+    assert!(until(3.0, || c.now().liked), "the heart fills");
+    c.toggle_like(&a.key());
+    assert!(until(3.0, || !c.now().liked));
+    let _ = toasts_for(&c, &rx, 1.0);
 }

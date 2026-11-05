@@ -8,18 +8,20 @@
 //! engine of its own on that thread (a new one never takes an old one's late answers).
 
 use std::cell::{Cell, RefCell};
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
+use radiance_core::library::Saved;
 use radiance_core::queue::{self, Queue, Repeat, Step};
 use radiance_core::search;
 use radiance_core::trouble::{self, After};
 use radiance_core::words::{self, Kind};
 
+use crate::liking::{self, Like};
 use crate::lyrics::{Line, Lyrics};
 use crate::player::{Event, Player};
 use crate::playing::{self, Streams};
@@ -39,6 +41,10 @@ pub enum Change {
     Lyrics,
     Online,
     Problem,
+    /// Liked Songs: a song liked, taken out, or saved (and the bar's heart).
+    Liked,
+    /// A short note to show (read it with toast()).
+    Toast,
 }
 
 /// Told when something changed: on the engine's thread, so it must hand it on quickly.
@@ -96,6 +102,8 @@ pub struct NowState {
     pub kbps: u32,
     /// The lyric lines lit now (core's sing::lit_lines).
     pub lit: Vec<usize>,
+    /// The song is liked (the bar's heart).
+    pub liked: bool,
 }
 
 /// The song's lyrics.
@@ -138,6 +146,10 @@ struct View {
     now: NowState,
     queue: (Vec<Track>, usize),
     lyrics: LyricsState,
+    /// Liked Songs (newest first), each as it's kept here.
+    liked: Vec<(Track, Saved)>,
+    /// Notes to show, oldest first.
+    toasts: VecDeque<String>,
 }
 
 /// Between the app's threads and the engine's.
@@ -227,6 +239,8 @@ impl Controller {
                 now: NowState::default(),
                 queue: (Vec::new(), 0),
                 lyrics: LyricsState::None,
+                liked: Vec::new(),
+                toasts: VecDeque::new(),
             }),
         });
         let epoch = EPOCH.fetch_add(1, Ordering::SeqCst) + 1;
@@ -316,6 +330,27 @@ impl Controller {
     /// To `at` seconds into the song.
     pub fn seek(&self, at: f64) {
         self.post(move |e| e.seek(at));
+    }
+
+    /// The heart: likes the song (it's saved, where it's saved) or takes it out of Liked.
+    pub fn toggle_like(&self, key: &str) {
+        let key = key.to_string();
+        self.post(move |e| e.toggle_like(&key));
+    }
+
+    /// Saves every liked song whose file isn't on this computer (in the background).
+    pub fn fix_missing(&self) {
+        self.post(|e| e.fix_missing());
+    }
+
+    /// Liked Songs, newest first, each as it's kept here.
+    pub fn liked(&self) -> Vec<(Track, Saved)> {
+        self.shared.view(|v| v.liked.clone())
+    }
+
+    /// The oldest note not shown yet (each is given once).
+    pub fn toast(&self) -> Option<String> {
+        self.shared.view(|v| v.toasts.pop_front())
     }
 
     /// 0 to 1 (kept in the settings).
@@ -415,6 +450,8 @@ struct Engine {
     /// What the search found, as found: (lossless, YouTube Music).
     found: RefCell<(Option<Vec<Track>>, Option<Vec<Track>>)>,
     liked: RefCell<Vec<Track>>,
+    /// Liked songs being saved now.
+    saving: RefCell<HashSet<String>>,
     history: RefCell<Vec<(Track, i64)>>,
     mix: RefCell<Vec<Track>>,
     mix_gen: Cell<u64>,
@@ -457,6 +494,7 @@ impl Engine {
             query: RefCell::default(),
             found: RefCell::new((Some(Vec::new()), Some(Vec::new()))),
             liked: RefCell::default(),
+            saving: RefCell::default(),
             history: RefCell::default(),
             mix: RefCell::default(),
             mix_gen: Cell::new(0),
@@ -511,7 +549,11 @@ impl Engine {
         }
         self.restore_session();
         self.publish_home();
+        self.publish_liked();
         self.refresh_mix();
+        // likes that weren't saved yet (offline, or the app closed while saving)
+        let unsaved: Vec<Track> = self.liked.borrow().iter().filter(|t| t.file.is_none() && crate::library::saves(t)).cloned().collect();
+        unsaved.into_iter().for_each(|t| self.save_liked(t));
         // five times a second: where the song is, the lines lit, and (every 5 s) where you are
         let me = Rc::downgrade(self);
         glib::timeout_add_local(Duration::from_millis(200), move || {
@@ -859,6 +901,111 @@ impl Engine {
         self.publish_now();
     }
 
+    /// A note for the app to show.
+    fn toast(&self, text: String) {
+        self.shared.view(|v| v.toasts.push_back(text));
+        self.shared.tell(Change::Toast);
+    }
+
+    /// A song the app shows, by its key: playing, in the queue, liked, found, in the mix or the history.
+    fn find_track(&self, key: &str) -> Option<Track> {
+        let hit = |v: &[Track]| v.iter().find(|t| t.key() == key).cloned();
+        if let Some(t) = self.current.borrow().as_ref().filter(|t| t.key() == key) {
+            return Some(t.clone());
+        }
+        let found = self.found.borrow();
+        hit(self.queue.borrow().tracks())
+            .or_else(|| hit(&self.liked.borrow()))
+            .or_else(|| found.0.as_deref().and_then(hit))
+            .or_else(|| found.1.as_deref().and_then(hit))
+            .or_else(|| hit(&self.mix.borrow()))
+            .or_else(|| self.history.borrow().iter().map(|(t, _)| t).find(|t| t.key() == key).cloned())
+    }
+
+    fn saved_state(&self, t: &Track) -> Saved {
+        if self.saving.borrow().contains(&t.key()) {
+            Saved::Saving
+        } else if t.file.is_some() {
+            Saved::Saved
+        } else if crate::library::saves(t) {
+            Saved::NotSaved
+        } else {
+            Saved::Streams
+        }
+    }
+
+    fn publish_liked(&self) {
+        let list: Vec<(Track, Saved)> = self.liked.borrow().iter().map(|t| (t.clone(), self.saved_state(t))).collect();
+        self.shared.view(|v| v.liked = list);
+        self.shared.tell(Change::Liked);
+    }
+
+    /// Liked Songs changed: it, the bar's heart, Home's row and Search's own matches.
+    fn liked_changed(&self) {
+        self.publish_liked();
+        self.publish_now();
+        self.publish_home();
+        self.publish_results();
+    }
+
+    fn toggle_like(self: &Rc<Self>, key: &str) {
+        let Some(t) = self.find_track(key) else { return };
+        let like = liking::toggle(&mut self.liked.borrow_mut(), &t);
+        match like {
+            Like::Liked { save: true } => self.save_liked(t),
+            Like::Liked { save: false } => self.toast(words::liked_toast(&t.title)),
+            Like::Unliked { gone } => {
+                self.toast(words::unliked_toast(&gone.title, gone.file.is_some()));
+                self.bg(move || crate::library::unsave(&gone), |_, _| {});
+            }
+        }
+        self.liked_changed();
+    }
+
+    /// A liked song saved in the background (one save per song at a time). Taken out of Liked
+    /// while it was saving: what was saved goes again, and nothing is said.
+    fn save_liked(self: &Rc<Self>, t: Track) {
+        let key = t.key();
+        if !self.saving.borrow_mut().insert(key.clone()) {
+            return;
+        }
+        self.publish_liked();
+        let sources = self.shared.sources.clone();
+        self.bg(
+            move || {
+                let saved = liking::save(&t, sources.as_ref());
+                (t, saved)
+            },
+            move |e, (mut t, saved)| {
+                e.saving.borrow_mut().remove(&key);
+                match saved {
+                    Ok(path) => {
+                        let kept = e.liked.borrow_mut().iter_mut().find(|x| x.key() == key).map(|x| x.file = Some(path.clone())).is_some();
+                        if kept {
+                            crate::library::store(&e.liked.borrow());
+                            e.toast(words::saved_toast(&t.title));
+                        } else {
+                            t.file = Some(path);
+                            crate::library::unsave(&t);
+                        }
+                    }
+                    Err(err) => {
+                        crate::log::note(&format!("save {}: {err}", t.title));
+                        e.toast(words::save_failed(&t.title));
+                    }
+                }
+                e.liked_changed();
+            },
+        );
+    }
+
+    fn fix_missing(self: &Rc<Self>) {
+        let (songs, videos) = liking::missing(&self.liked.borrow());
+        let n = songs.len();
+        songs.into_iter().for_each(|t| self.save_liked(t));
+        self.toast(words::fixing_toast(n, videos));
+    }
+
     fn say(&self, text: String, retry: bool) {
         self.shared.view(|v| v.problem = Some(Problem { text, retry }));
         self.shared.tell(Change::Problem);
@@ -1052,6 +1199,7 @@ impl Engine {
             lossless: song.as_ref().is_some_and(|t| t.lossless()),
             kbps: self.kbps.get(),
             lit,
+            liked: song.as_ref().is_some_and(|t| self.liked.borrow().iter().any(|x| x.key() == t.key())),
             song,
         };
         drop(q);

@@ -19,6 +19,10 @@ pub trait Sources: Send + Sync + 'static {
     fn radio(&self, seed: &Track) -> Vec<Track>;
     /// A song's lyrics.
     fn lyrics(&self, t: &Track) -> Lyrics;
+    /// A file from the web into `to` (a liked lossless song being saved).
+    fn download(&self, url: &str, to: &std::path::Path) -> Result<(), String>;
+    /// A song's genres (looked up for liked songs).
+    fn genres(&self, t: &Track) -> Vec<String>;
 }
 
 /// The real ones: the Internet Archive, YouTube Music (yt-dlp), LRCLIB.
@@ -43,5 +47,11 @@ impl Sources for Real {
     }
     fn lyrics(&self, t: &Track) -> Lyrics {
         crate::lyrics::find(t)
+    }
+    fn download(&self, url: &str, to: &std::path::Path) -> Result<(), String> {
+        crate::library::download(url, to)
+    }
+    fn genres(&self, t: &Track) -> Vec<String> {
+        crate::genre::lookup(t)
     }
 }

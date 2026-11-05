@@ -84,6 +84,40 @@ pub fn liked_matches(n: usize) -> String {
     format!("{n} of your liked songs {}", if n == 1 { "matches" } else { "match" })
 }
 
+/// Liking and saving: the toasts and the Fix missing button (both apps, as the Linux app says them).
+pub fn liked_toast(title: &str) -> String {
+    format!("Liked “{title}”")
+}
+
+pub fn saved_toast(title: &str) -> String {
+    format!("Saved “{title}”")
+}
+
+pub fn unliked_toast(title: &str, trashed: bool) -> String {
+    if trashed {
+        format!("Removed “{title}” from Liked; its saved copy is in the Trash")
+    } else {
+        format!("Removed “{title}” from Liked")
+    }
+}
+
+pub fn save_failed(title: &str) -> String {
+    format!("Couldn't save “{title}” right now. It tries again next time the app opens.")
+}
+
+/// The Fix missing button: `n` songs (or videos) missing, `fixing` while it works on them.
+pub fn fix_label(n: usize, fixing: bool) -> String {
+    if fixing { format!("Fixing… {n} left") } else { format!("Fix missing ({n})") }
+}
+
+pub fn fixing_toast(songs: usize, videos: usize) -> String {
+    match (songs, videos) {
+        (0, v) => format!("Saving {v} music videos in the background"),
+        (s, 0) => format!("Saving {s} songs in the background"),
+        (s, v) => format!("Saving {s} songs and {v} music videos in the background"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
