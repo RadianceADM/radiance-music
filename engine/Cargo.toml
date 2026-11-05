@@ -28,6 +28,8 @@ image = { version = "0.25", default-features = false, features = ["jpeg", "png",
 tungstenite = { version = "0.29", default-features = false, features = ["handshake", "rustls-tls-webpki-roots"] }
 # the feedback pop-up's sign-in (feedback.rs): PKCE's S256 and its random secrets
 sha2 = "0.10"
+# the two-part split's ONNX Runtime comes in a .tgz / .zip (two_part.rs)
+flate2 = "1"
 getrandom = "0.3"
 # splitting without Python (owner 2026-11-02): the two-part split (spleeter.rs, #43) and the
 # Demucs prototype (onnx_split.rs) as ONNX, as the phone runs them; ONNX Runtime's library is

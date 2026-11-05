@@ -45,6 +45,7 @@ pub mod sources;
 pub mod spleeter;
 pub mod split;
 pub mod storage;
+pub mod two_part;
 /// Songs: the core's (core/src/track.rs).
 pub use radiance_core::track;
 pub mod update;
