@@ -1,8 +1,8 @@
 # ribs03: runs the beta in the owner's desktop session through the RadianceMusicTest task (the only
 # way a window shows from SSH), with its test data (C:\rb\beta-test) and no sound, then puts
 # C:\rb\test-start.cmd back as it was. Waits until the beta quits (or -Seconds), prints its exit.
-#   powershell -File C:\rb\beta\src\windows\test-run.ps1 -Args '--shot C:\rb\beta\shots\home.png --page home' -Seconds 90
-param([string]$Args = '', [int]$Seconds = 120)
+#   powershell -File C:\rb\beta\src\windows\test-run.ps1 -AppArgs '--shot C:\rb\beta\shots\home.png --page home' -Seconds 90
+param([string]$AppArgs = '', [int]$Seconds = 120)
 $ErrorActionPreference = 'Stop'
 $start = 'C:\rb\test-start.cmd'
 $kept = Get-Content $start -Raw
@@ -14,7 +14,7 @@ set XDG_CONFIG_HOME=C:\rb\beta-test\config
 set XDG_DATA_HOME=C:\rb\beta-test\data
 set XDG_CACHE_HOME=C:\rb\beta-test\cache
 set RADIANCE_SILENT=1
-start "" /belownormal "$exe" $Args
+start "" /belownormal "$exe" $AppArgs
 "@
 try {
     [IO.File]::WriteAllText($start, $cmd)

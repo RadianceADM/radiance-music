@@ -48,7 +48,7 @@ public sealed partial class NowPlayingPage : Page
         Right.Visibility = lyrics ? Visibility.Visible : Visibility.Collapsed;
         Left.HorizontalAlignment = lyrics ? HorizontalAlignment.Left : HorizontalAlignment.Center;
         Grid.SetColumnSpan(Left, lyrics ? 1 : 2);
-        var side = width < Narrow ? Math.Max(160, Math.Min(360, width - 96)) : 360;
+        var side = width < Narrow ? Math.Max(160, Math.Min(340, width - 96)) : 340;
         Cover.Width = Cover.Height = Left.Width = side;
     }
 
@@ -62,8 +62,9 @@ public sealed partial class NowPlayingPage : Page
             SongTitle.Text = "Nothing playing";
             Byline.Text = "";
             Quality.Visibility = Visibility.Collapsed;
-            Cover.Background = (Brush)Application.Current.Resources["CardBrush"];
+            Cover.Background = (Brush)Application.Current.Resources["CardBackgroundFillColorDefaultBrush"];
             Back.SetArt(null, null);
+            OverArt(false);
             songKey = "";
             return;
         }
@@ -71,18 +72,7 @@ public sealed partial class NowPlayingPage : Page
         Byline.Text = song.Byline;
         // the GTK app's quality line (stage 1: lossless or compressed; bits and kHz come later)
         Quality.Visibility = Visibility.Visible;
-        if (now.Lossless)
-        {
-            QualityText.Text = "Lossless · FLAC";
-            Quality.Background = (Brush)Application.Current.Resources["LosslessBgBrush"];
-            QualityText.Foreground = (Brush)Application.Current.Resources["LosslessFgBrush"];
-        }
-        else
-        {
-            QualityText.Text = now.Kbps > 0 ? $"Compressed · Opus {now.Kbps} kbps" : "Compressed · Opus";
-            Quality.Background = new SolidColorBrush(Windows.UI.Color.FromArgb(46, 255, 255, 255));
-            QualityText.Foreground = new SolidColorBrush(Microsoft.UI.Colors.White);
-        }
+        QualityText.Text = now.Lossless ? "Lossless · FLAC" : now.Kbps > 0 ? $"Compressed · Opus {now.Kbps} kbps" : "Compressed · Opus";
         if (song.Key != songKey)
         {
             songKey = song.Key;
@@ -98,10 +88,18 @@ public sealed partial class NowPlayingPage : Page
         var key = songKey;
         var cover = await ArtCache.LoadAsync(hub.Engine, source, 720);
         if (key != songKey) return;
-        Cover.Background = cover != null ? new ImageBrush { ImageSource = cover, Stretch = Stretch.UniformToFill } : (Brush)Application.Current.Resources["CardBrush"];
+        Cover.Background = cover != null ? new ImageBrush { ImageSource = cover, Stretch = Stretch.UniformToFill } : (Brush)Application.Current.Resources["CardBackgroundFillColorDefaultBrush"];
         var files = await Task.Run(() => hub.Engine.Backdrop(source));
         if (key != songKey) return;
         Back.SetArt(files?.Wash, files?.Blob);
+        OverArt(files != null);
+    }
+
+    /// <summary>Over the moving art the page is dark (its words stay readable); else Windows' own theme.</summary>
+    private void OverArt(bool on)
+    {
+        Scrim.Visibility = on ? Visibility.Visible : Visibility.Collapsed;
+        Root.RequestedTheme = on ? ElementTheme.Dark : ElementTheme.Default;
     }
 
     private void RenderLyrics()
@@ -124,7 +122,7 @@ public sealed partial class NowPlayingPage : Page
                 Note(hub.Engine.Online() ? "No lyrics found for this song." : "You're offline: the lyrics come when you're back online.");
                 break;
             case LyricsKind.Plain:
-                Lines.Children.Add(new TextBlock { Text = l.Plain, Style = (Style)Application.Current.Resources["LyricPlain"] });
+                Lines.Children.Add(new TextBlock { Text = l.Plain, Style = (Style)Application.Current.Resources["LyricPlain"], Margin = new Thickness(0, 24, 0, 24) });
                 break;
             case LyricsKind.Lines:
                 foreach (var line in l.Lines)

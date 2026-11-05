@@ -1,9 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- Windows' own look (owner, 2026-11-05: "native look and feel"): light or dark as Windows is,
+     Windows' accent colour, WinUI's own controls and type ramp. -->
 <Application
     x:Class="RadianceMusic.App"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-    RequestedTheme="Dark">
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
     <Application.Resources>
         <ResourceDictionary>
             <ResourceDictionary.MergedDictionaries>

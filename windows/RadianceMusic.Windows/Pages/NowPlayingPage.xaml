@@ -1,45 +1,46 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Now Playing, as the GTK app's: the moving background (the compositor's), the cover, title, names
-     and quality; the lyric lines beside it (the sung one lit, kept in the middle). Under 1060 px
-     the lyrics make room; under 860 the cover stands above. Word by word comes in stage 2. -->
+<!-- Now Playing: the song's art moving behind (the compositor's), the cover, title, names and
+     quality, and the lyric lines beside it (the sung one lit, kept in the middle). Windows' own
+     type and controls; dark over the art. Under 1060 px the lyrics make room. -->
 <Page
     x:Class="RadianceMusic.Pages.NowPlayingPage"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:c="using:RadianceMusic.Controls"
     NavigationCacheMode="Required">
-    <Grid>
+    <Grid x:Name="Root">
         <c:Backdrop x:Name="Back" />
-        <Border>
+        <Border x:Name="Scrim" Visibility="Collapsed">
             <Border.Background>
                 <LinearGradientBrush StartPoint="0.5,0" EndPoint="0.5,1">
-                    <GradientStop Color="#4D000000" Offset="0" />
-                    <GradientStop Color="#8C000000" Offset="1" />
+                    <GradientStop Color="#59000000" Offset="0" />
+                    <GradientStop Color="#99000000" Offset="1" />
                 </LinearGradientBrush>
             </Border.Background>
         </Border>
-        <Grid x:Name="Body" Padding="40,24,40,24" ColumnSpacing="48">
+        <Grid x:Name="Body" Padding="36,24,36,24" ColumnSpacing="48">
             <Grid.ColumnDefinitions>
-                <ColumnDefinition x:Name="LeftColumn" Width="Auto" />
-                <ColumnDefinition x:Name="RightColumn" Width="*" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" />
             </Grid.ColumnDefinitions>
-            <Grid.RowDefinitions>
-                <RowDefinition x:Name="TopRow" Height="*" />
-                <RowDefinition x:Name="BottomRow" Height="0" />
-            </Grid.RowDefinitions>
-            <StackPanel x:Name="Left" VerticalAlignment="Center" Spacing="12" Width="360">
-                <Border x:Name="Cover" Width="360" Height="360" CornerRadius="16" Background="{StaticResource CardBrush}" />
-                <TextBlock x:Name="SongTitle" Style="{StaticResource NpTitle}" Text="Nothing playing" />
-                <TextBlock x:Name="Byline" Foreground="#B8FFFFFF" FontSize="15" TextTrimming="CharacterEllipsis" MaxLines="1" />
-                <Border x:Name="Quality" HorizontalAlignment="Left" CornerRadius="999" Padding="10,3" Visibility="Collapsed">
-                    <TextBlock x:Name="QualityText" FontSize="12" FontWeight="Bold" />
+            <StackPanel x:Name="Left" VerticalAlignment="Center" Spacing="8" Width="340">
+                <Border x:Name="Cover" Width="340" Height="340" CornerRadius="8" Margin="0,0,0,8"
+                        Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                        BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1" />
+                <TextBlock x:Name="SongTitle" Style="{StaticResource TitleTextBlockStyle}" Text="Nothing playing"
+                           TextWrapping="WrapWholeWords" MaxLines="2" TextTrimming="CharacterEllipsis" />
+                <TextBlock x:Name="Byline" Style="{StaticResource BodyTextBlockStyle}" Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                           TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" />
+                <Border x:Name="Quality" HorizontalAlignment="Left" CornerRadius="4" Padding="8,2" Margin="0,4,0,0" Visibility="Collapsed"
+                        Background="{ThemeResource ControlFillColorSecondaryBrush}">
+                    <TextBlock x:Name="QualityText" Style="{StaticResource CaptionTextBlockStyle}" />
                 </Border>
             </StackPanel>
             <Grid x:Name="Right" Grid.Column="1">
                 <ScrollViewer x:Name="LyricsScroll" VerticalScrollBarVisibility="Hidden" HorizontalScrollMode="Disabled">
                     <StackPanel x:Name="Lines" />
                 </ScrollViewer>
-                <TextBlock x:Name="LyricsNote" Style="{StaticResource LyricPlain}" Opacity="0.75" VerticalAlignment="Center" />
+                <TextBlock x:Name="LyricsNote" Style="{StaticResource BodyTextBlockStyle}" Foreground="{ThemeResource TextFillColorSecondaryBrush}" VerticalAlignment="Center" />
             </Grid>
         </Grid>
     </Grid>

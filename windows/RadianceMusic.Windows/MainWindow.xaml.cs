@@ -9,9 +9,6 @@ namespace RadianceMusic;
 
 public sealed partial class MainWindow : Window
 {
-    /// <summary>Under this width (px) the sidebar slides over, as the GTK app's (home.rs: 860sp).</summary>
-    private const double Narrow = 860;
-
     private readonly EngineHub hub;
     private readonly DispatcherTimer noticeTimer = new() { Interval = TimeSpan.FromSeconds(10) };
     private string page = "home";
@@ -20,13 +17,14 @@ public sealed partial class MainWindow : Window
     {
         this.hub = hub;
         InitializeComponent();
+        SystemBackdrop = new Microsoft.UI.Xaml.Media.MicaBackdrop();
         ExtendsContentIntoTitleBar = true;
-        SetTitleBar(TitleArea);
+        SetTitleBar(AppTitleBar);
         var icon = Path.Combine(AppContext.BaseDirectory, "radiance-music.ico");
         if (File.Exists(icon))
         {
             AppWindow.SetIcon(icon);
-            BrandIcon.Source = new BitmapImage(new Uri(icon));
+            TitleIcon.Source = new BitmapImage(new Uri(icon));
         }
         if (Program.Dev.Shot != null || Program.Dev.PlayTest)
             AppWindow.Resize(new Windows.Graphics.SizeInt32(Program.Dev.Width, Program.Dev.Height));
@@ -60,10 +58,9 @@ public sealed partial class MainWindow : Window
             "playing" => typeof(NowPlayingPage),
             _ => typeof(HomePage),
         };
-        if (Pages.CurrentSourcePageType != type) Pages.Navigate(type, hub);
-        foreach (ListViewItem item in Nav.Items)
-            if ((string)item.Tag == name && !item.IsSelected) item.IsSelected = true;
-        if (Split.DisplayMode == SplitViewDisplayMode.Overlay) Split.IsPaneOpen = false;
+        if (Pages.CurrentSourcePageType != type) Pages.Navigate(type, hub, new Microsoft.UI.Xaml.Media.Animation.EntranceNavigationTransitionInfo());
+        foreach (var item in Nav.MenuItems.OfType<NavigationViewItem>())
+            if ((string)item.Tag == name && Nav.SelectedItem != item) Nav.SelectedItem = item;
     }
 
     /// <summary>Search, with `q` typed in (screenshots, Home's "Search for music").</summary>
@@ -86,19 +83,9 @@ public sealed partial class MainWindow : Window
         Win32.SetForegroundWindow(WinRT.Interop.WindowNative.GetWindowHandle(this));
     }
 
-    private void OnNav(object sender, SelectionChangedEventArgs e)
+    private void OnNav(NavigationView sender, NavigationViewSelectionChangedEventArgs e)
     {
-        if (Nav.SelectedItem is ListViewItem { Tag: string name } && name != page) Show(name);
-    }
-
-    private void OnShowNav(object sender, RoutedEventArgs e) => Split.IsPaneOpen = !Split.IsPaneOpen;
-
-    private void OnSize(object sender, SizeChangedEventArgs e)
-    {
-        var narrow = e.NewSize.Width < Narrow;
-        Split.DisplayMode = narrow ? SplitViewDisplayMode.Overlay : SplitViewDisplayMode.Inline;
-        Split.IsPaneOpen = !narrow;
-        ShowNav.Visibility = narrow ? Visibility.Visible : Visibility.Collapsed;
+        if (e.SelectedItem is NavigationViewItem { Tag: string name } && name != page) Show(name);
     }
 
     private void OnChange(ChangeKind what)

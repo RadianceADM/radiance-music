@@ -18,17 +18,17 @@ internal sealed class PlayerBar : Grid
     private const double Narrow = 860, Phone = 600;
     private readonly EngineHub hub;
     private readonly SeekModel seek = new();
-    private readonly Border art = new() { Width = 56, Height = 56, CornerRadius = new CornerRadius(8) };
-    private readonly TextBlock title = new() { Text = "Nothing playing", FontWeight = Microsoft.UI.Text.FontWeights.Bold, TextTrimming = TextTrimming.CharacterEllipsis, MaxLines = 1 };
-    private readonly TextBlock byline = new() { Opacity = 0.62, FontSize = 13, TextTrimming = TextTrimming.CharacterEllipsis, MaxLines = 1 };
+    private readonly Border art = new() { Width = 56, Height = 56, CornerRadius = new CornerRadius(4) };
+    private readonly TextBlock title = new() { Text = "Nothing playing", Style = (Style)Application.Current.Resources["BodyStrongTextBlockStyle"], TextTrimming = TextTrimming.CharacterEllipsis, TextWrapping = TextWrapping.NoWrap };
+    private readonly TextBlock byline = new() { Style = (Style)Application.Current.Resources["CaptionTextBlockStyle"], Foreground = (Brush)Application.Current.Resources["TextFillColorSecondaryBrush"], TextTrimming = TextTrimming.CharacterEllipsis, TextWrapping = TextWrapping.NoWrap };
     private readonly Button shuffle, previous, play, next, repeat, mute;
     private readonly FontIcon playIcon = new() { Glyph = "\uE768", FontSize = 18 };
     private readonly FontIcon repeatIcon = new() { Glyph = "\uE8EE", FontSize = 15 };
     private readonly FontIcon muteIcon = new() { Glyph = "\uE767", FontSize = 15 };
     private readonly Slider bar = new() { Minimum = 0, Maximum = 1, StepFrequency = 0.1, IsThumbToolTipEnabled = false, VerticalAlignment = VerticalAlignment.Center };
     private readonly Slider volume = new() { Minimum = 0, Maximum = 100, Width = 120, IsThumbToolTipEnabled = false, VerticalAlignment = VerticalAlignment.Center };
-    private readonly TextBlock at = new() { FontSize = 12, Opacity = 0.7, VerticalAlignment = VerticalAlignment.Center, MinWidth = 36, TextAlignment = TextAlignment.Right };
-    private readonly TextBlock length = new() { FontSize = 12, Opacity = 0.7, VerticalAlignment = VerticalAlignment.Center, MinWidth = 36 };
+    private readonly TextBlock at = new() { Style = (Style)Application.Current.Resources["CaptionTextBlockStyle"], Foreground = (Brush)Application.Current.Resources["TextFillColorSecondaryBrush"], VerticalAlignment = VerticalAlignment.Center, MinWidth = 36, TextAlignment = TextAlignment.Right };
+    private readonly TextBlock length = new() { Style = (Style)Application.Current.Resources["CaptionTextBlockStyle"], Foreground = (Brush)Application.Current.Resources["TextFillColorSecondaryBrush"], VerticalAlignment = VerticalAlignment.Center, MinWidth = 36 };
     private readonly StackPanel songWords;
     private bool setting;
     private double unmuted = 1;
@@ -37,14 +37,18 @@ internal sealed class PlayerBar : Grid
     public PlayerBar(EngineHub hub)
     {
         this.hub = hub;
-        Padding = new Thickness(14, 8, 14, 10);
+        Padding = new Thickness(16, 8, 16, 10);
         ColumnSpacing = 16;
+        // as Media Player's bar: a layer over the window's Mica, a hairline above it
+        Background = (Brush)Application.Current.Resources["LayerFillColorDefaultBrush"];
+        BorderBrush = (Brush)Application.Current.Resources["CardStrokeColorDefaultBrush"];
+        BorderThickness = new Thickness(0, 1, 0, 0);
         ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star), MinWidth = 160 });
         ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(2, GridUnitType.Star), MaxWidth = 640 });
         ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
 
         // the song
-        art.Background = (Brush)Application.Current.Resources["CardBrush"];
+        art.Background = (Brush)Application.Current.Resources["CardBackgroundFillColorDefaultBrush"];
         songWords = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
         songWords.Children.Add(title);
         songWords.Children.Add(byline);
@@ -158,7 +162,7 @@ internal sealed class PlayerBar : Grid
         playIcon.Glyph = now.Playing ? "\uE769" : "\uE768";
         ToolTipService.SetToolTip(play, now.Playing ? "Pause" : "Play");
         ToolTipService.SetToolTip(shuffle, now.Shuffle ? "Shuffle: on" : "Shuffle");
-        shuffle.Foreground = now.Shuffle ? (Brush)Application.Current.Resources["AccentTextBrush"] : null;
+        shuffle.Foreground = now.Shuffle ? (Brush)Application.Current.Resources["AccentTextFillColorPrimaryBrush"] : null;
         var (glyph, tip) = now.Repeat switch
         {
             RepeatMode.All => ("\uE8EE", "Repeat: the whole queue"),
@@ -168,7 +172,7 @@ internal sealed class PlayerBar : Grid
         repeatIcon.Glyph = glyph;
         ToolTipService.SetToolTip(repeat, tip);
         repeat.Opacity = now.Repeat == RepeatMode.Off ? 0.55 : 1;
-        repeat.Foreground = now.Repeat == RepeatMode.Off ? null : (Brush)Application.Current.Resources["AccentTextBrush"];
+        repeat.Foreground = now.Repeat == RepeatMode.Off ? null : (Brush)Application.Current.Resources["AccentTextFillColorPrimaryBrush"];
         muteIcon.Glyph = now.Volume <= 0 ? "\uE74F" : now.Volume < 0.34 ? "\uE993" : now.Volume < 0.67 ? "\uE994" : "\uE767";
         ToolTipService.SetToolTip(mute, now.Volume <= 0 ? "Unmute" : "Mute");
         setting = true;
@@ -200,6 +204,6 @@ internal sealed class PlayerBar : Grid
     {
         var image = await ArtCache.LoadAsync(hub.Engine, source, 112);
         if (source != artFor) return;
-        art.Background = image != null ? new ImageBrush { ImageSource = image, Stretch = Stretch.UniformToFill } : (Brush)Application.Current.Resources["CardBrush"];
+        art.Background = image != null ? new ImageBrush { ImageSource = image, Stretch = Stretch.UniformToFill } : (Brush)Application.Current.Resources["CardBackgroundFillColorDefaultBrush"];
     }
 }

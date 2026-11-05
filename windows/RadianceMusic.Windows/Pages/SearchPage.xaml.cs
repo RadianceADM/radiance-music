@@ -12,7 +12,7 @@ public sealed partial class SearchPage : Page
 {
     private EngineHub? hub;
     private Debounce? debounce;
-    private string shown = "\u0000";
+    private string shown = "-";
 
     public SearchPage()
     {
@@ -28,11 +28,11 @@ public sealed partial class SearchPage : Page
         {
             if (kind is ChangeKind.Results or ChangeKind.Online) Render();
         };
-        Tiles.ItemsSource = Ffi.BrowseTiles().Select((t, i) => Tile(t, i)).ToList();
+        Tiles.ItemsSource = Ffi.BrowseTiles().Select(Tile).ToList();
         Render();
     }
 
-    /// <summary>`q` typed in and searched (Home's tiles, screenshots).</summary>
+    /// <summary>`q` typed in and searched (a browse pick, screenshots).</summary>
     public void Search(string q)
     {
         Box.Text = q;
@@ -41,19 +41,18 @@ public sealed partial class SearchPage : Page
 
     public void FocusBox() => Box.Focus(FocusState.Programmatic);
 
-    private Button Tile(BrowseTile t, int i)
+    private Button Tile(BrowseTile t)
     {
+        var content = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 12 };
+        content.Children.Add(new FontIcon { Glyph = "\uE8D6", FontSize = 16, Foreground = (Brush)Application.Current.Resources["AccentTextFillColorPrimaryBrush"] });
+        content.Children.Add(new TextBlock { Text = t.Label, Style = (Style)Application.Current.Resources["BodyStrongTextBlockStyle"], VerticalAlignment = VerticalAlignment.Center });
         var b = new Button
         {
-            Background = (Brush)Application.Current.Resources[$"b{i % 6}"],
-            CornerRadius = new CornerRadius(16),
-            BorderThickness = new Thickness(0),
+            Content = content,
             HorizontalAlignment = HorizontalAlignment.Stretch,
             VerticalAlignment = VerticalAlignment.Stretch,
             HorizontalContentAlignment = HorizontalAlignment.Left,
-            VerticalContentAlignment = VerticalAlignment.Bottom,
-            Padding = new Thickness(16, 14, 16, 14),
-            Content = new TextBlock { Text = t.Label, FontSize = 17, FontWeight = Microsoft.UI.Text.FontWeights.ExtraBold, Foreground = new SolidColorBrush(Microsoft.UI.Colors.White) },
+            Padding = new Thickness(16, 12, 16, 12),
         };
         b.Click += (_, _) => Search(t.Query);
         return b;
@@ -65,6 +64,13 @@ public sealed partial class SearchPage : Page
     }
 
     private void OnSubmit(AutoSuggestBox sender, AutoSuggestBoxQuerySubmittedEventArgs e) => hub?.Engine.Search(sender.Text);
+
+    private void OnPlay(object sender, ItemClickEventArgs e)
+    {
+        if (hub == null || sender is not ListView list || e.ClickedItem is not SongRow row) return;
+        var kind = (string)list.Tag switch { "Mine" => ListKind.Mine, "Lossless" => ListKind.Lossless, _ => ListKind.Songs };
+        hub.Engine.PlayFrom(kind, (uint)list.Items.IndexOf(row));
+    }
 
     private void Render()
     {
@@ -83,20 +89,14 @@ public sealed partial class SearchPage : Page
         var key = r.Query + "|" + r.Mine.Length + "|" + (r.Lossless?.Length ?? -1) + "|" + (r.Songs?.Length ?? -1);
         if (key == shown) return;
         shown = key;
-        Fill(MineRows, r.Mine, ListKind.Mine);
-        Fill(LosslessRows, r.Lossless ?? Array.Empty<SongView>(), ListKind.Lossless);
-        Fill(SongsRows, r.Songs ?? Array.Empty<SongView>(), ListKind.Songs);
+        Fill(MineList, r.Mine);
+        Fill(LosslessList, r.Lossless ?? Array.Empty<SongView>());
+        Fill(SongsList, r.Songs ?? Array.Empty<SongView>());
     }
 
-    private void Fill(StackPanel rows, SongView[] songs, ListKind list)
+    private void Fill(ListView list, SongView[] songs)
     {
-        rows.Children.Clear();
-        for (var i = 0; i < songs.Length; i++)
-        {
-            var index = (uint)i;
-            var row = new SongRow(hub!.Engine, songs[i]);
-            row.Click += (_, _) => hub!.Engine.PlayFrom(list, index);
-            rows.Children.Add(row);
-        }
+        list.Items.Clear();
+        foreach (var song in songs) list.Items.Add(new SongRow(hub!.Engine, song));
     }
 }
