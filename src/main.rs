@@ -36,6 +36,7 @@ mod speaker;
 #[cfg(feature = "onnx-split")]
 use radiance_engine::onnx_split;
 use radiance_engine::player;
+use radiance_engine::playing;
 use radiance_engine::relay;
 use radiance_engine::report;
 use radiance_engine::servers;

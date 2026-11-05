@@ -360,7 +360,7 @@ impl Ui {
         let side = self.card_size();
         pic.set_size_request(side, side);
         let weak = pic.downgrade();
-        self.set_art(&art_source(t), (CARD * 2) as u32, move |tex| {
+        self.set_art(&art::source_of(t), (CARD * 2) as u32, move |tex| {
             if let Some(p) = weak.upgrade() {
                 p.set_paintable(Some(tex));
             }
@@ -396,7 +396,7 @@ impl Ui {
         let side = self.card_size();
         pic.set_size_request(side, side);
         let weak = pic.downgrade();
-        self.set_art(&art_source(&songs[0]), (CARD * 2) as u32, move |tex| {
+        self.set_art(&art::source_of(&songs[0]), (CARD * 2) as u32, move |tex| {
             if let Some(p) = weak.upgrade() {
                 p.set_paintable(Some(tex));
             }
@@ -418,7 +418,7 @@ impl Ui {
     fn genre_tile(self: &Rc<Self>, name: &str, songs: Vec<Track>, wide: i32) -> gtk::Button {
         let wash = gtk::Picture::builder().content_fit(gtk::ContentFit::Cover).can_shrink(true).build();
         let weak = wash.downgrade();
-        let src = art_source(&songs[0]);
+        let src = art::source_of(&songs[0]);
         let me = Rc::downgrade(self);
         bg_art(move || art::backdrop(&src), move |px| {
             if let (Some(px), Some(p), Some(_me)) = (px, weak.upgrade(), me.upgrade()) {
@@ -663,7 +663,7 @@ impl Ui {
         if let Some(first) = covers.first() {
             let wash = gtk::Picture::builder().content_fit(gtk::ContentFit::Cover).can_shrink(true).build();
             let weak = wash.downgrade();
-            let src = art_source(first);
+            let src = art::source_of(first);
             bg_art(move || art::backdrop(&src), move |px| {
                 if let (Some(px), Some(p)) = (px, weak.upgrade()) {
                     p.set_paintable(Some(&texture(px)));
@@ -727,7 +727,7 @@ impl Ui {
             let pic = gtk::Picture::builder().content_fit(gtk::ContentFit::Cover).can_shrink(true).overflow(gtk::Overflow::Hidden).css_classes(["fan-art"]).build();
             pic.set_size_request(160, 160);
             let weak = pic.downgrade();
-            self.set_art(&art_source(t), 320, move |tex| {
+            self.set_art(&art::source_of(t), 320, move |tex| {
                 if let Some(p) = weak.upgrade() {
                     p.set_paintable(Some(tex));
                 }
@@ -830,7 +830,7 @@ impl Ui {
         pic.add_css_class(if from == "artists" { "round-art" } else { "card-art" });
         pic.set_size_request(220, 220);
         let weak = pic.downgrade();
-        self.set_art(&art_source(&songs[0]), 440, move |tex| {
+        self.set_art(&art::source_of(&songs[0]), 440, move |tex| {
             if let Some(p) = weak.upgrade() {
                 p.set_paintable(Some(tex));
             }

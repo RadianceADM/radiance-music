@@ -6,8 +6,9 @@ use std::collections::HashSet;
 use crate::track::Track;
 
 /// Repeat: off, the whole queue, or this song.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Repeat {
+    #[default]
     Off,
     All,
     One,

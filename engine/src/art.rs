@@ -68,3 +68,13 @@ pub fn blob(px: &Pixels) -> Pixels {
     }
     Pixels { size: px.size, rgba }
 }
+
+/// A song's cover: its saved copy's own (a .jpg beside it), else its source's.
+pub fn source_of(t: &crate::track::Track) -> String {
+    t.file
+        .as_ref()
+        .map(|f| crate::library::beside(f, "jpg"))
+        .filter(|p| p.exists())
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|| t.art.clone())
+}

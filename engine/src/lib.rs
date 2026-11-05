@@ -27,6 +27,7 @@ pub mod net;
 #[cfg(feature = "onnx-split")]
 pub mod onnx_split;
 pub mod player;
+pub mod playing;
 pub mod relay;
 pub mod report;
 pub mod servers;

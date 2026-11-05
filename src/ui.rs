@@ -30,7 +30,7 @@ use backdrop::Backdrop;
 use lens::Lens;
 
 use crate::beat::{self, Plan};
-use crate::lyrics::{self, Lyrics};
+use crate::lyrics::{self, lyrics_and_source, lyrics_file, lyrics_for, lyrics_path, Lyrics};
 use crate::player::{Event, Player};
 use crate::relay::Relay;
 use crate::settings::{self, Settings, Transition, FADE_RANGE};
@@ -40,7 +40,7 @@ use radiance_core::queue::{self, Queue, Removed, Repeat, Step};
 use radiance_core::sing;
 use radiance_core::trouble::{self, sound_device_gone, After};
 use radiance_core::words::{self, Kind};
-use crate::{align, archive, art, genre, library, mix, servers, storage, youtube, APP_ID};
+use crate::{archive, art, genre, library, mix, servers, storage, youtube, APP_ID};
 
 
 /// Same pause as every search-as-you-type: no request per keystroke.
@@ -48,8 +48,6 @@ const SEARCH_DEBOUNCE_MS: u64 = 300;
 /// Art sizes in pixels: rows show 48 px (sharp at 2x), the big cover up to 360 px.
 const THUMB: u32 = 96;
 const COVER: u32 = 720;
-/// A YouTube stream address found ahead (for the next song) stays good this long.
-const STREAM_FRESH: Duration = Duration::from_secs(3600);
 /// The queue panel lists this many songs from the one playing.
 const QUEUE_ROWS: usize = 100;
 /// Songs played before, above the queue (to go back to one stuck in your head).
@@ -305,15 +303,6 @@ fn shuffled(v: Vec<Track>) -> Vec<Track> {
     queue::shuffled(v, liking, seed)
 }
 
-/// A saved song's own cover, else the source's.
-fn art_source(t: &Track) -> String {
-    t.file
-        .as_ref()
-        .map(|f| library::beside(f, "jpg"))
-        .filter(|p| p.exists())
-        .map(|p| p.display().to_string())
-        .unwrap_or_else(|| t.art.clone())
-}
 
 /// "Offline", small in the top bar (shown while there's no internet).
 fn offline_pill() -> gtk::Box {
@@ -350,67 +339,6 @@ fn link(t: &Track) -> String {
             .map(|item| format!("https://archive.org/details/{item}"))
             .unwrap_or_else(|| t.id.clone()),
     }
-}
-
-/// A saved song's own Lyricsfile first, else LRCLIB, else its old .lrc (worker
-/// thread). A song saved before word timing asks LRCLIB once more and keeps the
-/// answer as a Lyricsfile, so its words light up too.
-///
-/// Lines without their words' times get them from the song's Vocals part once
-/// it's been split (see align.rs); a saved song keeps that in its Lyricsfile.
-fn lyrics_for(t: &Track) -> Lyrics {
-    lyrics_and_source(t).0
-}
-
-/// lyrics_for, and whether its words were timed from the vocals just now.
-fn lyrics_and_source(t: &Track) -> (Lyrics, bool) {
-    let file = t.file.as_deref();
-    let kept = fs::read_to_string(lyrics_file(t)).ok().and_then(|y| lyrics::parse_lyricsfile(&y)).or_else(|| server_lyrics(t));
-    let fresh = kept.is_none();
-    let mut l = kept.unwrap_or_else(|| {
-        let found = lyrics::find(t);
-        match (file, &found) {
-            (None, _) | (_, Lyrics::Timed { .. }) => found,
-            (Some(f), _) => match fs::read_to_string(library::beside(f, "lrc")) {
-                Ok(text) => {
-                    let lines = lyrics::parse_lrc(&text);
-                    if lines.is_empty() { Lyrics::Plain(text) } else { Lyrics::Timed { lines, exact: false } }
-                }
-                Err(_) => found,
-            },
-        }
-    });
-    let mut from_vocals = false;
-    if let Lyrics::Timed { lines, exact } = &mut l {
-        if let (false, Some(vocals)) = (*exact, split::ready_part(t, "vocals")) {
-            if align::words_from_vocals(lines, &gio::File::for_path(&vocals).uri()) {
-                *exact = true;
-                from_vocals = true;
-            }
-        }
-    }
-    if let (Some(f), true, Lyrics::Timed { .. }) = (file, fresh || from_vocals, &l) {
-        if let Some((ext, text)) = lyrics::to_file(&l, Some(t), if from_vocals { &[lyrics::VOCALS_NOTE] } else { &[] }) {
-            let _ = fs::write(library::beside(f, ext), text);
-        }
-    }
-    (l, from_vocals)
-}
-
-/// A server's song (not saved): the lyrics its server keeps for it, a Lyricsfile
-/// kept here too (in the cache, as any song's), else its .lrc text (worker thread).
-fn server_lyrics(t: &Track) -> Option<Lyrics> {
-    if t.source != Source::Server || t.file.is_some() {
-        return None;
-    }
-    let (yaml, text) = servers::lyrics_text(t)?;
-    if yaml {
-        let l = lyrics::parse_lyricsfile(&text)?;
-        let _ = fs::write(lyrics_file(t), text);
-        return Some(l);
-    }
-    let lines = lyrics::parse_lrc(&text);
-    Some(if lines.is_empty() { Lyrics::Plain(text) } else { Lyrics::Timed { lines, exact: false } })
 }
 
 /// A split song's lyrics for the server's library (worker thread): its
@@ -604,22 +532,6 @@ fn time_words(t: &Track, aligner: &Aligner) -> Result<(), String> {
         let _ = fs::write(lyrics_file(t), text);
     }
     Ok(())
-}
-
-/// Where a song's Lyricsfile is kept: next to a saved song, else in the cache.
-fn lyrics_file(t: &Track) -> std::path::PathBuf {
-    let p = lyrics_path(t);
-    if let Some(dir) = p.parent() {
-        let _ = fs::create_dir_all(dir);
-    }
-    p
-}
-
-fn lyrics_path(t: &Track) -> std::path::PathBuf {
-    match t.file.as_deref() {
-        Some(f) => library::beside(f, "lyrics.yaml"),
-        None => glib::user_cache_dir().join("radiance-music/lyrics").join(format!("{}.lyrics.yaml", crate::track::file_name(&t.key()))),
-    }
 }
 
 /// What lyrics a song has on this computer.
@@ -1028,9 +940,8 @@ pub struct Ui {
     kbps: Cell<u32>,
     quality_known: Cell<bool>,
     play_gen: Cell<u64>,
-    streams: RefCell<HashMap<String, (String, u32, Instant)>>,
-    /// YouTube songs whose stream is being looked up ahead.
-    finding: RefCell<HashSet<String>>,
+    /// YouTube streams found, and the ones being looked up (engine's playing::Streams).
+    streams: RefCell<crate::playing::Streams>,
     textures: RefCell<HashMap<(String, u32), gdk::Texture>>,
 
     // between songs
@@ -1334,7 +1245,6 @@ impl Ui {
             quality_known: Cell::new(false),
             play_gen: Cell::new(0),
             streams: RefCell::default(),
-            finding: RefCell::default(),
             textures: RefCell::default(),
 
             settings: RefCell::new(settings::load()),
@@ -1941,7 +1851,7 @@ impl Ui {
                     title: t.title.clone(),
                     artists: t.artists(),
                     album: t.album.clone(),
-                    art: art_source(t),
+                    art: art::source_of(t),
                     length: t.seconds as i64 * 1_000_000,
                 });
                 let player = me.player.borrow();
@@ -2849,12 +2759,7 @@ impl Ui {
 
     /// The saved copy of a liked song, else the song itself.
     fn saved_copy(&self, t: &Track) -> Track {
-        self.liked
-            .borrow()
-            .iter()
-            .find(|x| x.key() == t.key() && x.file.as_ref().is_some_and(|f| Path::new(f).exists()))
-            .cloned()
-            .unwrap_or_else(|| t.clone())
+        crate::playing::saved_copy(&self.liked.borrow(), t)
     }
 
     /// Where a song plays from now: its split half for the voice picked, else itself.
@@ -2864,25 +2769,14 @@ impl Ui {
 
     /// Where the song itself can be played from (a YouTube stream only once found).
     fn uri_plain(&self, t: &Track) -> Option<String> {
-        if let Some(f) = &t.file {
-            return Some(gio::File::for_path(f).uri().to_string());
-        }
-        match t.source {
-            Source::Archive => Some(self.web_uri(&t.id)),
-            Source::YouTube => self.fresh_stream(&t.id).map(|s| s.0),
-            // with this computer's key (none: the server was left)
-            Source::Server => servers::of_track(t).map(|_| self.web_uri(&servers::signed(&t.id))),
-        }
+        crate::playing::plain_uri(t, self.relay.as_ref(), &self.streams.borrow())
     }
 
     /// An Internet Archive file's (or a Radiance Music Server's) address for the player: as
     /// it is, except on Windows, where it goes through the relay (GStreamer's TLS there can't
     /// check the Archive).
     fn web_uri(&self, url: &str) -> String {
-        match &self.relay {
-            Some(relay) if cfg!(windows) => relay.add_web(url),
-            _ => url.to_string(),
-        }
+        crate::playing::web_uri(self.relay.as_ref(), url)
     }
 
     /// Settings or the order changed: plan the next transition again.
@@ -3980,7 +3874,7 @@ impl Ui {
         let img = gtk::Image::builder().icon_name("audio-x-generic-symbolic").pixel_size(48).overflow(gtk::Overflow::Hidden).css_classes(["art"]).build();
         row.add_prefix(&img);
         let weak = img.downgrade();
-        self.set_art(&art_source(t), THUMB, move |tex| {
+        self.set_art(&art::source_of(t), THUMB, move |tex| {
             if let Some(img) = weak.upgrade() {
                 img.set_paintable(Some(tex));
             }
@@ -5308,9 +5202,7 @@ impl Ui {
     }
 
     fn fresh_stream(&self, id: &str) -> Option<(String, u32)> {
-        let streams = self.streams.borrow();
-        let (uri, kbps, when) = streams.get(id)?;
-        (when.elapsed() < STREAM_FRESH).then(|| (uri.clone(), *kbps))
+        self.streams.borrow().fresh(id)
     }
 
     /// Asks yt-dlp for a YouTube song's stream; plays it if `play` is still the song wanted.
@@ -5320,7 +5212,7 @@ impl Ui {
             return;
         };
         let (id, title) = (t.id.clone(), t.title.clone());
-        if play.is_none() && !self.finding.borrow_mut().insert(id.clone()) {
+        if play.is_none() && !self.streams.borrow_mut().start_finding(&id) {
             return; // already being looked up
         }
         let me = Rc::downgrade(self);
@@ -5331,10 +5223,10 @@ impl Ui {
             },
             move |result| {
                 let Some(me) = me.upgrade() else { return };
-                me.finding.borrow_mut().remove(&id);
+                me.streams.borrow_mut().done_finding(&id);
                 match result {
                     Ok((uri, kbps)) => {
-                        me.streams.borrow_mut().insert(id, (uri.clone(), kbps, Instant::now()));
+                        me.streams.borrow_mut().found(&id, uri.clone(), kbps);
                         if let Some(gen) = play {
                             me.kbps.set(kbps);
                             me.start(&uri, gen);
@@ -5386,7 +5278,7 @@ impl Ui {
         self.np_text.set_opacity(0.0);
         fade(&self.np_text, 1.0, 450);
         self.bar_art.set_icon_name(Some("audio-x-generic-symbolic"));
-        let source = art_source(t);
+        let source = art::source_of(t);
         let weak = self.bar_art.downgrade();
         self.set_art(&source, THUMB, move |tex| {
             if let Some(img) = weak.upgrade() {
@@ -6645,7 +6537,7 @@ impl Ui {
             let img = gtk::Image::builder().icon_name("audio-x-generic-symbolic").pixel_size(40).overflow(gtk::Overflow::Hidden).css_classes(["art"]).build();
             r.add_prefix(&img);
             let weak = img.downgrade();
-            self.set_art(&art_source(t), THUMB, move |tex| {
+            self.set_art(&art::source_of(t), THUMB, move |tex| {
                 if let Some(img) = weak.upgrade() {
                     img.set_paintable(Some(tex));
                 }

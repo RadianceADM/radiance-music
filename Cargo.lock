@@ -2284,6 +2284,7 @@ dependencies = [
  "libadwaita",
  "libc",
  "qrcode",
+ "radiance-core",
  "radiance-engine",
  "serde_json",
  "souvlaki",
