@@ -40,7 +40,9 @@ if ($App -eq 'beta') {
     $name = 'radiance-music'
     $exe = "$env:LOCALAPPDATA\Programs\Radiance Music\bin\radiance-music.exe"
     # (a screenshot copy: never saves where you are; it quits after RADIANCE_SHOT_WAIT seconds)
-    $cmd = "@echo off`r`n$data`r`nset RADIANCE_SHOT=C:\rb\beta\shots\gtk-measure.png`r`nset RADIANCE_SHOT_PAGE=playing`r`nset RADIANCE_SHOT_PLAY=1`r`nset RADIANCE_SHOT_SIZE=1280x800`r`nset RADIANCE_SHOT_WAIT=$(4 * $Seconds + 60)`r`nstart `"`" `"$exe`""
+    # (its screenshot copy lives 18 s at most, main.rs: so 4 s to start, then 12 s measured, in front only)
+    $cmd = "@echo off`r`n$data`r`nset RADIANCE_SHOT=C:\rb\beta\shots\gtk-measure.png`r`nset RADIANCE_SHOT_PAGE=playing`r`nset RADIANCE_SHOT_PLAY=1`r`nset RADIANCE_SHOT_SIZE=1280x800`r`nset RADIANCE_SHOT_WAIT=18`r`nstart `"`" `"$exe`""
+    $Seconds = 12
 }
 function Cpu($p, $label) {
     $p.Refresh(); $a = $p.TotalProcessorTime.TotalSeconds; $t = Get-Date
@@ -58,12 +60,13 @@ try {
     New-Item -ItemType Directory -Force C:\rb\beta\shots | Out-Null
     [IO.File]::WriteAllText($start, $cmd)
     schtasks /run /tn RadianceMusicTest | Out-Null
-    Start-Sleep -Seconds 15
+    Start-Sleep -Seconds $(if ($App -eq 'gtk') { 4 } else { 15 })
     # (the new one with the most memory: the app's window, not a short-lived helper of the same name)
     $p = Get-Process $name -ErrorAction SilentlyContinue | Where-Object { $before -notcontains $_.Id } | Sort-Object WorkingSet64 -Descending | Select-Object -First 1
     Write-Output "measuring $name, process $($p.Id), $([math]::Round($p.WorkingSet64 / 1MB)) MB"
     if (-not $p) { throw "$name didn't start" }
     Cpu $p 'Now Playing in front'
+    if ($App -eq 'gtk') { return }
     $h = [Win]::Find([uint32]$p.Id)
     [Win]::ShowWindow($h, 6) | Out-Null   # SW_MINIMIZE
     Start-Sleep -Seconds 3
