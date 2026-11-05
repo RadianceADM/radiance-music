@@ -1015,6 +1015,10 @@ pub struct Ui {
     on_half: Cell<Option<Voice>>,
     splitting: RefCell<Option<Track>>,
     split_queue: RefCell<Vec<Track>>,
+    /// The fast split's own lane (#43), beside the four-part queue: the song being split in two,
+    /// and those waiting (each: asked for by hand).
+    splitting_two: RefCell<Option<Track>>,
+    two_queue: RefCell<Vec<(Track, bool)>>,
     /// Splits asked for by hand (their results are announced; auto-splits of
     /// liked songs are quiet).
     split_asked: RefCell<HashSet<String>>,
@@ -1299,6 +1303,8 @@ impl Ui {
             on_half: Cell::new(None),
             splitting: RefCell::default(),
             split_queue: RefCell::default(),
+            splitting_two: RefCell::default(),
+            two_queue: RefCell::default(),
             split_asked: RefCell::default(),
             split_bar: gtk::ProgressBar::builder().show_text(true).visible(false).margin_top(4).css_classes(["split-bar"]).build(),
             split_progress: Cell::new(0.0),
@@ -1661,6 +1667,7 @@ impl Ui {
             return;
         }
         self.toast("Back online");
+        self.get_two_part_ready(); // (if they didn't come at the start)
         if !self.search.text().trim().is_empty() {
             self.run_search();
         }
@@ -3285,8 +3292,12 @@ impl Ui {
         if t.video || split::done(t) {
             return;
         }
-        // four: this computer's splitter or the split server; two: inside the app, here
-        if !self.can_split() && !(split::wants_two(t) && self.can_split_two()) {
+        // asked for in two: the fast split's own lane; four: this computer's splitter or the split server
+        if split::wants_two(t) {
+            self.split_fast(t, first);
+            return;
+        }
+        if !self.can_split() {
             return;
         }
         let key = t.key();
@@ -3377,7 +3388,8 @@ impl Ui {
         }
         let t = self.split_queue.borrow_mut().remove(0);
         let (server, local) = (self.settings.borrow().split.clone(), self.settings.borrow().local_split.clone());
-        if server.is_none() && local.is_none() && !split::wants_two(&t) {
+        if server.is_none() && local.is_none() {
+            self.run_splits(); // (set up no more: the next one, if it can)
             return;
         }
         let uri = self.uri_plain(&t);
@@ -3436,20 +3448,7 @@ impl Ui {
                 me.splitting.replace(None);
                 let asked = me.split_asked.borrow_mut().remove(&t.key());
                 match result {
-                    Ok(()) => {
-                        let now = me.current.borrow().as_ref().is_some_and(|c| c.key() == t.key());
-                        if now && me.voice.get() != Voice::Song && me.on_half.get().is_none() {
-                            me.switch_half(&t);
-                            me.toast(&format!("“{}”: {}", t.title, me.voice.get().label().to_lowercase()));
-                        } else if asked {
-                            me.toast(&format!("“{}” is split: No vocals and Vocals only are ready", t.title));
-                        }
-                        if now {
-                            me.refresh_lyrics(); // its words get their times from the new Vocals part
-                        }
-                        me.refresh_split_marks(); // its scissors, in every list
-                        me.share_parts(&t); // a server's copy without parts gets these
-                    }
+                    Ok(()) => me.split_landed(&t, asked),
                     Err(e) => {
                         debug(&format!("split {}: {e}", t.title));
                         if asked {
@@ -3579,6 +3578,7 @@ impl Ui {
                 && (self.online.get() || t.file.is_some()) // offline, a song from the internet can't be fetched
                 && splitting_key.as_deref() != Some(t.key().as_str())
                 && !queued(t)
+                && !self.fast_busy(t)
                 && !self.away_on_server(t)
         });
         self.split_button.set_visible(can);
@@ -4097,11 +4097,12 @@ impl Ui {
             }
         } else if !t.video && (self.online.get() || t.file.is_some()) {
             let halves = !Self::shown_parts(&t).is_empty();
-            if !halves && self.can_split_two() {
+            if !halves && self.can_split_two() && !self.fast_busy(&t) {
                 let t1 = t.clone();
                 add(&mine, "Split: Music + Vocals (Fast)", "split", Box::new(move |me| me.split_as(&t1, true)));
             }
-            if self.can_split() && !split::has_parts(&t) {
+            let four_busy = self.splitting.borrow().as_ref().is_some_and(|x| x.key() == t.key()) || self.split_queue.borrow().iter().any(|x| x.key() == t.key());
+            if self.can_split() && Self::shown_parts(&t).len() < 4 && !four_busy {
                 let t1 = t.clone();
                 add(&mine, if halves { "Split in Four Parts" } else { "Split: Four Parts" }, "split-four", Box::new(move |me| me.split_as(&t1, false)));
             }
@@ -6174,22 +6175,145 @@ impl Ui {
     /// seconds) or in four (Drums, Bass, Other, Vocals; a few minutes).
     fn split_as(self: &Rc<Self>, t: &Track, two: bool) {
         split::ask_two(t, two);
-        self.split_now(t);
-        self.toast(&if two {
-            format!("Splitting “{}” into Music and Vocals: a few seconds", t.title)
+        if two {
+            self.split_fast(t, true);
+            self.toast(&format!("Splitting “{}” into Music and Vocals: a few seconds", t.title));
         } else {
-            format!("Splitting “{}” into four parts: about 3 minutes", t.title)
-        });
+            self.split_now(t);
+            self.toast(&format!("Splitting “{}” into four parts: about 3 minutes", t.title));
+        }
+    }
+
+    /// A split just landed (either lane): the song switches to the half asked for if it's
+    /// playing, its scissors show, a server's copy without parts gets them.
+    fn split_landed(self: &Rc<Self>, t: &Track, asked: bool) {
+        let now = self.current.borrow().as_ref().is_some_and(|c| c.key() == t.key());
+        if now && self.voice.get() != Voice::Song && self.on_half.get().is_none() {
+            self.switch_half(t);
+            self.toast(&format!("“{}”: {}", t.title, self.voice.get().label().to_lowercase()));
+        } else if asked {
+            self.toast(&format!("“{}” is split: No vocals and Vocals only are ready", t.title));
+        }
+        if now {
+            self.refresh_lyrics(); // its words get their times from the new Vocals part
+        }
+        self.refresh_split_marks(); // its scissors, in every list
+        self.share_parts(t); // a server's copy without parts gets these
+    }
+
+    /// The fast split, in its own lane beside the four-part queue (never behind a four-part
+    /// split of minutes). `asked`: by hand (first in line, said when ready).
+    fn split_fast(self: &Rc<Self>, t: &Track, asked: bool) {
+        if t.video || split::has_halves(t) || !self.can_split_two() {
+            return;
+        }
+        let key = t.key();
+        if self.splitting_two.borrow().as_ref().is_some_and(|x| x.key() == key) {
+            return;
+        }
+        {
+            let mut q = self.two_queue.borrow_mut();
+            let was_asked = q.iter().any(|(x, a)| x.key() == key && *a);
+            q.retain(|(x, _)| x.key() != key);
+            if asked {
+                q.insert(0, (t.clone(), true));
+            } else {
+                q.push((t.clone(), was_asked));
+            }
+        }
+        self.update_voice_status();
+        self.run_fast();
+    }
+
+    /// The song is being split in two, or waits for it.
+    fn fast_busy(&self, t: &Track) -> bool {
+        let key = t.key();
+        self.splitting_two.borrow().as_ref().is_some_and(|x| x.key() == key) || self.two_queue.borrow().iter().any(|(x, _)| x.key() == key)
+    }
+
+    /// The fast lane's next song. While splitting is paused, only what was asked for by hand.
+    fn run_fast(self: &Rc<Self>) {
+        if self.splitting_two.borrow().is_some() {
+            return;
+        }
+        let next = {
+            let mut q = self.two_queue.borrow_mut();
+            if q.is_empty() {
+                return;
+            }
+            q.remove(0)
+        };
+        let (t, asked) = next;
+        if !asked && Self::split_paused() {
+            self.run_fast();
+            return;
+        }
+        let (uri, relay, local) = (self.uri_plain(&t), self.relay.clone(), self.settings.borrow().local_split.clone());
+        self.splitting_two.replace(Some(t.clone()));
+        self.update_voice_status();
+        let (me, song) = (Rc::downgrade(self), t.clone());
+        bg(
+            move || {
+                let uri = match uri {
+                    Some(u) => u,
+                    None => {
+                        let relay = relay.ok_or("no relay")?;
+                        let s = youtube::stream(&song.id)?;
+                        relay.add(s.url, s.size, s.mime)
+                    }
+                };
+                split::split_two(&song, &uri, local.as_ref(), std::sync::Arc::new(|_| {}))
+            },
+            move |result: Result<(), String>| {
+                let Some(me) = me.upgrade() else { return };
+                me.splitting_two.replace(None);
+                match result {
+                    Ok(()) => {
+                        me.split_landed(&t, asked);
+                        me.time_words_later(&t);
+                    }
+                    Err(e) => {
+                        debug(&format!("fast split {}: {e}", t.title));
+                        if asked {
+                            me.toast(&format!("Couldn't split “{}” right now", t.title));
+                        }
+                    }
+                }
+                me.update_voice_status();
+                me.run_fast();
+            },
+        );
+    }
+
+    /// After a fast split, while its halves already play: every word timed to its Vocals (on
+    /// the split server, or this computer's splitter), when either is set up.
+    fn time_words_later(self: &Rc<Self>, t: &Track) {
+        if aligned_by_mms(t) {
+            return;
+        }
+        let Some(aligner) = Aligner::of(&self.settings.borrow()) else { return };
+        let (song, me, key) = (t.clone(), Rc::downgrade(self), t.key());
+        bg(
+            move || time_words(&song, &aligner),
+            move |r: Result<(), String>| {
+                if let Err(e) = r {
+                    debug(&format!("word times after the fast split: {e}"));
+                }
+                let Some(me) = me.upgrade() else { return };
+                if me.current.borrow().as_ref().is_some_and(|c| c.key() == key) {
+                    me.refresh_lyrics();
+                }
+            },
+        );
     }
 
     /// For the vocals choices (No vocals, Vocals only): split in four where this computer (or
     /// its split server) can, else in two, the fast split inside the app. `now`: first in line.
     fn voice_split(self: &Rc<Self>, t: &Track, now: bool) {
-        if !self.can_split() && self.splits_on_server(t).is_none() && !split::done(t) {
-            if t.video || !self.can_split_two() {
-                return;
-            }
-            split::ask_two(t, true);
+        if !self.can_split() && self.splits_on_server(t).is_none() {
+            // (the fast lane, unmarked: once a four-part splitter is set up, liked songs still go in four)
+            self.split_fast(t, now);
+            return;
         }
         if now {
             self.split_now(t);
@@ -6207,7 +6331,7 @@ impl Ui {
         }
         let halves = !Self::shown_parts(t).is_empty(); // Music + Vocals already: four is what's left
         match (!halves && self.can_split_two(), self.can_split()) {
-            (true, true) => self.split_choices(t),
+            (true, true) => self.split_choices(),
             (true, false) => self.split_as(t, true),
             (false, true) => self.split_as(t, false),
             (false, false) => {}
@@ -6215,7 +6339,7 @@ impl Ui {
     }
 
     /// The Split button's two choices (owner 2026-11-05: "Split button asks").
-    fn split_choices(self: &Rc<Self>, t: &Track) {
+    fn split_choices(self: &Rc<Self>) {
         let pop = gtk::Popover::builder().position(gtk::PositionType::Top).build();
         pop.set_parent(&self.split_button);
         let column = gtk::Box::builder().orientation(gtk::Orientation::Vertical).spacing(4).margin_top(6).margin_bottom(6).margin_start(6).margin_end(6).build();
@@ -6231,14 +6355,15 @@ impl Ui {
             words.append(&gtk::Label::builder().label(note).xalign(0.0).css_classes(["dim-label", "caption"]).build());
             row.append(&words);
             let b = gtk::Button::builder().child(&row).css_classes(["flat"]).build();
-            let (me, t, p) = (Rc::downgrade(self), t.clone(), pop.downgrade());
+            let (me, p) = (Rc::downgrade(self), pop.downgrade());
             b.connect_clicked(move |_| {
                 if let Some(p) = p.upgrade() {
                     p.popdown();
                 }
-                if let Some(me) = me.upgrade() {
-                    me.split_as(&t, two);
-                }
+                // the song playing now (it may have changed while the choices were open)
+                let Some(me) = me.upgrade() else { return };
+                let Some(t) = me.current.borrow().clone() else { return };
+                me.split_as(&t, two);
             });
             column.append(&b);
         }

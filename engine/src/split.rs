@@ -81,12 +81,13 @@ fn stem_path(t: &Track, voice: Voice, ext: &str) -> Option<PathBuf> {
 /// kept (a liked song's halves split before it was saved sit in the cache; they
 /// move next to the song then).
 pub fn ready(t: &Track, voice: Voice) -> Option<PathBuf> {
-    for ext in ["flac", "ogg"] {
+    // (.m4a: halves a phone sent, share.rs)
+    for ext in ["flac", "ogg", "m4a"] {
         if let Some(p) = stem_path(t, voice, ext).filter(|p| p.exists()) {
             return Some(p);
         }
     }
-    for ext in ["flac", "ogg"] {
+    for ext in ["flac", "ogg", "m4a"] {
         let Some(cached) = at(&cache_base(t), voice, ext).filter(|p| p.exists()) else { continue };
         if t.file.is_some() {
             if let Some(home) = stem_path(t, voice, ext) {
@@ -151,8 +152,14 @@ pub fn wants_two(t: &Track) -> bool {
     crate::db::wants_two(&t.key())
 }
 
-/// Asks for the song in two (`true`: Music + Vocals) or in four again (`false`); the split
-/// queue reads it as it splits the song.
+/// Music and Vocals are there (from either split, or a phone).
+pub fn has_halves(t: &Track) -> bool {
+    ready_part(t, "music").is_some() && ready_part(t, "vocals").is_some()
+}
+
+/// Asks for the song in two (`true`: Music + Vocals, picked on the Split button or the song's
+/// menu) or in four again (`false`). Only a person's pick: liked songs' automatic four-part
+/// splits leave a song asked for in two alone.
 pub fn ask_two(t: &Track, two: bool) {
     crate::db::set_two(&t.key(), two);
 }
@@ -165,7 +172,7 @@ pub fn done(t: &Track) -> bool {
 /// In two: Music and Vocals there (or more). Else in six when ticked for six, else in four.
 fn done_as(t: &Track, two: bool) -> bool {
     if two {
-        (ready_part(t, "music").is_some() && ready_part(t, "vocals").is_some()) || has_parts(t)
+        has_halves(t) || has_parts(t)
     } else if wants_six(t) {
         has_six(t)
     } else {
@@ -476,9 +483,6 @@ pub fn split(t: &Track, uri: &str, server: Option<&SplitServer>, local: Option<&
     let job = job_id(t);
     let work = glib::user_cache_dir().join("radiance-music/split-work").join(&job);
     fs::create_dir_all(&work).map_err(|e| e.to_string())?;
-    if wants_two(t) && !has_parts(t) {
-        return split_two(t, uri, local, &work, &job, &report);
-    }
     let Some(server) = server else {
         let local = local.ok_or("splitting isn't set up on this computer")?;
         report(0.0);
@@ -544,27 +548,31 @@ pub fn split(t: &Track, uri: &str, server: Option<&SplitServer>, local: Option<&
 }
 
 /// The fast split (#43): Music and Vocals with Spleeter, on this computer always, inside the
-/// app (no Python; a few seconds a song). What it needs is fetched first if it isn't here yet.
-fn split_two(t: &Track, uri: &str, local: Option<&LocalSplitter>, work: &Path, job: &str, report: &Progress) -> Result<(), String> {
+/// app (no Python; a few seconds a song), beside the four-part split queue (worker thread).
+/// What it needs is fetched first if it isn't here yet. `uri`: as split's.
+pub fn split_two(t: &Track, uri: &str, local: Option<&LocalSplitter>, report: Progress) -> Result<(), String> {
+    // this thread and the ones it starts (ONNX Runtime's), below the music's, from the start
+    // (Linux: a thread is its own task, and new threads take its niceness)
+    #[cfg(unix)]
+    unsafe {
+        libc::setpriority(libc::PRIO_PROCESS, 0, 19);
+    }
     report(0.0);
+    let job = job_id(t);
+    let work = glib::user_cache_dir().join("radiance-music/split-work").join(format!("{job}-two"));
     let result = (|| {
+        fs::create_dir_all(&work).map_err(|e| e.to_string())?;
         let (runtime, models) = match crate::two_part::ready() {
             Some(r) => r,
             None => crate::two_part::fetch(&|p| report(0.3 * p))?,
         };
-        let file = upload_file(uri, work, job)?;
+        let file = upload_file(uri, &work, &job)?;
         report(0.35);
-        // this thread and the ones ONNX Runtime starts from it, below the music's (Linux: a
-        // thread is its own task, and new threads take its niceness)
-        #[cfg(unix)]
-        unsafe {
-            libc::setpriority(libc::PRIO_PROCESS, 0, 19);
-        }
         let threads = local.map(|l| l.threads).unwrap_or_else(crate::setup::half_the_cores) as usize;
         let out = work.join("two");
         crate::spleeter::split(&runtime, &models, &file, &out, threads, &|p| report(0.35 + 0.6 * p)).and_then(|files| keep(t, &out, &files))
     })();
-    let _ = fs::remove_dir_all(work);
+    let _ = fs::remove_dir_all(&work);
     report(1.0);
     result
 }
@@ -699,6 +707,25 @@ mod tests {
             fs::write(dir.join(format!("Artist - Song.{p}.ogg")), p).unwrap();
         }
         assert!(done_as(&t, false) && done_as(&t, true));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// A phone sends its halves as .m4a (share.rs keeps them so): they play as No vocals and
+    /// Vocals only like the computer's own .flac / .ogg.
+    #[test]
+    fn halves_from_the_phone_play() {
+        let dir = std::env::temp_dir().join(format!("radiance-split-m4a-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let song = dir.join("Artist - Phone.m4a");
+        fs::write(&song, b"song").unwrap();
+        let t = Track::from_json(&serde_json::json!({ "source": "youtube", "id": "m4a1", "title": "Phone", "artist": "Artist", "file": song.to_string_lossy() })).unwrap();
+        assert!(!has_halves(&t));
+        for p in ["music", "vocals"] {
+            fs::write(dir.join(format!("Artist - Phone.{p}.m4a")), p).unwrap();
+        }
+        assert!(ready(&t, Voice::NoVocals).is_some_and(|p| p.ends_with("Artist - Phone.music.m4a")));
+        assert!(ready(&t, Voice::VocalsOnly).is_some());
+        assert!(is_split(&t) && has_halves(&t));
         let _ = fs::remove_dir_all(&dir);
     }
 

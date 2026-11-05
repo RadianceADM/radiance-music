@@ -6,8 +6,9 @@
 //! the first open) and again before a two-part split if something is missing.
 
 use std::fs;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -119,12 +120,28 @@ pub fn missing_bytes() -> u64 {
         .sum()
 }
 
-/// One fetch at a time (the start's and a split's could meet).
+/// One fetch at a time (the start's and a split's could meet); how far along it is (f64 bits).
 static FETCHING: Mutex<()> = Mutex::new(());
+static ALONG: AtomicU64 = AtomicU64::new(0);
 
 /// Fetches what's missing (`say`: how far along, 0..1). Each file is checked, then put in place.
+/// Another fetch already on its way: this one waits for it, saying how far along that one is.
 pub fn fetch(say: &dyn Fn(f64)) -> Result<(PathBuf, PathBuf), String> {
-    let _one = FETCHING.lock().unwrap_or_else(|e| e.into_inner());
+    let _one = loop {
+        match FETCHING.try_lock() {
+            Ok(g) => break g,
+            Err(std::sync::TryLockError::Poisoned(e)) => break e.into_inner(),
+            Err(std::sync::TryLockError::WouldBlock) => {
+                say(f64::from_bits(ALONG.load(Ordering::Relaxed)));
+                std::thread::sleep(Duration::from_millis(250));
+            }
+        }
+    };
+    let say = |p: f64| {
+        ALONG.store(p.to_bits(), Ordering::Relaxed);
+        say(p);
+    };
+    say(0.0);
     let d = dir();
     fs::create_dir_all(&d).map_err(|e| e.to_string())?;
     let total = missing_bytes().max(1);
@@ -149,7 +166,11 @@ pub fn fetch(say: &dyn Fn(f64)) -> Result<(PathBuf, PathBuf), String> {
         };
         check(&bytes, p.size, p.sha256).map_err(|e| format!("{}: {e}", p.file))?;
         let part = d.join(format!("{}.part", p.file));
-        fs::write(&part, &bytes).map_err(|e| e.to_string())?;
+        {
+            // on the disk before it's put in place (a power cut can't leave a damaged file there)
+            let mut f = fs::File::create(&part).map_err(|e| e.to_string())?;
+            f.write_all(&bytes).and_then(|_| f.sync_all()).map_err(|e| e.to_string())?;
+        }
         fs::rename(&part, &to).map_err(|e| e.to_string())?;
         done += match p.from {
             From::Whole => p.size,
@@ -161,9 +182,62 @@ pub fn fetch(say: &dyn Fn(f64)) -> Result<(PathBuf, PathBuf), String> {
     ready_in(&d).ok_or_else(|| "the two-part split's files aren't all there".into())
 }
 
+/// ONNX Runtime or a model wouldn't load: its files are checked again (each one's SHA-256);
+/// a damaged one goes, and comes again with the next fetch.
+pub fn check_again() {
+    let gone = check_again_in(&dir());
+    if gone > 0 {
+        crate::log::note(&format!("the fast split: {gone} damaged file(s) removed, fetched again before the next split"));
+    }
+}
+
+fn check_again_in(d: &Path) -> usize {
+    let _one = FETCHING.lock().unwrap_or_else(|e| e.into_inner());
+    pieces()
+        .iter()
+        .filter(|p| match fs::read(d.join(p.file)) {
+            Ok(bytes) => check(&bytes, p.size, p.sha256).is_err() && fs::remove_file(d.join(p.file)).is_ok(),
+            Err(_) => false,
+        })
+        .count()
+}
+
+/// Bluetooth music playing over Wi-Fi now (they share a radio: a fast download makes it
+/// stutter). Windows can't tell yet: always gently there.
+fn bluetooth_busy() -> bool {
+    cfg!(windows) || crate::share::bluetooth_busy()
+}
+
+/// Keeps a download to 256 KB/s while Bluetooth music plays, a second at a time (as sharing
+/// does): a slow start is no allowance for a burst later.
+struct Gentle {
+    since: Instant,
+    moved: u64,
+}
+
+impl Gentle {
+    fn new(now: Instant) -> Gentle {
+        Gentle { since: now, moved: 0 }
+    }
+
+    /// `n` more bytes came at `now`: how long to wait before reading on.
+    fn wait(&mut self, n: u64, busy: bool, now: Instant) -> Duration {
+        if !busy {
+            *self = Gentle::new(now);
+            return Duration::ZERO;
+        }
+        if now.duration_since(self.since) > Duration::from_secs(1) {
+            *self = Gentle::new(now);
+        }
+        self.moved += n;
+        pause_for(self.moved, now.duration_since(self.since), true)
+    }
+}
+
 /// The file at `url` (or its bytes `range` start..end, end past the file is fine), in memory.
+/// A connection that goes quiet for 30 s fails (a split waiting on it would wait for ever).
 fn get(url: &str, range: Option<(u64, u64)>, moved: &mut dyn FnMut(u64)) -> Result<Vec<u8>, String> {
-    let mut req = crate::net::agent().get(url);
+    let mut req = crate::net::agent().get(url).config().timeout_per_read(Some(Duration::from_secs(30))).build();
     if let Some((a, b)) = range {
         req = req.header("Range", &format!("bytes={a}-{}", b - 1));
     }
@@ -175,8 +249,8 @@ fn get(url: &str, range: Option<(u64, u64)>, moved: &mut dyn FnMut(u64)) -> Resu
     let mut out = Vec::new();
     let mut buf = vec![0u8; 64 * 1024];
     // Bluetooth music over Wi-Fi: looked at every few seconds; meanwhile it goes gently
-    let (mut checked, mut busy) = (Instant::now(), crate::share::bluetooth_busy());
-    let (mut since, mut moved_since) = (Instant::now(), 0u64);
+    let (mut checked, mut busy) = (Instant::now(), bluetooth_busy());
+    let mut gentle = Gentle::new(Instant::now());
     loop {
         let n = body.read(&mut buf).map_err(|e| e.to_string())?;
         if n == 0 {
@@ -185,14 +259,9 @@ fn get(url: &str, range: Option<(u64, u64)>, moved: &mut dyn FnMut(u64)) -> Resu
         out.extend_from_slice(&buf[..n]);
         moved(out.len() as u64);
         if checked.elapsed() > Duration::from_secs(3) {
-            (checked, busy) = (Instant::now(), crate::share::bluetooth_busy());
+            (checked, busy) = (Instant::now(), bluetooth_busy());
         }
-        if busy {
-            moved_since += n as u64;
-            std::thread::sleep(pause_for(moved_since, since.elapsed(), true));
-        } else {
-            (since, moved_since) = (Instant::now(), 0);
-        }
+        std::thread::sleep(gentle.wait(n as u64, busy, Instant::now()));
     }
     Ok(out)
 }
@@ -279,6 +348,31 @@ mod tests {
         assert_eq!(pause_for(10 << 20, Duration::from_millis(100), false), Duration::ZERO);
         assert_eq!(pause_for(512 * 1024, Duration::from_millis(500), true), Duration::from_millis(1500), "512 KB takes 2 s");
         assert_eq!(pause_for(128 * 1024, Duration::from_secs(1), true), Duration::ZERO, "already slower than that");
+    }
+
+    /// The pace is kept a second at a time: a slow start is no allowance for a burst later.
+    #[test]
+    fn a_slow_start_is_no_allowance_for_a_burst() {
+        use std::time::Duration;
+        let t0 = Instant::now();
+        let mut g = Gentle::new(t0);
+        // 5 s of nothing, then 1 MB at once while Bluetooth music plays: about 4 s, not 0
+        let w = g.wait(1 << 20, true, t0 + Duration::from_secs(5));
+        assert!(w >= Duration::from_millis(3900), "waited {w:?}");
+        assert_eq!(g.wait(10 << 20, false, t0 + Duration::from_secs(6)), Duration::ZERO, "no Bluetooth music: full speed");
+    }
+
+    /// ONNX Runtime or a model that won't load: its files are checked again, a damaged one goes.
+    #[test]
+    fn a_damaged_piece_goes_when_checked_again() {
+        let d = std::env::temp_dir().join(format!("radiance-two-part-again-{}", std::process::id()));
+        fs::create_dir_all(&d).unwrap();
+        let p = &pieces()[0];
+        fs::File::create(d.join(p.file)).unwrap().set_len(p.size).unwrap(); // the right size, not the right file
+        assert_eq!(check_again_in(&d), 1);
+        assert!(!d.join(p.file).exists());
+        assert_eq!(check_again_in(&d), 0, "nothing left to check");
+        let _ = fs::remove_dir_all(&d);
     }
 
     #[test]
