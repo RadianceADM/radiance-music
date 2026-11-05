@@ -16,9 +16,24 @@ public partial class App : Application
     public App()
     {
         InitializeComponent();
+        UnhandledException += (_, e) => Crash.Note(e.Exception);
+        AppDomain.CurrentDomain.UnhandledException += (_, e) => Crash.Note(e.ExceptionObject);
     }
 
     protected override void OnLaunched(LaunchActivatedEventArgs args)
+    {
+        try
+        {
+            Launch();
+        }
+        catch (Exception e)
+        {
+            Crash.Note(e);
+            throw;
+        }
+    }
+
+    private void Launch()
     {
         var ui = DispatcherQueue.GetForCurrentThread();
         // one copy at a time, today's app or this one: the other comes forward (it shares the data)
