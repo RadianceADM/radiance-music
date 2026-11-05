@@ -12,6 +12,8 @@ use gst::glib;
 use gst::prelude::*;
 
 use crate::player::{swapchain_of, video_desc, PICTURE_OUT};
+#[cfg(test)]
+use crate::player::NO_PICTURE;
 
 /// A video file playing, silent, into the app's picture sink.
 pub struct VideoProbe {
@@ -21,13 +23,23 @@ pub struct VideoProbe {
 }
 
 impl VideoProbe {
-    /// Starts `file`; waits (up to 10 s) for its first picture.
+    /// Starts `file` into the app's picture sink; waits (up to 10 s) for its first picture.
     pub fn start(file: &Path) -> Result<VideoProbe, String> {
+        Self::start_with(file, PICTURE_OUT)
+    }
+
+    /// The same into `picture_sink` (named "picture").
+    pub fn start_with(file: &Path, picture_sink: &str) -> Result<VideoProbe, String> {
         gst::init().map_err(|e| e.to_string())?;
         let uri = glib::filename_to_uri(file, None).map_err(|e| e.to_string())?;
-        let desc = video_desc(&uri, &uri, PICTURE_OUT, "fakesink sync=true");
+        let desc = video_desc(&uri, &uri, picture_sink, "fakesink sync=true");
         let pipeline = gst::parse::launch(&desc).map_err(|e| e.to_string())?.downcast::<gst::Pipeline>().map_err(|_| "not a pipeline")?;
         let picture = pipeline.by_name("picture").ok_or("no picture")?;
+        // (the sink makes its swapchain when it's first asked for it: a failure is plain here,
+        // where its start would only say "failed to change its state")
+        if picture.find_property("swapchain").is_some() && swapchain_of(&picture) == 0 {
+            return Err("Windows made no swapchain (no desktop to show it on, as over SSH, or the graphics card said no)".into());
+        }
         let frames = Arc::new(AtomicU64::new(0));
         let counted = frames.clone();
         picture.static_pad("sink").ok_or("no picture pad")?.add_probe(gst::PadProbeType::BUFFER, move |_, _| {
@@ -118,8 +130,12 @@ impl Drop for VideoProbe {
 /// `--probe-video`: `file` played for `secs` seconds, with no window. Its report, "ok" last
 /// (pictures reached the sink, and on Windows a swapchain was made) or "failed: …".
 pub fn probe(file: &Path, secs: f64) -> Vec<String> {
+    probe_with(file, secs, PICTURE_OUT)
+}
+
+fn probe_with(file: &Path, secs: f64, picture_sink: &str) -> Vec<String> {
     let started = Instant::now();
-    let p = match VideoProbe::start(file) {
+    let p = match VideoProbe::start_with(file, picture_sink) {
         Ok(p) => p,
         Err(e) => return vec![format!("failed: {e}")],
     };
@@ -127,7 +143,7 @@ pub fn probe(file: &Path, secs: f64) -> Vec<String> {
     std::thread::sleep(Duration::from_secs_f64(secs));
     let mut out = vec![format!("first picture in {} ms", first.as_millis())];
     out.extend(p.report());
-    let swapchain_ok = !cfg!(windows) || p.swapchain() != 0;
+    let swapchain_ok = !picture_sink.contains("swapchainsink") || p.swapchain() != 0;
     out.push(if p.frames() > 0 && swapchain_ok { "ok".into() } else { format!("failed: {} frames, swapchain {:#x}", p.frames(), p.swapchain()) });
     out
 }
@@ -161,7 +177,8 @@ mod tests {
     #[test]
     fn a_probe_counts_the_pictures() {
         let video = test_video(3);
-        let report = probe(&video, 1.0);
+        // (the test sink, here and on Windows: a swapchain needs a desktop, which tests over SSH lack)
+        let report = probe_with(&video, 1.0, NO_PICTURE);
         assert_eq!(report.last().map(String::as_str), Some("ok"), "{report:?}");
         assert!(report.iter().any(|l| l.starts_with("picture sink: fakesink")), "{report:?}");
         let frames: u64 = report.iter().find_map(|l| l.strip_prefix("frames: ")).and_then(|n| n.parse().ok()).unwrap();
@@ -175,7 +192,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let bad = dir.join("not-a-video.mkv");
         std::fs::write(&bad, b"not a video at all").unwrap();
-        let report = probe(&bad, 0.1);
+        let report = probe_with(&bad, 0.1, NO_PICTURE);
         assert_eq!(report.len(), 1, "{report:?}");
         assert!(report[0].starts_with("failed: "), "{report:?}");
         let _ = std::fs::remove_dir_all(dir);

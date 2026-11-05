@@ -666,7 +666,9 @@ pub struct VideoOut {
 #[cfg(windows)]
 pub(crate) const PICTURE_OUT: &str = "d3d12swapchainsink name=picture";
 #[cfg(not(windows))]
-pub(crate) const PICTURE_OUT: &str = "fakesink name=picture sync=true";
+pub(crate) const PICTURE_OUT: &str = NO_PICTURE;
+/// A video's picture shown nowhere (its sound alone).
+pub(crate) const NO_PICTURE: &str = "fakesink name=picture sync=true";
 
 /// A video's pipeline as text: its picture into `picture_sink` (named "picture"), its sound
 /// through the Mixer's effects ("fx") and the app's volume ("volume") into `out` (named "sound").
@@ -1103,8 +1105,15 @@ impl Player {
     /// swapchain the app sets on a SwapChainPanel (the compositor shows it: no copies through
     /// the CPU); elsewhere nowhere (tests).
     pub fn load_video_out(&self, picture: &str, sound: &str) -> Result<VideoOut, String> {
-        let pipeline = self.video_pipeline(picture, sound, PICTURE_OUT)?;
+        let mut pipeline = self.video_pipeline(picture, sound, PICTURE_OUT)?;
+        // (the sink makes its swapchain when it's first asked for it)
         let swapchain = swapchain_of(&pipeline.by_name("picture").ok_or("no picture")?);
+        if swapchain == 0 && PICTURE_OUT != NO_PICTURE {
+            // Windows made no swapchain (no desktop to show it on, as over SSH, or the graphics
+            // card said no): the video plays as its sound, and the app shows the cover
+            crate::log::note("music video: Windows made no swapchain for its picture; its sound only");
+            pipeline = self.video_pipeline(picture, sound, NO_PICTURE)?;
+        }
         self.run_video(pipeline)?;
         Ok(VideoOut { swapchain })
     }
