@@ -41,6 +41,7 @@ pub mod settings;
 pub mod setup;
 pub mod share;
 pub mod sources;
+pub mod spleeter;
 pub mod split;
 pub mod storage;
 /// Songs: the core's (core/src/track.rs).
