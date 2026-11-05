@@ -52,6 +52,10 @@
                 </NavigationViewItem>
                 <NavigationViewItemHeader x:Name="PlaylistsHeader" Content="Playlists" />
             </NavigationView.MenuItems>
+            <SplitView x:Name="Side" PanePlacement="Right" DisplayMode="Inline" OpenPaneLength="360" IsPaneOpen="False">
+                <SplitView.Pane>
+                    <ContentControl x:Name="SideHost" HorizontalContentAlignment="Stretch" VerticalContentAlignment="Stretch" />
+                </SplitView.Pane>
             <Grid>
                 <Frame x:Name="Pages" />
                 <InfoBar x:Name="Toast" VerticalAlignment="Bottom" HorizontalAlignment="Center" Margin="20,0,20,20"
@@ -68,6 +72,7 @@
                     </InfoBar.ActionButton>
                 </InfoBar>
             </Grid>
+            </SplitView>
         </NavigationView>
         <ContentControl x:Name="BarHost" Grid.Row="2" HorizontalContentAlignment="Stretch" />
     </Grid>

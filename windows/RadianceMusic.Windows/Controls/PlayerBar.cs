@@ -98,10 +98,14 @@ internal sealed class PlayerBar : Grid
             if (hub.Engine.Now().Song is { } s) hub.Engine.ToggleLike(s.Key);
         });
         mute = Round(muteIcon, "Mute", ToggleMute);
+        var lyricsButton = Round(new FontIcon { Glyph = "\uE8D2", FontSize = 15 }, "Lyrics", () => App.Window?.ToggleSide("lyrics"));
+        var queueButton = Round(new FontIcon { Glyph = "\uE8FD", FontSize = 15 }, "Queue: what plays next", () => App.Window?.ToggleSide("queue"));
         var end = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Center };
         end.Children.Add(heart);
         end.Children.Add(mute);
         end.Children.Add(volume);
+        end.Children.Add(lyricsButton);
+        end.Children.Add(queueButton);
         SetColumn(end, 2);
         Children.Add(end);
         volume.ValueChanged += (_, e) =>

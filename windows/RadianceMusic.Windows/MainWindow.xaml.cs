@@ -14,6 +14,7 @@ public sealed partial class MainWindow : Window
     private readonly DispatcherTimer toastTimer = new() { Interval = TimeSpan.FromSeconds(4) };
     private readonly Queue<string> toasts = new();
     private string page = "home";
+    private readonly Controls.QueuePanel side;
     private object? what;
 
     internal MainWindow(EngineHub hub)
@@ -42,6 +43,10 @@ public sealed partial class MainWindow : Window
         };
         hub.Change += OnChange;
         BarHost.Content = new Controls.PlayerBar(hub);
+        // the side panel (Queue | Lyrics): beside the page from 1300 px, over it below (as the GTK app's)
+        side = new Controls.QueuePanel(hub);
+        SideHost.Content = side;
+        Root.SizeChanged += (_, e) => Side.DisplayMode = e.NewSize.Width >= 1300 ? SplitViewDisplayMode.Inline : SplitViewDisplayMode.Overlay;
         // closing while music plays: it plays on (the tray icon brings the window back); else it quits
         AppWindow.Closing += (_, e) =>
         {
@@ -134,6 +139,18 @@ public sealed partial class MainWindow : Window
     {
         Show("search");
         DispatcherQueue.TryEnqueue(() => (Pages.Content as SearchPage)?.FocusBox());
+    }
+
+    /// <summary>The player bar's Queue and Lyrics buttons: the side panel on that tab, or closed when it's showing it.</summary>
+    public void ToggleSide(string tab)
+    {
+        if (Side.IsPaneOpen && side.Tab == tab)
+        {
+            Side.IsPaneOpen = false;
+            return;
+        }
+        side.Tab = tab;
+        Side.IsPaneOpen = true;
     }
 
     public void BringToFront()

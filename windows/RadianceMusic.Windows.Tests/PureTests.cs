@@ -106,3 +106,45 @@ public class AzLightTests
         Assert.Null(AzLight.Pick(Array.Empty<double>()));
     }
 }
+
+public class QueueDropTests
+{
+    [Fact]
+    public void ARowMovedDownGoesBeforeTheOneAfterItsNewPlace()
+    {
+        // the song playing at 4: the list shows 5, 6, 7, …
+        Assert.Equal(((uint)5, (uint)8), QueueDrop.Map(5, 0, 2));
+    }
+
+    [Fact]
+    public void ARowMovedUpGoesBeforeItsNewPlace()
+    {
+        Assert.Equal(((uint)8, (uint)6), QueueDrop.Map(5, 3, 1));
+        Assert.Null(QueueDrop.Map(5, 1, 1));
+    }
+}
+
+public class LyricClockTests
+{
+    [Fact]
+    public void ItCountsOnWhilePlaying()
+    {
+        Assert.Equal(12.4, LyricClock.At(12.0, 1000, 1400, true), 6);
+        Assert.Equal(12.0, LyricClock.At(12.0, 1000, 1400, false));
+        Assert.Equal(13.0, LyricClock.At(12.0, 1000, 4000, true), 6);
+    }
+}
+
+public class LensScaleTests
+{
+    [Fact]
+    public void TheMiddleIsWholeAndTheEdgesSmaller()
+    {
+        Assert.Equal(1.0, LensScale.Scale(0), 6);
+        Assert.Equal(0.58, LensScale.Scale(-1), 6);
+        Assert.Equal(0.7, LensScale.Scale(1), 6);
+        Assert.Equal(0.7, LensScale.Scale(3), 6);
+        Assert.Contains("0.58", LensScale.Expression);
+        Assert.Contains("0.7", LensScale.Expression);
+    }
+}
