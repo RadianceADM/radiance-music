@@ -22,7 +22,11 @@ public static class Win {
 }
 '@
 $start = 'C:\rb\test-start.cmd'
+# the task's own script, kept aside while a test uses it (a run cut off earlier left it here: put back first)
+$orig = 'C:\rb\test-start.cmd.orig'
+if (Test-Path $orig) { Copy-Item -Force $orig $start; Remove-Item $orig }
 $kept = Get-Content $start -Raw
+[IO.File]::WriteAllText($orig, $kept)
 $data = @"
 set XDG_CONFIG_HOME=C:\rb\beta-test\config
 set XDG_DATA_HOME=C:\rb\beta-test\data
@@ -76,4 +80,5 @@ try {
 } finally {
     if ($p) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
     [IO.File]::WriteAllText($start, $kept)
+    Remove-Item $orig -ErrorAction SilentlyContinue
 }

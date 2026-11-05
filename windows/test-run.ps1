@@ -5,7 +5,11 @@
 param([string]$AppArgs = '', [int]$Seconds = 120)
 $ErrorActionPreference = 'Stop'
 $start = 'C:\rb\test-start.cmd'
+# the task's own script, kept aside while a test uses it (a run cut off earlier left it here: put back first)
+$orig = 'C:\rb\test-start.cmd.orig'
+if (Test-Path $orig) { Copy-Item -Force $orig $start; Remove-Item $orig }
 $kept = Get-Content $start -Raw
+[IO.File]::WriteAllText($orig, $kept)
 $exe = 'C:\rb\beta\dist\RadianceMusicBeta.exe'
 New-Item -ItemType Directory -Force C:\rb\beta\shots | Out-Null
 $cmd = @"
@@ -26,4 +30,5 @@ try {
     if ($left) { $left | Stop-Process -Force; Write-Output "stopped after $Seconds s" } else { Write-Output "the beta quit" }
 } finally {
     [IO.File]::WriteAllText($start, $kept)
+    Remove-Item $orig -ErrorAction SilentlyContinue
 }
