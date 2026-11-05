@@ -14,7 +14,7 @@ public static class Win {
     [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
     [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int cmd);
     [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr h, uint msg, IntPtr w, IntPtr l);
-    public static IntPtr Main(uint pid) {
+    public static IntPtr Find(uint pid) {
         IntPtr found = IntPtr.Zero;
         EnumWindows((h, l) => { uint p; GetWindowThreadProcessId(h, out p); if (p == pid && IsWindowVisible(h)) { found = h; return false; } return true; }, IntPtr.Zero);
         return found;
@@ -56,7 +56,7 @@ try {
     $p = Get-Process $name -ErrorAction SilentlyContinue | Where-Object { $before -notcontains $_.Id } | Select-Object -First 1
     if (-not $p) { throw "$name didn't start" }
     Cpu $p 'Now Playing in front'
-    $h = [Win]::Main([uint32]$p.Id)
+    $h = [Win]::Find([uint32]$p.Id)
     [Win]::ShowWindow($h, 6) | Out-Null   # SW_MINIMIZE
     Start-Sleep -Seconds 3
     Cpu $p 'minimized'
