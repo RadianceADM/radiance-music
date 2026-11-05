@@ -136,9 +136,31 @@ pub fn separate(x: [&[f32]; 2], run: &mut Run, report: &dyn Fn(f64)) -> Result<(
 static ENV: OnceLock<Result<Environment, String>> = OnceLock::new();
 
 fn environment(runtime: &Path) -> Result<&'static Environment, String> {
-    ENV.get_or_init(|| ort::init_from(runtime).map_err(|e| format!("ONNX Runtime: {e}"))?.build().map_err(|e| format!("ONNX Runtime: {e}")))
-        .as_ref()
-        .map_err(Clone::clone)
+    ENV.get_or_init(|| {
+        #[cfg(windows)]
+        load_c_runtime(runtime.parent().unwrap_or(Path::new(".")))?;
+        ort::init_from(runtime).map_err(|e| format!("ONNX Runtime: {e}"))?.build().map_err(|e| format!("ONNX Runtime: {e}"))
+    })
+    .as_ref()
+    .map_err(Clone::clone)
+}
+
+/// Windows: the Visual C++ runtime ONNX Runtime needs, from its folder (two_part.rs fetched it),
+/// before ONNX Runtime: a DLL's needs are found by name among what's loaded already, so a PC
+/// without the Visual C++ runtime installed works too.
+#[cfg(windows)]
+fn load_c_runtime(dir: &Path) -> Result<(), String> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::System::LibraryLoader::{LoadLibraryExW, LOAD_WITH_ALTERED_SEARCH_PATH};
+    for name in crate::two_part::C_RUNTIME {
+        let path: Vec<u16> = dir.join(name).as_os_str().encode_wide().chain([0]).collect();
+        // kept loaded for the program's life (ONNX Runtime uses it from now on)
+        let module = unsafe { LoadLibraryExW(path.as_ptr(), std::ptr::null_mut(), LOAD_WITH_ALTERED_SEARCH_PATH) };
+        if module.is_null() {
+            return Err(format!("the Visual C++ runtime ({name}) couldn't be loaded: {}", std::io::Error::last_os_error()));
+        }
+    }
+    Ok(())
 }
 
 fn session(env: &Environment, model: &Path, threads: usize) -> Result<Session, String> {
@@ -299,6 +321,21 @@ mod tests {
         let whole = closeness(&x, &v.iter().zip(&m).map(|(a, b)| a + b).collect::<Vec<f32>>());
         eprintln!("{took:.1} s for {:.0} s; parts vs song {whole:.1} dB", l.len() as f64 / RATE as f64);
         assert!(whole > 40.0);
+        // Windows: ONNX Runtime runs on the Visual C++ runtime from its own folder, not the PC's
+        #[cfg(windows)]
+        {
+            use windows_sys::Win32::System::LibraryLoader::{GetModuleFileNameW, GetModuleHandleW};
+            for name in crate::two_part::C_RUNTIME {
+                let wide: Vec<u16> = name.encode_utf16().chain([0]).collect();
+                let module = unsafe { GetModuleHandleW(wide.as_ptr()) };
+                assert!(!module.is_null(), "{name} is loaded");
+                let mut buf = [0u16; 1024];
+                let n = unsafe { GetModuleFileNameW(module, buf.as_mut_ptr(), buf.len() as u32) } as usize;
+                let file = String::from_utf16_lossy(&buf[..n]).to_lowercase();
+                eprintln!("{name}: {file}");
+                assert!(file.starts_with(&dir.to_string_lossy().to_lowercase()), "{name} from {file}");
+            }
+        }
         if dir.join("vocals.f32").exists() {
             let read = |name: &str| -> Vec<f32> { std::fs::read(dir.join(name)).unwrap().chunks_exact(4).map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]])).collect() };
             let (rv, rm) = (read("vocals.f32"), read("music.f32"));

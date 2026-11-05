@@ -50,6 +50,8 @@ save-youtube = []
 gst-plugin-gtk4 = { version = "0.15", features = ["gtk_v4_14"], optional = true }
 # the splitter pack, downloaded at the first start (setup::install_pack): unpacked and checked
 zip = { version = "9.3", default-features = false, features = ["deflate"] } # 9.0.5+: Dependabot #1-#3 (#36)
+# the two-part split's Visual C++ runtime, loaded from its folder before ONNX Runtime (spleeter.rs)
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_LibraryLoader"] }
 # the feedback sign-in's token: Windows' Credential Manager
 keyring = { version = "3.6", default-features = false, features = ["windows-native"] }
 

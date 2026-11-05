@@ -66,12 +66,29 @@ const RUNTIME_PIECE: Piece = Piece {
     from: From::ZipEntry { offset: 221_047, compressed: 6_178_062 },
 };
 
-fn pieces() -> [Piece; 3] {
-    [
+/// Windows: Microsoft's ONNX Runtime needs the Visual C++ runtime, which a PC may not have: its
+/// four DLLs (as the splitter pack has them), out of the msvc-runtime wheel's entries by ranges
+/// (about 330 KB), loaded from this folder before ONNX Runtime (spleeter.rs). In this order.
+#[cfg(windows)]
+pub const C_RUNTIME: [&str; 4] = ["vcruntime140.dll", "vcruntime140_1.dll", "msvcp140.dll", "msvcp140_1.dll"];
+#[cfg(windows)]
+const WHEEL: &str = "https://files.pythonhosted.org/packages/98/33/be9ef68901200813fc174a06758b4ae48ca4eb58fa783280dd879d5fd048/msvc_runtime-14.51.36231-cp312-cp312-win_amd64.whl";
+
+fn pieces() -> Vec<Piece> {
+    #[allow(unused_mut)]
+    let mut all = vec![
         Piece { file: VOCALS, url: VOCALS_URL, size: 19_681_017, sha256: "24cef84aedcd1fe87c0b743ef3370ad34dc1fabf6c9014d6128a75a538c7b668", from: From::Whole },
         Piece { file: MUSIC, url: MUSIC_URL, size: 19_681_024, sha256: "d14cea55793cc531a5875f5f4da08207d1c5ab9292e8e0099a104eecb014fcc0", from: From::Whole },
         RUNTIME_PIECE,
-    ]
+    ];
+    #[cfg(windows)]
+    all.extend([
+        Piece { file: C_RUNTIME[0], url: WHEEL, size: 178_616, sha256: "d1f4225df2cd877dbf130d5668a021dce3f94118455ff5ec952061c30afc9ce7", from: From::ZipEntry { offset: 1_914_358, compressed: 85_393 } },
+        Piece { file: C_RUNTIME[1], url: WHEEL, size: 50_112, sha256: "a7146c08f89fe5b04541ab507cdb59ff7b44534d4ba3c668a426c6450a03434e", from: From::ZipEntry { offset: 1_999_840, compressed: 26_615 } },
+        Piece { file: C_RUNTIME[2], url: WHEEL, size: 643_512, sha256: "7c26614e1d733892c2deac7e245ce115504b1d80592dd0a01b08e3e5a55f89ca", from: From::ZipEntry { offset: 1_135_354, compressed: 202_959 } },
+        Piece { file: C_RUNTIME[3], url: WHEEL, size: 35_768, sha256: "206c931bf90fdad8816de3b5e2ef80b2bcaa9406c89ecc05fe6fddffe251e982", from: From::ZipEntry { offset: 1_338_398, compressed: 17_788 } },
+    ]);
+    all
 }
 
 /// The app's folder for them.
