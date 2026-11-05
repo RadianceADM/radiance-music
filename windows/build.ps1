@@ -24,15 +24,13 @@ function Step($what, [scriptblock]$run) {
     if ($LASTEXITCODE -ne 0) { throw "$what failed ($LASTEXITCODE)" }
 }
 
-# a command in MSYS2's UCRT64 shell, in the source folder
-function Msys([string]$cmd) {
+# windows/msys.sh in MSYS2's UCRT64 shell (no quotes to pass through: PowerShell would mangle them)
+function Msys([string]$what) {
     $env:MSYSTEM = 'UCRT64'; $env:CHERE_INVOKING = '1'
-    Push-Location $Src
-    try { & C:\msys64\usr\bin\bash.exe -lc "export CARGO_TARGET_DIR=/c/rb/beta/target; $cmd" } finally { Pop-Location }
+    & C:\msys64\usr\bin\bash.exe -l /c/rb/beta/src/windows/msys.sh $what
 }
 
 if ($Step -in 'rust', 'all') {
-    Step 'core, engine and ffi tests' { Msys 'cargo test --release -p radiance-core -p radiance-engine -p radiance-ffi 2>&1 | grep -E "^(test result|error|warning: unused|failures:|    [a-z_]+$)|panicked" ; exit ${PIPESTATUS[0]}' }
-    Step 'radiance_ffi.dll' { Msys 'cargo build --release -p radiance-ffi 2>&1 | grep -E "^(error|warning)" -A6 | head -40; exit ${PIPESTATUS[0]}' }
-    Step 'what the DLL needs' { Msys 'ntldd /c/rb/beta/target/release/radiance_ffi.dll | grep -E -i "gst|glib|ucrt|msvcr|vcruntime" | sed "s/ (0x.*//"' }
+    Step 'core, engine and ffi tests, then radiance_ffi.dll' { Msys rust }
+    Step 'what the DLL needs' { Msys deps }
 }
