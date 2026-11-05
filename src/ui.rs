@@ -37,6 +37,7 @@ use crate::settings::{self, Settings, Transition, FADE_RANGE};
 use crate::split::{self, Voice};
 use crate::track::{clock, file_key, letter_of, matches, Source, Track};
 use radiance_core::queue::{self, Queue, Removed, Repeat, Step};
+use radiance_core::library::{self as shelf, GroupKind as LikedView, Saved, AZ, RECENT_ROWS};
 use radiance_core::sing;
 use radiance_core::trouble::{self, sound_device_gone, After};
 use radiance_core::words::{self, Kind};
@@ -51,7 +52,6 @@ const COVER: u32 = 720;
 /// The queue panel lists this many songs from the one playing.
 const QUEUE_ROWS: usize = 100;
 /// Songs played before, above the queue (to go back to one stuck in your head).
-const RECENT_ROWS: usize = 5;
 /// The side panel's tabs, in order (Lyrics only where Now Playing doesn't show them: sync_lyrics_tab).
 const SIDE_TABS: [(&str, &str); 3] = [("queue", "Queue"), ("lyrics", "Lyrics"), ("splits", "Splits")];
 
@@ -215,7 +215,6 @@ fn release_notes(changelog: &str, versions: usize) -> String {
 }
 
 /// The A to Z rail's letters, in the order songs are filed.
-const AZ: &str = "ABCDEFGHIJKLMNOPQRSTUVWXYZ#";
 
 /// Runs `work` on a worker thread, then `done` with its result on the main loop.
 fn bg<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'static, done: impl FnOnce(T) + 'static) {
@@ -567,12 +566,7 @@ fn count_skip(t: &Track) {
 /// "Played 12 times · skipped 3 times" (or less, or nothing).
 fn counts_text(t: &Track) -> String {
     let (plays, skips) = counts_of(t);
-    let times = |n: usize| if n == 1 { "once".to_string() } else { format!("{n} times") };
-    match (plays, skips) {
-        (0, 0) => String::new(),
-        (p, 0) => format!("Played {}", times(p)),
-        (p, s) => format!("Played {} · skipped {}", times(p), times(s)),
-    }
+    shelf::counts_text(plays, skips)
 }
 
 thread_local! {
@@ -724,13 +718,6 @@ fn quality_badge(t: &Track) -> gtk::Widget {
     }
 }
 
-/// How liked songs are grouped (Albums, Artists, Genres pages and Home).
-#[derive(Clone, Copy, PartialEq)]
-enum LikedView {
-    Albums,
-    Artists,
-    Genres,
-}
 
 /// Where a song is shown: what its menu offers, and what clicking it plays.
 #[derive(Clone)]
@@ -1146,7 +1133,7 @@ impl Ui {
             queue_group: adw::PreferencesGroup::builder().title("Queue").build(),
             recent_group: adw::PreferencesGroup::builder()
                 .title("Played before")
-                .description("Go back to one: it plays now, then the queue carries on")
+                .description(shelf::PLAYED_BEFORE_NOTE)
                 .visible(false)
                 .build(),
             recent_rows: RefCell::default(),
@@ -4357,17 +4344,8 @@ impl Ui {
         };
         let playing = self.current.borrow().is_some();
         let ahead = queue.len().saturating_sub(cur + usize::from(playing));
-        self.queue_group.set_description(Some(&if queue.is_empty() || (!playing && ahead == 0) {
-            "Nothing queued. Play a song, or right-click any song and pick Add to Queue.".to_string()
-        } else if ahead == 0 {
-            if self.settings.borrow().autoplay && self.queue.borrow().repeat() == Repeat::Off {
-                "Autoplay is adding songs like this one next.".to_string()
-            } else {
-                "Nothing after this song. Right-click any song and pick Add to Queue, or start a Song Radio (or turn on Autoplay in the menu).".to_string()
-            }
-        } else {
-            format!("{ahead} songs next")
-        }));
+        let adding = self.settings.borrow().autoplay && self.queue.borrow().repeat() == Repeat::Off;
+        self.queue_group.set_description(Some(&shelf::queue_note(queue.is_empty() || (!playing && ahead == 0), ahead, adding)));
         for (i, t) in queue.iter().enumerate().skip(cur).take(QUEUE_ROWS) {
             let row = self.track_row(t, Place::Queue(i));
             let now = i == cur && playing;
@@ -4800,15 +4778,7 @@ impl Ui {
             }
         }
         let dir = library::music_dir();
-        self.liked_group.set_description(Some(&if shown.is_empty() {
-            "Like a song (the heart) and it's kept here. Lossless songs are saved with their lyrics and album art.".to_string()
-        } else if q.is_empty() {
-            format!("{} songs, saved in {}", shown.len(), dir.display())
-        } else if found == 0 {
-            format!("None of your {} liked songs match “{q}”. Search finds it online.", shown.len())
-        } else {
-            format!("{found} of your {} liked songs {} “{q}”", shown.len(), if found == 1 { "matches" } else { "match" })
-        }));
+        self.liked_group.set_description(Some(&shelf::liked_note(shown.len(), &dir.display().to_string(), &q, found)));
         // letters with no songs (listed) stay faint
         let mut child = self.az_rail.first_child();
         while let Some(c) = child {
@@ -4911,34 +4881,16 @@ impl Ui {
     fn liked_row(self: &Rc<Self>, t: &Track, list: Rc<Vec<Track>>, i: usize) -> adw::ActionRow {
         let row = self.track_row(t, Place::Liked(list, i));
         if self.saving.borrow().contains(&t.key()) {
-            row.set_subtitle("Saving…");
+            row.set_subtitle(&shelf::row_subtitle(&t.byline(), Saved::Saving));
         } else if t.file.is_none() {
-            row.set_subtitle(&if library::saves(t) { "Not saved yet".to_string() } else { format!("{} · streams", t.byline()) });
+            row.set_subtitle(&shelf::row_subtitle(&t.byline(), if library::saves(t) { Saved::NotSaved } else { Saved::Streams }));
         }
         row
     }
 
     /// The liked songs by album, by each credited artist, or by genre (A to Z).
     fn groups_by(&self, liked: &[Track], view: LikedView) -> Vec<(String, Vec<Track>)> {
-        let mut map: std::collections::BTreeMap<String, (String, Vec<Track>)> = Default::default();
-        let mut put = |name: &str, t: &Track| {
-            let e = map.entry(name.to_lowercase()).or_insert_with(|| (name.to_string(), vec![]));
-            if !e.1.iter().any(|x| x.key() == t.key()) {
-                e.1.push(t.clone());
-            }
-        };
-        for t in liked {
-            match view {
-                LikedView::Albums => put(if t.album.is_empty() { "Singles" } else { &t.album }, t),
-                LikedView::Artists => t.artists().iter().for_each(|a| put(a, t)),
-                LikedView::Genres => match &t.genres {
-                    Some(g) if !g.is_empty() => g.iter().for_each(|x| put(x, t)),
-                    Some(_) => put("Other", t),
-                    None => put("Finding the genre…", t),
-                },
-            }
-        }
-        map.into_values().collect()
+        shelf::groups(liked, view).into_iter().map(|g| (g.name, g.songs)).collect()
     }
 
     /// Looks up the genres of liked songs that don't have them yet, one at a
