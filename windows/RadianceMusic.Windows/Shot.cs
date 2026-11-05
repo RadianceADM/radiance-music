@@ -26,7 +26,6 @@ internal static class Shot
             encoder.SetPixelData(BitmapPixelFormat.Bgra8, BitmapAlphaMode.Ignore, (uint)w, (uint)h, 96, 96, bits);
             await encoder.FlushAsync();
         }
-        App.Hub.Engine.Quit();
-        Application.Current.Exit();
+        App.Quit();
     }
 }

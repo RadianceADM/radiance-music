@@ -9,6 +9,9 @@ public partial class App : Application
 {
     public static EngineHub Hub { get; private set; } = null!;
     public static MainWindow? Window { get; private set; }
+    private static Tray? tray;
+    private static MediaKeys? keys;
+    private static bool quitting;
 
     public App()
     {
@@ -30,9 +33,24 @@ public partial class App : Application
         Hub = EngineHub.Start(ui);
         Window = new MainWindow(Hub);
         Window.Activate();
+        var icon = Path.Combine(AppContext.BaseDirectory, "radiance-music.ico");
+        tray = new Tray(Hub, icon);
+        keys = new MediaKeys(Hub, WinRT.Interop.WindowNative.GetWindowHandle(Window));
         if (Program.Dev.Shot != null) _ = Shot.TakeAsync(Window, Program.Dev);
         if (Program.Dev.PlayTest) Hub.Engine.PlayFrom(ListKind.Recent, 0);
     }
+
+    /// <summary>Quits: where you are saved, the tray icon gone, the window closed.</summary>
+    public static void Quit()
+    {
+        if (quitting) return;
+        quitting = true;
+        tray?.Dispose();
+        Hub.Engine.Quit();
+        Current.Exit();
+    }
+
+    public static bool Quitting => quitting;
 
     /// <summary>Another copy asked: this window comes forward (on the UI thread).</summary>
     private sealed class Others(DispatcherQueue ui) : ShowListener

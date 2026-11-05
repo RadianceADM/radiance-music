@@ -32,6 +32,21 @@ public sealed partial class MainWindow : Window
             AppWindow.Resize(new Windows.Graphics.SizeInt32(Program.Dev.Width, Program.Dev.Height));
         noticeTimer.Tick += (_, _) => { noticeTimer.Stop(); Notice.IsOpen = false; };
         hub.Change += OnChange;
+        BarHost.Content = new Controls.PlayerBar(hub);
+        // closing while music plays: it plays on (the tray icon brings the window back); else it quits
+        AppWindow.Closing += (_, e) =>
+        {
+            if (!App.Quitting && hub.Engine.Now().Playing)
+            {
+                e.Cancel = true;
+                AppWindow.Hide();
+            }
+            else
+            {
+                e.Cancel = true;
+                App.Quit();
+            }
+        };
         Show("home");
     }
 
@@ -56,6 +71,13 @@ public sealed partial class MainWindow : Window
     {
         Show("search");
         (Pages.Content as SearchPage)?.Search(q);
+    }
+
+    /// <summary>Search, its box ready to type in (Home's "Search for music").</summary>
+    public void FocusSearch()
+    {
+        Show("search");
+        DispatcherQueue.TryEnqueue(() => (Pages.Content as SearchPage)?.FocusBox());
     }
 
     public void BringToFront()

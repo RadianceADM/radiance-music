@@ -1,10 +1,52 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- Search, as the GTK app's: the box; before typing, the browse tiles; then your liked songs that
+     match, Lossless and YouTube Music, each with the GTK app's note (Videos come in stage 2). -->
 <Page
     x:Class="RadianceMusic.Pages.SearchPage"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     NavigationCacheMode="Required">
-    <Grid Padding="32">
-        <TextBlock x:Name="Title" Style="{StaticResource PageTitle}" />
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+        <AutoSuggestBox x:Name="Box" PlaceholderText="Search any song or artist" QueryIcon="Find"
+                        MaxWidth="1240" Margin="24,16,24,8" TextChanged="OnTyped" QuerySubmitted="OnSubmit" />
+        <ScrollViewer Grid.Row="1">
+            <StackPanel MaxWidth="1240" Padding="24,4,24,32" Spacing="10">
+                <StackPanel x:Name="BrowseArea" Spacing="12">
+                    <TextBlock Text="Browse" Style="{StaticResource SectionTitle}" Margin="0,8,0,0" />
+                    <ItemsRepeater x:Name="Tiles">
+                        <ItemsRepeater.Layout>
+                            <UniformGridLayout MinItemWidth="200" MinItemHeight="110" MinColumnSpacing="12" MinRowSpacing="12" ItemsStretch="Fill" />
+                        </ItemsRepeater.Layout>
+                    </ItemsRepeater>
+                </StackPanel>
+                <StackPanel x:Name="ResultsArea" Spacing="6" Visibility="Collapsed">
+                    <StackPanel x:Name="MineSection" Spacing="4" Visibility="Collapsed">
+                        <TextBlock Text="Liked Songs" Style="{StaticResource SectionTitle}" />
+                        <TextBlock x:Name="MineNote" Style="{StaticResource Note}" />
+                        <StackPanel x:Name="MineRows" Spacing="2" />
+                    </StackPanel>
+                    <StackPanel Spacing="4" Margin="0,12,0,0">
+                        <StackPanel Orientation="Horizontal" Spacing="10">
+                            <TextBlock Text="Lossless" Style="{StaticResource SectionTitle}" />
+                            <ProgressRing x:Name="LosslessSpin" Width="16" Height="16" IsActive="False" />
+                        </StackPanel>
+                        <TextBlock x:Name="LosslessNote" Style="{StaticResource Note}" />
+                        <StackPanel x:Name="LosslessRows" Spacing="2" />
+                    </StackPanel>
+                    <StackPanel Spacing="4" Margin="0,12,0,0">
+                        <StackPanel Orientation="Horizontal" Spacing="10">
+                            <TextBlock Text="YouTube Music" Style="{StaticResource SectionTitle}" />
+                            <ProgressRing x:Name="SongsSpin" Width="16" Height="16" IsActive="False" />
+                        </StackPanel>
+                        <TextBlock x:Name="SongsNote" Style="{StaticResource Note}" />
+                        <StackPanel x:Name="SongsRows" Spacing="2" />
+                    </StackPanel>
+                </StackPanel>
+            </StackPanel>
+        </ScrollViewer>
     </Grid>
 </Page>
