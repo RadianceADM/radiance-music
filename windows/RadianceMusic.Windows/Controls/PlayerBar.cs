@@ -193,7 +193,7 @@ internal sealed class PlayerBar : Grid
     private static void Tint(Button b, bool on)
     {
         if (on) b.Foreground = (Brush)Application.Current.Resources["AccentTextFillColorPrimaryBrush"];
-        else b.ClearValue(ForegroundProperty);
+        else b.ClearValue(Control.ForegroundProperty);
     }
 
     private void Position()
