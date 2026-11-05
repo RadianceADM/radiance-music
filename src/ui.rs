@@ -4115,19 +4115,10 @@ impl Ui {
         }
 
         let go = gio::Menu::new();
-        let artists = t.artists();
-        if artists.len() == 1 {
-            let q = artists[0].clone();
-            add(&go, "Go to Artist", "artist", Box::new(move |me| me.go_search(&q)));
-        } else {
-            for (i, a) in artists.iter().take(8).enumerate() {
-                let q = a.clone();
-                add(&go, &format!("Go to {a}"), &format!("artist{i}"), Box::new(move |me| me.go_search(&q)));
+        for (i, item) in radiance_core::menu::go_items(&t).into_iter().enumerate() {
+            if let radiance_core::menu::Action::GoToArtist(q) | radiance_core::menu::Action::GoToAlbum(q) = item.action {
+                add(&go, &item.label, &format!("go{i}"), Box::new(move |me| me.go_search(&q)));
             }
-        }
-        if !t.album.is_empty() {
-            let q = format!("{} {}", t.album, t.artist);
-            add(&go, "Go to Album", "album", Box::new(move |me| me.go_search(q.trim())));
         }
         menu.append_section(None, &go);
 

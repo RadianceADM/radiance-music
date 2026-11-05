@@ -5,6 +5,7 @@
 
 pub mod library;
 pub mod lyrics;
+pub mod menu;
 pub mod queue;
 pub mod search;
 pub mod sing;

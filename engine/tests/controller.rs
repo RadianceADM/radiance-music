@@ -442,7 +442,8 @@ fn next_while_picked_up_starts_the_next_song_from_its_start() {
     let _l = setup();
     let (c, _f, _rx) = with_songs("files eight", vec![wav("picked-a", 6.0), wav("picked-b", 6.0)]);
     c.play_from(ListRef::Songs, 0, "yt:file-picked-a");
-    assert!(until(4.0, || c.now().at >= 1.6), "A never got to 1.6 s");
+    // (A's own place: a song picked up from an earlier test can show one already)
+    assert!(until(4.0, || now_id(&c) == "file-picked-a" && c.now().playing && c.now().at >= 1.6), "A never got to 1.6 s");
     c.quit();
     let (heard, _rx) = listener();
     let again = Controller::start(heard, Arc::new(Fake::default())).unwrap();
@@ -747,5 +748,78 @@ fn adding_twice_says_already_in() {
     assert!(toasts_for(&c, &rx, 1.5).contains(&"Already in “Twice”".to_string()));
     assert_eq!(c.playlist(id).unwrap().songs.len(), 1);
     c.delete_playlist(id);
+    c.quit();
+}
+
+// ------------------------------------------------------------------ the queue panel (stage 2)
+
+#[test]
+fn queue_commands_follow_the_key() {
+    let _g = setup();
+    let songs = vec![wav("q-a", 30.0), wav("q-b", 30.0), wav("q-c", 30.0)];
+    let (c, _f, _rx) = with_songs("queue keys", songs.clone());
+    c.play_from(ListRef::Songs, 0, &songs[0].key());
+    assert!(until(5.0, || now_id(&c) == "file-q-a"));
+    let p = c.queue_panel();
+    assert_eq!((p.start, p.now, p.rows.len()), (0, true, 3));
+    assert_eq!(p.note, "2 songs next");
+    c.unqueue(2, &songs[1].key()); // not the song at 2 now: nothing
+    std::thread::sleep(Duration::from_millis(300));
+    assert_eq!(c.queue_panel().rows.len(), 3);
+    c.unqueue(2, &songs[2].key());
+    assert!(until(2.0, || c.queue_panel().rows.len() == 2));
+    c.move_in_queue(1, 0, &songs[0].key()); // the key of what's at 1 isn't A's: nothing
+    std::thread::sleep(Duration::from_millis(300));
+    assert_eq!(c.queue_panel().rows.iter().map(|t| t.id.clone()).collect::<Vec<_>>(), ["file-q-a", "file-q-b"]);
+    c.quit();
+}
+
+#[test]
+fn nothing_moves_above_the_song_playing() {
+    let _g = setup();
+    let songs = vec![wav("m-a", 30.0), wav("m-b", 30.0), wav("m-c", 30.0), wav("m-d", 30.0)];
+    let (c, _f, _rx) = with_songs("queue moves", songs.clone());
+    c.play_from(ListRef::Songs, 1, &songs[1].key());
+    assert!(until(5.0, || now_id(&c) == "file-m-b"));
+    c.move_in_queue(3, 0, &songs[3].key());
+    std::thread::sleep(Duration::from_millis(400));
+    let (q, i) = c.queue();
+    let d = q.iter().position(|t| t.id == "file-m-d").unwrap();
+    assert!(d > i, "D stays after the song playing");
+    c.move_in_queue(3, 2, &songs[3].key());
+    assert!(until(2.0, || c.queue().0.get(2).is_some_and(|t| t.id == "file-m-d")), "and moves among the songs after it");
+    c.quit();
+}
+
+#[test]
+fn played_before_lists_the_last_five_oldest_first() {
+    let _g = setup();
+    let songs: Vec<Track> = (1..=7).map(|i| wav(&format!("pb{i}"), 20.0)).collect();
+    let (c, _f, _rx) = with_songs("played before", songs.clone());
+    for (i, t) in songs.iter().enumerate() {
+        c.play_from(ListRef::Songs, i, &t.key());
+        assert!(until(5.0, || now_id(&c) == t.id));
+    }
+    assert!(until(2.0, || c.queue_panel().before.len() == 5));
+    assert_eq!(c.queue_panel().before.iter().map(|t| t.id.clone()).collect::<Vec<_>>(), ["file-pb2", "file-pb3", "file-pb4", "file-pb5", "file-pb6"]);
+    c.play_again(&songs[2].key());
+    assert!(until(3.0, || now_id(&c) == "file-pb3"), "played again now");
+    c.quit();
+}
+
+#[test]
+fn next_and_queue_say_so_and_a_radio_with_nothing_says_so() {
+    let _g = setup();
+    let songs = vec![wav("n-a", 30.0), wav("n-b", 30.0)];
+    let (c, _f, rx) = with_songs("next and queue", songs.clone());
+    c.play_from(ListRef::Songs, 0, &songs[0].key());
+    assert!(until(5.0, || now_id(&c) == "file-n-a"));
+    c.play_next(&songs[1].key());
+    c.enqueue(&songs[1].key());
+    c.start_radio(&songs[0].key());
+    let toasts = toasts_for(&c, &rx, 2.0);
+    for want in ["“Song n-b” plays next", "Added “Song n-b” to the queue", "Starting “Song n-a” radio…", "YouTube Music has no radio for “Song n-a”"] {
+        assert!(toasts.contains(&want.to_string()), "{want}: {toasts:?}");
+    }
     c.quit();
 }

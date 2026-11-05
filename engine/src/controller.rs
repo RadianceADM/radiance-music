@@ -16,6 +16,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use radiance_core::library::{self as shelf, GroupKind, Saved};
+use radiance_core::menu::{self, Action, Item, Place};
 use radiance_core::queue::{self, Queue, Repeat, Step};
 use radiance_core::search;
 use radiance_core::trouble::{self, After};
@@ -83,6 +84,18 @@ pub struct GroupPage {
     pub art: String,
     pub round: bool,
     pub songs: Vec<Track>,
+}
+
+/// The queue panel: Played before (at most five, oldest first), the queue from the song playing
+/// (`start`: that song's place in the queue; `now`: a song is playing or picked, so it's the first
+/// row), at most a hundred rows, and the words under it.
+#[derive(Clone, Debug, Default)]
+pub struct QueuePanel {
+    pub before: Vec<Track>,
+    pub rows: Vec<Track>,
+    pub start: usize,
+    pub now: bool,
+    pub note: String,
 }
 
 /// A playlist's page: its name, "N songs", its songs, and the words when it's empty.
@@ -215,6 +228,7 @@ struct View {
     toasts: VecDeque<String>,
     /// History's plays, newest first (with when, unix seconds).
     history: Vec<(Track, i64)>,
+    panel: QueuePanel,
 }
 
 /// Between the app's threads and the engine's.
@@ -309,6 +323,7 @@ impl Controller {
                 liked: Vec::new(),
                 toasts: VecDeque::new(),
                 history: Vec::new(),
+                panel: QueuePanel::default(),
             }),
             liked_q: Mutex::new(String::new()),
         });
@@ -518,6 +533,89 @@ impl Controller {
     pub fn remove_from_playlist(&self, id: i64, key: &str) {
         crate::db::remove_from_playlist(id, key);
         self.shared.tell(Change::Playlists);
+    }
+
+    /// The queue panel.
+    pub fn queue_panel(&self) -> QueuePanel {
+        self.shared.view(|v| v.panel.clone())
+    }
+
+    /// Plays a song again now (from Played before): the queue carries on after it; no skip counted.
+    pub fn play_again(&self, key: &str) {
+        let key = key.to_string();
+        self.post(move |e| e.play_again(&key));
+    }
+
+    /// The song plays next (said).
+    pub fn play_next(&self, key: &str) {
+        let key = key.to_string();
+        self.post(move |e| e.play_next(&key));
+    }
+
+    /// The song goes at the end of the queue (said).
+    pub fn enqueue(&self, key: &str) {
+        let key = key.to_string();
+        self.post(move |e| e.enqueue(&key));
+    }
+
+    /// Takes the queue's song at `index` out, if it's still the song `key`.
+    pub fn unqueue(&self, index: usize, key: &str) {
+        let key = key.to_string();
+        self.post(move |e| e.unqueue(index, &key));
+    }
+
+    /// Moves the queue's song at `from` (if it's still `key`) to `to`; never above the song playing.
+    pub fn move_in_queue(&self, from: usize, to: usize, key: &str) {
+        let key = key.to_string();
+        self.post(move |e| e.move_in_queue(from, to, &key));
+    }
+
+    /// The song's radio: it, then songs like it (said).
+    pub fn start_radio(&self, key: &str) {
+        let key = key.to_string();
+        self.post(move |e| e.start_radio(&key));
+    }
+
+    /// The song's menu where it was opened.
+    pub fn song_menu(&self, key: &str, place: Place) -> Vec<Vec<Item>> {
+        let (t, liked) = self.shared.view(|v| {
+            let liked = v.liked.iter().any(|(t, _)| t.key() == key);
+            let hit = |l: &[Track]| l.iter().find(|t| t.key() == key).cloned();
+            let t = v.liked.iter().map(|(t, _)| t).find(|t| t.key() == key).cloned()
+                .or_else(|| hit(&v.queue.0))
+                .or_else(|| hit(&v.results.mine))
+                .or_else(|| v.results.lossless.as_deref().and_then(hit))
+                .or_else(|| v.results.songs.as_deref().and_then(hit))
+                .or_else(|| hit(&v.home.mix))
+                .or_else(|| hit(&v.home.recent))
+                .or_else(|| v.history.iter().map(|(t, _)| t).find(|t| t.key() == key).cloned())
+                .or_else(|| v.now.song.clone().filter(|t| t.key() == key));
+            (t, liked)
+        });
+        let Some(t) = t else { return Vec::new() };
+        let saved = t.file.as_ref().is_some_and(|f| std::path::Path::new(f).exists());
+        let lists: Vec<(i64, String)> = crate::db::playlists().into_iter().map(|(id, name, _)| (id, name)).collect();
+        menu::song_menu(&t, place, liked, saved, &lists)
+    }
+
+    /// A menu item for the song `key` (`index`: its place in the queue, for Remove from Queue).
+    /// Play and New Playlist… are the app's (it knows the list, and asks for the name).
+    pub fn do_menu(&self, key: &str, index: usize, action: Action) {
+        match action {
+            Action::Play | Action::NewPlaylistWith => {}
+            Action::PlayNext => self.play_next(key),
+            Action::AddToQueue => self.enqueue(key),
+            Action::RemoveFromQueue => self.unqueue(index, key),
+            Action::RemoveFromPlaylist(id) => self.remove_from_playlist(id, key),
+            Action::AddToPlaylist(id) => self.add_to_playlist(id, key),
+            Action::Like | Action::Unlike => self.toggle_like(key),
+            Action::Radio => self.start_radio(key),
+            Action::GoToArtist(q) | Action::GoToAlbum(q) => self.search(&q),
+            Action::ShowInFiles => {
+                let key = key.to_string();
+                self.post(move |e| e.show_in_files(&key));
+            }
+        }
     }
 
     /// History by day.
@@ -1235,6 +1333,119 @@ impl Engine {
         );
     }
 
+    fn play_again(self: &Rc<Self>, key: &str) {
+        let Some(t) = self.find_track(key) else { return };
+        if self.current.borrow().is_none() {
+            self.play_list(vec![t], 0);
+            return;
+        }
+        self.restored.set(false);
+        self.restore_at.set(None);
+        let at = self.queue.borrow_mut().insert_next(t);
+        self.queue.borrow_mut().set_index(at);
+        self.play_current();
+        self.publish_queue();
+        self.save_session();
+    }
+
+    fn play_next(self: &Rc<Self>, key: &str) {
+        let Some(t) = self.find_track(key) else { return };
+        if self.current.borrow().is_none() {
+            self.play_list(vec![t], 0);
+            return;
+        }
+        self.queue.borrow_mut().insert_next(t.clone());
+        self.publish_queue();
+        self.prefetch_next();
+        self.toast(format!("“{}” plays next", t.title));
+    }
+
+    fn enqueue(self: &Rc<Self>, key: &str) {
+        let Some(t) = self.find_track(key) else { return };
+        if self.current.borrow().is_none() {
+            self.play_list(vec![t], 0);
+            return;
+        }
+        self.queue.borrow_mut().push(t.clone());
+        self.publish_queue();
+        self.prefetch_next();
+        self.toast(format!("Added “{}” to the queue", t.title));
+    }
+
+    fn unqueue(self: &Rc<Self>, i: usize, key: &str) {
+        if self.queue.borrow().get(i).is_none_or(|t| t.key() != key) {
+            return; // the queue moved since: not that song any more
+        }
+        let removed = self.queue.borrow_mut().remove(i);
+        match removed {
+            None => return,
+            // the song playing: on to the next one (now at the same place)
+            Some(queue::Removed::Current { play: true }) => {
+                self.restored.set(false);
+                self.restore_at.set(None);
+                self.play_current();
+            }
+            Some(queue::Removed::Current { play: false }) => {
+                self.restored.set(false);
+                self.restore_at.set(None);
+                if let Some(p) = self.player.borrow().as_ref() {
+                    p.stop();
+                }
+                *self.current.borrow_mut() = None;
+                self.publish_now();
+            }
+            Some(queue::Removed::Before | queue::Removed::After) => {}
+        }
+        self.publish_queue();
+    }
+
+    fn move_in_queue(self: &Rc<Self>, from: usize, to: usize, key: &str) {
+        if self.queue.borrow().get(from).is_none_or(|t| t.key() != key) {
+            return;
+        }
+        let playing = self.current.borrow().is_some();
+        // (never above the song playing; not moved: where it was)
+        if self.queue.borrow_mut().move_item(from, to, playing) {
+            self.publish_queue();
+            self.prefetch_next();
+        }
+    }
+
+    fn start_radio(self: &Rc<Self>, key: &str) {
+        let Some(seed) = self.find_track(key) else { return };
+        self.toast(format!("Starting “{}” radio…", seed.title));
+        let sources = self.shared.sources.clone();
+        let s = seed.clone();
+        self.bg(move || sources.radio(&s), move |e, list| {
+            if list.is_empty() {
+                e.toast(format!("YouTube Music has no radio for “{}”", seed.title));
+                return;
+            }
+            let mut queue = vec![seed.clone()];
+            queue.extend(list.into_iter().filter(|x| x.key() != seed.key() && !x.same_song(&seed) && !e.often_skipped(x)));
+            let n = queue.len() - 1;
+            if e.current.borrow().as_ref().is_some_and(|c| c.key() == seed.key()) {
+                e.queue.borrow_mut().set_tracks(queue, 0); // it's playing already: just what comes after
+                e.publish_queue();
+                e.prefetch_next();
+            } else {
+                e.play_list(queue, 0);
+            }
+            e.toast(format!("“{}” radio: {n} songs like it", seed.title));
+        });
+    }
+
+    /// The song's saved file shown in the file manager (Windows: Explorer, the file selected).
+    fn show_in_files(&self, key: &str) {
+        let Some(file) = self.find_track(key).and_then(|t| t.file).filter(|f| std::path::Path::new(f).exists()) else { return };
+        #[cfg(windows)]
+        let _ = std::process::Command::new("explorer").arg(format!("/select,{file}")).spawn();
+        #[cfg(not(windows))]
+        if let Some(dir) = std::path::Path::new(&file).parent() {
+            let _ = gio::AppInfo::launch_default_for_uri(&gio::prelude::FileExt::uri(&gio::File::for_path(dir)), gio::AppLaunchContext::NONE);
+        }
+    }
+
     fn add_to_playlist(&self, id: i64, key: &str) {
         let Some(t) = self.find_track(key) else { return };
         let Some(name) = crate::db::playlists().into_iter().find(|(i, _, _)| *i == id).map(|p| p.1) else { return };
@@ -1363,6 +1574,7 @@ impl Engine {
         self.save_session();
         self.publish_home();
         self.publish_history();
+        self.publish_queue(); // Played before
     }
 
     /// The song's lyrics: looked for (its file, its server, LRCLIB…), then shown.
@@ -1455,8 +1667,24 @@ impl Engine {
     fn publish_queue(&self) {
         let q = self.queue.borrow();
         let queue = (q.tracks().to_vec(), q.index());
+        let current = self.current.borrow().as_ref().map(|t| t.key());
+        let playing = current.is_some();
+        let ahead = q.len().saturating_sub(q.index() + usize::from(playing));
+        let adding = self.settings.borrow().autoplay && q.repeat() == Repeat::Off;
+        let mut before: Vec<Track> = crate::session::recent(&self.history.borrow()).into_iter().filter(|t| Some(t.key()) != current).take(shelf::RECENT_ROWS).collect();
+        before.reverse();
+        let panel = QueuePanel {
+            before,
+            rows: q.tracks().iter().skip(q.index()).take(100).cloned().collect(),
+            start: q.index(),
+            now: playing,
+            note: shelf::queue_note(q.is_empty() || (!playing && ahead == 0), ahead, adding),
+        };
         drop(q);
-        self.shared.view(|v| v.queue = queue);
+        self.shared.view(|v| {
+            v.queue = queue;
+            v.panel = panel;
+        });
         self.shared.tell(Change::Queue);
     }
 
