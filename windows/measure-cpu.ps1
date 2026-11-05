@@ -3,7 +3,7 @@
 # use the same test library (C:\rb\beta-test) and play its latest song. Started in the owner's desktop
 # session through the RadianceMusicTest task; C:\rb\test-start.cmd is put back after.
 #   powershell -File C:\rb\beta\src\windows\measure-cpu.ps1 -App beta|gtk [-Seconds 60]
-param([ValidateSet('beta', 'gtk')][string]$App = 'beta', [int]$Seconds = 60)
+param([ValidateSet('beta', 'gtk')][string]$App = 'beta', [int]$Seconds = 60, [switch]$Short)
 $ErrorActionPreference = 'Stop'
 Add-Type @'
 using System; using System.Runtime.InteropServices; using System.Collections.Generic;
@@ -60,13 +60,15 @@ try {
     New-Item -ItemType Directory -Force C:\rb\beta\shots | Out-Null
     [IO.File]::WriteAllText($start, $cmd)
     schtasks /run /tn RadianceMusicTest | Out-Null
-    Start-Sleep -Seconds $(if ($App -eq 'gtk') { 4 } else { 15 })
+    # -Short: as today's app is measured (4 s to start, 12 s measured, in front only), to compare the two
+    if ($Short) { $Seconds = 12 }
+    Start-Sleep -Seconds $(if ($App -eq 'gtk' -or $Short) { 4 } else { 15 })
     # (the new one with the most memory: the app's window, not a short-lived helper of the same name)
     $p = Get-Process $name -ErrorAction SilentlyContinue | Where-Object { $before -notcontains $_.Id } | Sort-Object WorkingSet64 -Descending | Select-Object -First 1
     Write-Output "measuring $name, process $($p.Id), $([math]::Round($p.WorkingSet64 / 1MB)) MB"
     if (-not $p) { throw "$name didn't start" }
     Cpu $p 'Now Playing in front'
-    if ($App -eq 'gtk') { return }
+    if ($App -eq 'gtk' -or $Short) { return }
     $h = [Win]::Find([uint32]$p.Id)
     [Win]::ShowWindow($h, 6) | Out-Null   # SW_MINIMIZE
     Start-Sleep -Seconds 3
