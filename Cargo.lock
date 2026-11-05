@@ -2238,6 +2238,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
 
 [[package]]
+name = "radiance-core"
+version = "0.7.19"
+dependencies = [
+ "serde_json",
+ "serde_yaml",
+ "sha2",
+]
+
+[[package]]
 name = "radiance-engine"
 version = "0.7.19"
 dependencies = [
@@ -2253,6 +2262,7 @@ dependencies = [
  "keyring",
  "libc",
  "ort",
+ "radiance-core",
  "realfft",
  "rusqlite",
  "serde_json",

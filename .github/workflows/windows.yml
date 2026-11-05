@@ -63,7 +63,7 @@ jobs:
       - name: Tests
         run: |
           set -o pipefail
-          cargo test --release -p radiance-engine -p radiance-music 2>&1 | tail -25
+          cargo test --release -p radiance-core -p radiance-engine -p radiance-music 2>&1 | tail -25
 
       - name: The app folder
         run: bash packaging/windows/ribs03/win-pack.sh

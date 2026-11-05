@@ -10,6 +10,8 @@ publish = false
 name = "radiance_engine"
 
 [dependencies]
+# the pure behaviour (core/): songs, lyrics, …
+radiance-core = { path = "../core" }
 glib = "0.22"
 gio = "0.22"
 gst = { package = "gstreamer", version = "0.25" }

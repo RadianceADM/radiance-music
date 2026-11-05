@@ -34,6 +34,7 @@ pub mod setup;
 pub mod share;
 pub mod split;
 pub mod storage;
-pub mod track;
+/// Songs: the core's (core/src/track.rs).
+pub use radiance_core::track;
 pub mod update;
 pub mod youtube;

@@ -1,0 +1,17 @@
+[package]
+name = "radiance-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Radiance Music's pure behaviour (no GLib, no GStreamer): songs, lyrics, the queue, lyric timing, the screens' words"
+publish = false
+
+[lib]
+name = "radiance_core"
+
+[dependencies]
+serde_json = "1"
+# Lyricsfiles are YAML (lyrics.rs)
+serde_yaml = "0.9"
+# track::digest: the first 16 hex digits of SHA-256, as GLib made them
+sha2 = "0.10"

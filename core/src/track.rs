@@ -130,7 +130,8 @@ impl Track {
 
 /// The first 16 hex digits of `text`'s SHA-256 (a short name that stays the same).
 pub fn digest(text: &str) -> String {
-    glib::compute_checksum_for_data(glib::ChecksumType::Sha256, text.as_bytes()).map(|h| h.chars().take(16).collect()).unwrap_or_default()
+    use sha2::{Digest, Sha256};
+    Sha256::digest(text.as_bytes()).iter().take(8).map(|b| format!("{b:02x}")).collect()
 }
 
 /// 245.3 -> "4:05".
@@ -228,6 +229,13 @@ pub fn split_credit(credit: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_digest_is_the_first_16_hex_digits_of_sha256() {
+        // GLib's SHA-256 made the keys and file names already out there
+        assert_eq!(digest("radiance"), "ee305956fcdb25b8");
+        assert_eq!(digest(""), "e3b0c44298fc1c14");
+    }
 
     fn song(artist: &str, title: &str) -> Track {
         Track { source: Source::YouTube, id: "x".into(), title: title.into(), artist: artist.into(), album: String::new(), seconds: 0, art: String::new(), format: String::new(), file: None, video: false, genres: None }
