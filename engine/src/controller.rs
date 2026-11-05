@@ -180,6 +180,14 @@ pub struct NowState {
     pub lit: Vec<usize>,
     /// The song is liked (the bar's heart).
     pub liked: bool,
+    /// When `at` was read, on clock_ms()'s clock (the app counts on from there while playing).
+    pub since: u64,
+}
+
+/// Milliseconds on the engine's monotonic clock (NowState::since's).
+pub fn clock_ms() -> u64 {
+    static START: OnceLock<Instant> = OnceLock::new();
+    START.get_or_init(Instant::now).elapsed().as_millis() as u64
 }
 
 /// The song's lyrics.
@@ -190,7 +198,8 @@ pub enum LyricsState {
     Looking,
     None,
     Plain(String),
-    Lines(Vec<Line>),
+    /// Timed lines as shown: "♪" for a break, the singer where the voice changes, each word's place.
+    Lines(Vec<radiance_core::sing::SungLine>),
 }
 
 /// What went wrong, in plain words; `retry`: it stopped (Try Again starts the song over; a note
@@ -533,6 +542,15 @@ impl Controller {
     pub fn remove_from_playlist(&self, id: i64, key: &str) {
         crate::db::remove_from_playlist(id, key);
         self.shared.tell(Change::Playlists);
+    }
+
+    /// The lyric lines lit at `at` (seconds), each with how many characters are sung: what the
+    /// beta lights between the engine's readings (read here, not on the engine's thread).
+    pub fn sung(&self, at: f64) -> Vec<(usize, usize)> {
+        self.shared.view(|v| match &v.lyrics {
+            LyricsState::Lines(lines) => radiance_core::sing::sung(lines, at),
+            _ => Vec::new(),
+        })
     }
 
     /// The queue panel.
@@ -1593,7 +1611,7 @@ impl Engine {
                 let state = match l {
                     Lyrics::Timed { lines, .. } => {
                         *e.lines.borrow_mut() = lines.clone();
-                        LyricsState::Lines(lines)
+                        LyricsState::Lines(radiance_core::sing::prepare(lines))
                     }
                     Lyrics::Plain(text) => LyricsState::Plain(text),
                     Lyrics::None => LyricsState::None,
@@ -1657,6 +1675,7 @@ impl Engine {
             kbps: self.kbps.get(),
             lit,
             liked: song.as_ref().is_some_and(|t| self.liked.borrow().iter().any(|x| x.key() == t.key())),
+            since: clock_ms(),
             song,
         };
         drop(q);

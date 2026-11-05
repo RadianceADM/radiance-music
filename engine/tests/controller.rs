@@ -823,3 +823,36 @@ fn next_and_queue_say_so_and_a_radio_with_nothing_says_so() {
     }
     c.quit();
 }
+
+// ------------------------------------------------------------------ lyrics word by word (stage 2)
+
+#[test]
+fn sung_follows_core_sing_and_two_voices_light_together() {
+    use radiance_engine::lyrics::{Line, Word};
+    let _g = setup();
+    let fake = Arc::new(Fake::default());
+    let w = |start: f64, text: &str| Word { start, end: start + 0.3, text: text.into() };
+    let lines = vec![
+        Line { start: 10.0, end: 14.0, text: "Hello world".into(), words: vec![w(10.0, "Hello"), w(11.0, "world")], singer: Some("Ann".into()) },
+        Line { start: 11.0, end: 13.0, text: "Oh".into(), words: vec![], singer: Some("Bo".into()) },
+        Line { start: 14.0, end: 15.0, text: "".into(), words: vec![], singer: None },
+    ];
+    *fake.lyrics.lock().unwrap() = Some(Lyrics::Timed { lines, exact: true });
+    let a = wav("sung", 20.0);
+    fake.finds(Kind::Songs, "sung", vec![a.clone()]);
+    let (heard, _rx) = listener();
+    let c = Controller::start(heard, fake).unwrap();
+    c.search("sung");
+    assert!(until(5.0, || c.results().songs.is_some_and(|v| !v.is_empty())));
+    c.play_from(ListRef::Songs, 0, &a.key());
+    assert!(until(5.0, || matches!(c.lyrics(), radiance_engine::controller::LyricsState::Lines(ref l) if l.len() == 3)));
+    let radiance_engine::controller::LyricsState::Lines(shown) = c.lyrics() else { unreachable!() };
+    assert_eq!(shown.iter().map(|l| l.head.clone()).collect::<Vec<_>>(), [Some("Ann".to_string()), Some("Bo".to_string()), None]);
+    assert_eq!(shown[2].line.text, "♪");
+    assert_eq!(c.sung(9.95), vec![(0, 5)]);
+    assert_eq!(c.sung(12.0), vec![(0, 11), (1, 2)], "two voices at once");
+    // the clock the beta counts on with
+    let n = c.now();
+    assert!(n.since <= radiance_engine::controller::clock_ms());
+    c.quit();
+}

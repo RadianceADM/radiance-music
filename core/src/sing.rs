@@ -55,6 +55,40 @@ pub fn lit_lines<'a>(lines: impl IntoIterator<Item = &'a Line>, at: f64) -> Vec<
     }
 }
 
+/// A timed line as both apps show it: an empty line is a note ("♪", a break in the singing); its
+/// words' places in its text; who sings it, only where the voice changes from the line before
+/// (a line without a singer keeps the voice).
+#[derive(Clone, Debug)]
+pub struct SungLine {
+    pub line: Line,
+    pub head: Option<String>,
+    pub spans: Vec<(usize, usize)>,
+}
+
+pub fn prepare(lines: Vec<Line>) -> Vec<SungLine> {
+    let mut voice: Option<String> = None;
+    lines
+        .into_iter()
+        .map(|mut line| {
+            if line.text.trim().is_empty() {
+                line.text = "♪".into();
+                line.words.clear();
+            }
+            let spans = word_spans(&line.text, &line.words);
+            let head = line.singer.clone().filter(|s| voice.as_deref() != Some(s.as_str()));
+            if line.singer.is_some() {
+                voice = line.singer.clone();
+            }
+            SungLine { line, head, spans }
+        })
+        .collect()
+}
+
+/// The lines lit at `at`, each with how many of its characters are sung (whole words).
+pub fn sung(lines: &[SungLine], at: f64) -> Vec<(usize, usize)> {
+    lit_lines(lines.iter().map(|l| &l.line), at).into_iter().map(|i| (i, sung_chars(&lines[i].line, &lines[i].spans, at))).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -64,6 +98,41 @@ mod tests {
     }
     fn word(start: f64, text: &str) -> Word {
         Word { start, end: start + 0.3, text: text.into() }
+    }
+
+    #[test]
+    fn heads_only_where_the_voice_changes() {
+        let mut lines = vec![line(1.0, 2.0), line(2.0, 3.0), line(3.0, 4.0), line(4.0, 5.0)];
+        lines[0].singer = Some("Ann".into());
+        lines[1].singer = Some("Ann".into());
+        lines[3].singer = Some("Bo".into());
+        let heads: Vec<Option<String>> = prepare(lines).into_iter().map(|l| l.head).collect();
+        assert_eq!(heads, [Some("Ann".to_string()), None, None, Some("Bo".to_string())], "a line without a singer keeps the voice");
+    }
+
+    #[test]
+    fn empty_lines_are_notes() {
+        let mut l = line(1.0, 2.0);
+        l.text = "  ".into();
+        l.words = vec![word(1.0, "x")];
+        let p = prepare(vec![l]);
+        assert_eq!(p[0].line.text, "♪");
+        assert!(p[0].line.words.is_empty() && p[0].spans.is_empty());
+    }
+
+    #[test]
+    fn sung_lights_lines_then_words() {
+        let mut a = line(10.0, 12.0);
+        a.text = "Hello world".into();
+        a.words = vec![word(10.0, "Hello"), word(11.0, "world")];
+        let mut b = line(13.0, 14.0);
+        b.text = "Bye".into();
+        let lines = prepare(vec![a, b]);
+        assert_eq!(sung(&lines, 9.0), vec![], "not yet: a line leads by 0.35 s");
+        assert_eq!(sung(&lines, 9.8), vec![(0, 0)]);
+        assert_eq!(sung(&lines, 9.95), vec![(0, 5)], "a word leads by 0.08 s");
+        assert_eq!(sung(&lines, 11.0), vec![(0, 11)]);
+        assert_eq!(sung(&lines, 13.0), vec![(1, 3)], "no word times: the whole line");
     }
 
     #[test]

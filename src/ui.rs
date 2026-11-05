@@ -5692,25 +5692,16 @@ impl Ui {
                 }
             }
             Some(Lyrics::Timed { lines, .. }) => {
-                let mut voice: Option<String> = None;
-                for mut line in lines {
-                    if line.text.trim().is_empty() {
-                        line.text = "♪".into(); // a break in the singing
-                        line.words.clear();
-                    }
+                // "♪" for a break in the singing, the singer where the voice changes (core::sing)
+                for prepared in sing::prepare(lines) {
+                    let line = prepared.line;
                     let make = |class: &[&str]| {
                         gtk::Label::builder().label(&line.text).wrap(true).wrap_mode(gtk::pango::WrapMode::WordChar).xalign(0.0).justify(gtk::Justification::Left).css_classes(class.to_vec()).build()
                     };
                     let (big, side) = (make(&["lyric"]), make(&["lyric", "side-lyric"]));
                     self.lyrics_list.append(&big);
                     self.side_lyrics_list.append(&side);
-                    let spans = sing::word_spans(&line.text, &line.words);
-                    // a new voice: its name above the line
-                    let head = line.singer.clone().filter(|s| voice.as_deref() != Some(s.as_str()));
-                    if line.singer.is_some() {
-                        voice = line.singer.clone();
-                    }
-                    let view = LyricView { spans, big, side, sung: Cell::new(None), head, line };
+                    let view = LyricView { spans: prepared.spans, big, side, sung: Cell::new(None), head: prepared.head, line };
                     if view.head.is_some() {
                         view.big.set_markup(&view.resting_markup());
                         view.side.set_markup(&view.resting_markup());

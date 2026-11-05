@@ -368,7 +368,7 @@ impl MusicEngine {
             LyricsState::Lines(lines) => LyricsView {
                 kind: LyricsKind::Lines,
                 plain: String::new(),
-                lines: lines.into_iter().map(|l| LineView { text: l.text, start: l.start, end: l.end }).collect(),
+                lines: lines.into_iter().map(|l| LineView { text: l.line.text, start: l.line.start, end: l.line.end }).collect(),
             },
         }
     }
