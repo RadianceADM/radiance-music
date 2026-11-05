@@ -13,6 +13,14 @@ pub fn plugin_name(file: &str) -> String {
     f.strip_prefix("gst").unwrap_or(f).to_string()
 }
 
+/// Plugins on ribs02's list that MSYS2 doesn't build: today's Windows app ships without them (#39).
+const NOT_IN_MSYS2: &[&str] = &["ipcpipeline"];
+
+/// The plugins the app should find: today's Windows app's.
+pub fn expected() -> Vec<String> {
+    PLUGINS.lines().filter(|l| !l.trim().is_empty()).map(plugin_name).filter(|p| !NOT_IN_MSYS2.contains(&p.as_str())).collect()
+}
+
 /// One line each: the engine's version, the data folder, GStreamer's version, the plugins it
 /// can't find, yt-dlp, and how many songs the history has.
 pub fn lines() -> Vec<String> {
@@ -21,7 +29,7 @@ pub fn lines() -> Vec<String> {
         Ok(()) => {
             out.push(format!("gstreamer {}", gst::version_string()));
             let registry = gst::Registry::get();
-            let missing: Vec<String> = PLUGINS.lines().filter(|l| !l.trim().is_empty()).map(plugin_name).filter(|p| registry.find_plugin(p).is_none()).collect();
+            let missing: Vec<String> = expected().into_iter().filter(|p| registry.find_plugin(p).is_none()).collect();
             out.push(format!("missing plugins: {}", if missing.is_empty() { "none".to_string() } else { missing.join(", ") }));
         }
         Err(e) => out.push(format!("gstreamer didn't start: {e}")),
@@ -34,6 +42,14 @@ pub fn lines() -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_plugins_expected_are_the_ones_todays_windows_app_ships() {
+        let e = expected();
+        assert!(e.contains(&"coreelements".to_string()));
+        assert!(!e.contains(&"ipcpipeline".to_string()), "MSYS2 doesn't build it; today's Windows app ships without it");
+        assert!(e.len() >= 150);
+    }
 
     #[test]
     fn plugin_names_from_their_files() {
