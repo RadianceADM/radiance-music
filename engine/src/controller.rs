@@ -1237,8 +1237,9 @@ impl Engine {
                         p.seek(at);
                     }
                 }
-                if self.player.borrow().as_ref().is_some_and(|p| p.is_video()) {
+                if let Some(p) = self.player.borrow().as_ref().filter(|p| p.is_video()) {
                     self.switching.replace(None); // the video plays: no way back needed
+                    self.swapchain.set(p.video_swapchain()); // (the sink may make it only once it plays)
                 }
                 self.update_quality();
                 self.publish_now();

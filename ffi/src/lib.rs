@@ -876,6 +876,44 @@ pub fn self_check() -> Vec<String> {
     out
 }
 
+/// `--probe-video FILE OUT` (ribs03, the music videos' spike): FILE played for `seconds` the way
+/// the app plays videos, silent, with no window; its report, "ok" last or "failed: …".
+#[uniffi::export]
+pub fn probe_video(file: String, seconds: f64) -> Vec<String> {
+    radiance_engine::video_probe::probe(std::path::Path::new(&file), seconds)
+}
+
+/// `--video-probe FILE` (ribs03, the music videos' spike): FILE playing, silent, for a test
+/// window's SwapChainPanel.
+#[derive(uniffi::Object)]
+pub struct VideoCheck {
+    inner: radiance_engine::video_probe::VideoProbe,
+}
+
+#[uniffi::export]
+impl VideoCheck {
+    #[uniffi::constructor]
+    pub fn start(file: String) -> Result<Arc<Self>, EngineError> {
+        radiance_engine::video_probe::VideoProbe::start(std::path::Path::new(&file)).map(|inner| Arc::new(VideoCheck { inner })).map_err(EngineError::Failed)
+    }
+    /// d3d12swapchainsink's swapchain (an IDXGISwapChain1*; 0: none).
+    pub fn swapchain(&self) -> u64 {
+        self.inner.swapchain()
+    }
+    pub fn frames(&self) -> u64 {
+        self.inner.frames()
+    }
+    pub fn resize(&self, w: u32, h: u32) {
+        self.inner.resize(w, h);
+    }
+    pub fn report(&self) -> Vec<String> {
+        self.inner.report()
+    }
+    pub fn stop(&self) {
+        self.inner.stop();
+    }
+}
+
 /// Another copy runs (today's app or this one): it was asked to show its window. Then quit.
 #[uniffi::export]
 pub fn ask_the_other(link: Option<String>) -> bool {

@@ -51,4 +51,5 @@ pub mod two_part;
 /// Songs: the core's (core/src/track.rs).
 pub use radiance_core::track;
 pub mod update;
+pub mod video_probe;
 pub mod youtube;

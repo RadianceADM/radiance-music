@@ -661,13 +661,32 @@ pub struct VideoOut {
 
 /// Where a video's picture goes outside GTK: Windows' Direct3D 12 swapchain sink (made for
 /// composition: a SwapChainPanel shows it), elsewhere nowhere (the engine's tests).
+/// (No videoconvert: the sink takes the decoder's frames as they come, in GPU or ordinary memory,
+/// and converts them on the GPU.)
 #[cfg(windows)]
-const PICTURE_OUT: &str = "videoconvert ! d3d12swapchainsink name=picture";
+pub(crate) const PICTURE_OUT: &str = "d3d12swapchainsink name=picture";
 #[cfg(not(windows))]
-const PICTURE_OUT: &str = "fakesink name=picture sync=true";
+pub(crate) const PICTURE_OUT: &str = "fakesink name=picture sync=true";
+
+/// A video's pipeline as text: its picture into `picture_sink` (named "picture"), its sound
+/// through the Mixer's effects ("fx") and the app's volume ("volume") into `out` (named "sound").
+/// A saved video is one file (`picture` == `sound`): picture and sound together; else two streams.
+pub(crate) fn video_desc(picture: &str, sound: &str, picture_sink: &str, out: &str) -> String {
+    if picture == sound {
+        format!(
+            "uridecodebin name=file uri=\"{picture}\" file. ! queue ! {picture_sink} \
+             file. ! queue ! audioconvert ! audioresample ! audio/x-raw,format=F32LE ! identity name=fx ! volume name=volume ! audioconvert ! {out} name=sound"
+        )
+    } else {
+        format!(
+            "uridecodebin uri=\"{picture}\" ! {picture_sink} \
+             uridecodebin uri=\"{sound}\" ! audioconvert ! audioresample ! audio/x-raw,format=F32LE ! identity name=fx ! volume name=volume ! audioconvert ! {out} name=sound"
+        )
+    }
+}
 
 /// The swapchain d3d12swapchainsink draws into (0: not that sink).
-fn swapchain_of(sink: &gst::Element) -> u64 {
+pub(crate) fn swapchain_of(sink: &gst::Element) -> u64 {
     if sink.find_property("swapchain").is_none() {
         return 0;
     }
@@ -1108,19 +1127,13 @@ impl Player {
         self.stop();
         let silent = std::env::var_os("RADIANCE_SILENT").is_some();
         let out = if silent { "fakesink sync=true" } else { SOUND_OUT };
-        // a saved video: one file, picture and sound together; else two streams
-        let desc = if picture == sound {
-            format!(
-                "uridecodebin name=file uri=\"{picture}\" file. ! queue ! {picture_sink} \
-                 file. ! queue ! audioconvert ! audioresample ! audio/x-raw,format=F32LE ! identity name=fx ! volume name=volume ! audioconvert ! {out} name=sound"
-            )
-        } else {
-            format!(
-                "uridecodebin uri=\"{picture}\" ! {picture_sink} \
-                 uridecodebin uri=\"{sound}\" ! audioconvert ! audioresample ! audio/x-raw,format=F32LE ! identity name=fx ! volume name=volume ! audioconvert ! {out} name=sound"
-            )
-        };
+        let desc = video_desc(picture, sound, picture_sink, out);
         gst::parse::launch(&desc).map_err(|e| e.to_string())?.downcast::<gst::Pipeline>().map_err(|_| "not a pipeline".into())
+    }
+
+    /// The video's swapchain now (0: none; d3d12swapchainsink may make it only once it plays).
+    pub fn video_swapchain(&self) -> u64 {
+        self.video.borrow().as_ref().and_then(|v| v.pipeline.by_name("picture")).map(|s| swapchain_of(&s)).unwrap_or(0)
     }
 
     /// Starts a video's pipeline (video_pipeline's) and keeps it as the one playing.

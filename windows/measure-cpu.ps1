@@ -3,7 +3,8 @@
 # use the same test library (C:\rb\beta-test) and play its latest song. Started in the owner's desktop
 # session through the RadianceMusicTest task; C:\rb\test-start.cmd is put back after.
 #   powershell -File C:\rb\beta\src\windows\measure-cpu.ps1 -App beta|gtk [-Seconds 60]
-param([ValidateSet('beta', 'gtk')][string]$App = 'beta', [int]$Seconds = 60, [switch]$Short)
+# -Video FILE (beta): FILE playing alone in the beta's video check (--video-probe), in front, then minimized.
+param([ValidateSet('beta', 'gtk')][string]$App = 'beta', [int]$Seconds = 60, [switch]$Short, [string]$Video = '')
 $ErrorActionPreference = 'Stop'
 Add-Type @'
 using System; using System.Runtime.InteropServices; using System.Collections.Generic;
@@ -36,6 +37,7 @@ set RADIANCE_SILENT=1
 if ($App -eq 'beta') {
     $name = 'RadianceMusicBeta'
     $cmd = "@echo off`r`n$data`r`nstart `"`" `"C:\rb\beta\dist\RadianceMusicBeta.exe`" --play-test --page playing --size 1280x800"
+    if ($Video) { $cmd = "@echo off`r`n$data`r`nstart `"`" `"C:\rb\beta\dist\RadianceMusicBeta.exe`" --video-probe `"$Video`" --size 1280x720" }
 } else {
     $name = 'radiance-music'
     $exe = "$env:LOCALAPPDATA\Programs\Radiance Music\bin\radiance-music.exe"
@@ -67,13 +69,13 @@ try {
     $p = Get-Process $name -ErrorAction SilentlyContinue | Where-Object { $before -notcontains $_.Id } | Sort-Object WorkingSet64 -Descending | Select-Object -First 1
     Write-Output "measuring $name, process $($p.Id), $([math]::Round($p.WorkingSet64 / 1MB)) MB"
     if (-not $p) { throw "$name didn't start" }
-    Cpu $p 'Now Playing in front'
+    Cpu $p $(if ($Video) { 'a video in front' } else { 'Now Playing in front' })
     if ($App -eq 'gtk' -or $Short) { return }
     $h = [Win]::Find([uint32]$p.Id)
     [Win]::ShowWindow($h, 6) | Out-Null   # SW_MINIMIZE
     Start-Sleep -Seconds 3
     Cpu $p 'minimized'
-    if ($App -eq 'beta') {
+    if ($App -eq 'beta' -and -not $Video) {
         [Win]::ShowWindow($h, 9) | Out-Null   # SW_RESTORE
         Start-Sleep -Seconds 2
         [Win]::PostMessage($h, 0x10, [IntPtr]::Zero, [IntPtr]::Zero) | Out-Null   # WM_CLOSE: playing, so it hides to the tray

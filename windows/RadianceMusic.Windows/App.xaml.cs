@@ -39,6 +39,14 @@ public partial class App : Application
     {
         var ui = DispatcherQueue.GetForCurrentThread();
         Trace("start");
+        // the music videos' spike: only the video, in a window of its own (no engine, no data)
+        if (Program.Dev.VideoProbe is { } video)
+        {
+            var probe = new VideoProbeWindow(video);
+            probe.Activate();
+            if (Program.Dev.Shot != null) _ = probe.ShootAsync(Program.Dev);
+            return;
+        }
         // one copy at a time, today's app or this one: the other comes forward (it shares the data)
         if (Ffi.AskTheOther(null))
         {

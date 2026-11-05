@@ -42,7 +42,7 @@ internal static class Shot
         App.Quit();
     }
 
-    private static async Task Save(nint hwnd, string path)
+    internal static async Task Save(nint hwnd, string path)
     {
         if (Win32.IsIconic(hwnd))
         {
