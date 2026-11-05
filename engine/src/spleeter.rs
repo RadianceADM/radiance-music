@@ -273,33 +273,40 @@ mod tests {
         assert_eq!(last.get(), 1.0, "it says when it's done");
     }
 
-    /// The real models against the Python reference (ribs02 split-bench/spleeter_ort.py): run with
-    /// RADIANCE_SPLEETER_CHECK=DIR holding libonnxruntime.so (or onnxruntime.dll), the two models,
-    /// clip.wav (44.1 kHz stereo) and the reference's vocals.f32 / music.f32 (interleaved).
+    /// The real models: run with RADIANCE_SPLEETER_CHECK=DIR holding libonnxruntime.so (or
+    /// onnxruntime.dll) and the two models (two_part.rs' folder will do). The parts must add up to
+    /// the song; with clip.wav (44.1 kHz stereo) and the Python reference's vocals.f32 / music.f32
+    /// (ribs02 split-bench/spleeter_ort.py, interleaved) there too, they must match it.
     #[test]
     #[ignore]
-    fn the_real_models_match_the_python_reference() {
+    fn the_real_models_split_a_song() {
         let Some(dir) = std::env::var_os("RADIANCE_SPLEETER_CHECK").map(std::path::PathBuf::from) else { return };
         let runtime = ["libonnxruntime.so", "onnxruntime.dll"].iter().map(|n| dir.join(n)).find(|p| p.exists()).expect("the runtime");
         let env = environment(&runtime).unwrap();
         let (mut voice, mut rest) = (session(env, &dir.join(VOCALS), 4).unwrap(), session(env, &dir.join(MUSIC), 4).unwrap());
-        let x = decode(&dir.join("clip.wav")).unwrap();
-        let (l, r): (Vec<f32>, Vec<f32>) = x.chunks_exact(2).map(|f| (f[0], f[1])).unzip();
+        let (l, r): (Vec<f32>, Vec<f32>) = if dir.join("clip.wav").exists() {
+            decode(&dir.join("clip.wav")).unwrap().chunks_exact(2).map(|f| (f[0], f[1])).unzip()
+        } else {
+            (song(RATE * 20, 4), song(RATE * 20, 5))
+        };
         let started = std::time::Instant::now();
         let mut run = |mag: &[f32]| Ok((answer(&mut voice, mag)?, answer(&mut rest, mag)?));
         let (vocals, music) = separate([&l, &r], &mut run, &|_| {}).unwrap();
         let took = started.elapsed().as_secs_f64();
-        let read = |name: &str| -> Vec<f32> { std::fs::read(dir.join(name)).unwrap().chunks_exact(4).map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]])).collect() };
         let both = |p: &[Vec<f32>; 2]| -> Vec<f32> { p[0].iter().zip(&p[1]).flat_map(|(a, b)| [*a, *b]).collect() };
         let (v, m) = (both(&vocals), both(&music));
-        let (rv, rm) = (read("vocals.f32"), read("music.f32"));
-        assert_eq!(v.len(), rv.len(), "as long as the reference");
-        let (dv, dm) = (closeness(&rv, &v), closeness(&rm, &m));
-        let song: Vec<f32> = v.iter().zip(&m).map(|(a, b)| a + b).collect();
-        let whole = closeness(&x, &song);
-        eprintln!("{:.1} s for {:.0} s; vocals {dv:.1} dB, music {dm:.1} dB from the reference; parts vs song {whole:.1} dB", took, l.len() as f64 / RATE as f64);
-        assert!(dv > 30.0 && dm > 30.0, "vocals {dv:.1} dB, music {dm:.1} dB");
+        let x: Vec<f32> = l.iter().zip(&r).flat_map(|(a, b)| [*a, *b]).collect();
+        let whole = closeness(&x, &v.iter().zip(&m).map(|(a, b)| a + b).collect::<Vec<f32>>());
+        eprintln!("{took:.1} s for {:.0} s; parts vs song {whole:.1} dB", l.len() as f64 / RATE as f64);
         assert!(whole > 40.0);
+        if dir.join("vocals.f32").exists() {
+            let read = |name: &str| -> Vec<f32> { std::fs::read(dir.join(name)).unwrap().chunks_exact(4).map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]])).collect() };
+            let (rv, rm) = (read("vocals.f32"), read("music.f32"));
+            assert_eq!(v.len(), rv.len(), "as long as the reference");
+            let (dv, dm) = (closeness(&rv, &v), closeness(&rm, &m));
+            eprintln!("vocals {dv:.1} dB, music {dm:.1} dB from the reference");
+            assert!(dv > 30.0 && dm > 30.0, "vocals {dv:.1} dB, music {dm:.1} dB");
+        }
     }
 
     #[test]
