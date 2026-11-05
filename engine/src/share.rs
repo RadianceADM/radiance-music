@@ -28,7 +28,10 @@ use crate::{library, split};
 
 pub const VERSION: u32 = 1;
 /// What a song can come with.
-pub const KINDS: [&str; 8] = ["song", "drums", "bass", "other", "vocals", "lyrics", "cover", "video"];
+pub const KINDS: [&str; 9] = ["song", "drums", "bass", "other", "vocals", "music", "lyrics", "cover", "video"];
+/// The parts that travel: Demucs' four, and the two-part split's Music (with Vocals; the phone's
+/// Spleeter, #43). The mixer plays either (split::mix_parts).
+const PARTS: [&str; 5] = ["drums", "bass", "other", "vocals", "music"];
 /// The ports it listens on (the first free one): a firewall lets these in for the phone.
 pub const PORTS: std::ops::RangeInclusive<u16> = 47800..=47809;
 /// Bigger than any song or video would be: refused.
@@ -87,7 +90,7 @@ fn offer(songs: &[Track], videos: bool) -> Vec<Item> {
         .filter_map(|t| {
             let song = t.file.as_ref()?;
             let mut files = vec![("song".to_string(), file_at(PathBuf::from(song))?)];
-            for p in split::PARTS {
+            for p in PARTS {
                 if let Some(f) = split::ready_part(t, p).and_then(file_at) {
                     files.push((p.to_string(), f));
                 }
@@ -254,7 +257,7 @@ impl Store {
             }
         };
         let beside = |ext: &str| PathBuf::from(format!("{}.{ext}", base.display()));
-        for p in split::PARTS {
+        for p in PARTS {
             if ["flac", "ogg", "m4a"].iter().any(|e| beside(&format!("{p}.{e}")).exists()) {
                 here.insert(p.to_string());
             }
@@ -281,7 +284,7 @@ impl Store {
             "lyrics" => PathBuf::from(format!("{}.lrc", base.display())),
             "cover" => PathBuf::from(format!("{}.jpg", base.display())),
             "video" => PathBuf::from(format!("{}.video.{ext}", base.display())),
-            part if split::PARTS.contains(&part) => PathBuf::from(format!("{}.{part}.{ext}", base.display())),
+            part if PARTS.contains(&part) => PathBuf::from(format!("{}.{part}.{ext}", base.display())),
             _ => return Err("no such kind".into()),
         };
         if let Some(d) = to.parent() {
@@ -598,6 +601,32 @@ mod tests {
             assert!(t.starts_with(&format!("radiancemusic://share?v=1&m=get&k={key}&p={port}&n=Test&h=")));
         }
         drop(share);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// The two-part split (Music + Vocals: the phone's Spleeter, #43) travels both ways.
+    #[test]
+    fn the_two_part_split_travels_both_ways() {
+        let dir = std::env::temp_dir().join(format!("radiance-share-halves-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let song = dir.join("Artist - Song.m4a");
+        fs::write(&song, b"song").unwrap();
+        for p in ["music", "vocals"] {
+            fs::write(dir.join(format!("Artist - Song.{p}.ogg")), p).unwrap();
+        }
+        let t = Track::from_json(&json!({ "source": "youtube", "id": "halves1", "title": "Song", "artist": "Artist", "file": song.to_string_lossy() })).unwrap();
+        // the computer offers it to a phone
+        let offered = offer(&[t], false);
+        let mut kinds: Vec<&str> = offered[0].files.iter().map(|(k, _)| k.as_str()).collect();
+        kinds.sort();
+        assert_eq!(kinds, ["music", "song", "vocals"]);
+        // a phone's Music is taken (its plan isn't filtered out) and kept beside the song
+        assert!(KINDS.contains(&"music"));
+        let (tx, _rx) = async_channel::unbounded();
+        let pace = Mutex::new(Pace { checked: Instant::now(), busy: false, events: tx });
+        let mut store = Store { bases: HashMap::from([("yt:halves2".to_string(), dir.join("Other - Tune"))]), files: HashMap::new() };
+        store.write("yt:halves2", "music", "Tune.music.m4a", &mut &b"music!"[..], 6, &pace, &mut |_| {}).unwrap();
+        assert_eq!(fs::read(dir.join("Other - Tune.music.m4a")).unwrap(), b"music!");
         let _ = fs::remove_dir_all(&dir);
     }
 

@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- **Sharing with the phone carries its two-part split:** a song the phone split in two (Music + Vocals, its new fast split) comes to the computer with both parts, and the computer sends a song's Music part along too. The computer's mixer plays two-part songs with two sliders (#43).
 - **Next right after opening starts the next song from its start:** with last time's song shown (picked up at its saved place), pressing Next, picking another song in the queue, Play again, or removing that song from the queue started the next one at the old song's place, and the first Pause then started it over (#46).
 
 ## v0.7.19 — 2026-11-05

@@ -48,9 +48,10 @@ marked 🔜.
 | Feature | Linux | Windows | Windows beta | Phone | Notes |
 |---|---|---|---|---|---|
 | Part sliders: Drums, Bass, Other, Vocals | ✅ | ✅ | 🔜 3 | ✅ | |
+| Two-part songs: Music and Vocals sliders | ✅ | ✅ | 🔜 3 | 🔜 | the phone's split (0.5.17, #43); on the computer, songs split before there were four parts |
 | Keeps the loudness when parts are turned down | ✅ | ✅ | 🔜 3 | ✅ | |
 | Low cut, High cut, Reverb (one setting, every song) | ✅ | ✅ | 🔜 3 | ✅ | built into the computer app since 0.7.14 |
-| Split a song on this device | ✅ | ✅ | 🔜 3 | ✅ | computer: Python Demucs (no-Python version in testing, #31); phone: Demucs as ONNX |
+| Split a song on this device | ✅ | ✅ | 🔜 3 | ✅ | computer: Python Demucs, 4 parts (no-Python version in testing, #31); phone: 2 parts (Music + Vocals) with Spleeter, about 16× real time (🔜 0.5.17, #43; Demucs before), 4 parts only from the computer or a server |
 | Liked songs are split by themselves | ✅ | ✅ | 🔜 3 | ❌ | the phone splits when you ask |
 | Split queue, pause / stop splitting | ✅ | ✅ | 🔜 3 | ✅ | |
 | Cores it may use | ✅ | ✅ | 🔜 3 | ✅ | |
@@ -87,7 +88,7 @@ marked 🔜.
 |---|---|---|---|---|---|
 | Copy or share a song's link | ✅ | ✅ | 🔜 4 | ✅ | |
 | Story cards and story videos with lyrics (Instagram, Facebook…) | ❌ | ❌ | ❌ | ✅ | sharing is the main way people find us |
-| Share songs with a phone (QR, both ways, only what's missing) | ✅ | ✅ | 🔜 4 | ✅ | |
+| Share songs with a phone (QR, both ways, only what's missing) | ✅ | ✅ | 🔜 4 | ✅ | a song's parts go along; the two-part split's Music too (🔜 next computer release, #43) |
 | Gentle transfer while Bluetooth audio plays | ✅ | ❌ | ❌ | ✅ | |
 | Works without shared Wi-Fi (Wi-Fi Direct) | ➖ | ➖ | ➖ | ✅ | |
 
