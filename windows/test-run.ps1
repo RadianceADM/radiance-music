@@ -2,7 +2,7 @@
 # way a window shows from SSH), with its test data (C:\rb\beta-test) and no sound, then puts
 # C:\rb\test-start.cmd back as it was. Waits until the beta quits (or -Seconds), prints its exit.
 #   powershell -File C:\rb\beta\src\windows\test-run.ps1 -AppArgs '--shot C:\rb\beta\shots\home.png --page home' -Seconds 90
-param([string]$AppArgs = '', [int]$Seconds = 120)
+param([string]$AppArgs = '', [int]$Seconds = 120, [string]$Then = '', [int]$ThenAfter = 15)
 $ErrorActionPreference = 'Stop'
 $start = 'C:\rb\test-start.cmd'
 # the task's own script, kept aside while a test uses it (a run cut off earlier left it here: put back first)
@@ -20,6 +20,8 @@ set XDG_CACHE_HOME=C:\rb\beta-test\cache
 set RADIANCE_SILENT=1
 start "" /belownormal "$exe" $AppArgs
 "@
+# -Then: a second copy started $ThenAfter s later (one copy at a time: it should hand over and quit)
+if ($Then) { $cmd += "`r`ntimeout /t $ThenAfter /nobreak >nul`r`nstart `"`" /belownormal `"$exe`" $Then`r`n" }
 try {
     [IO.File]::WriteAllText($start, $cmd)
     schtasks /run /tn RadianceMusicTest | Out-Null
