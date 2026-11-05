@@ -3,6 +3,7 @@
 #   msys.sh rust     the core/engine/ffi tests, then radiance_ffi.dll
 #   msys.sh deps     what radiance_ffi.dll needs (GStreamer, GLib, the C runtime)
 #   msys.sh bindgen  uniffi-bindgen-cs (once) and the C# binding
+#   msys.sh installer  RadianceMusic-Beta-Setup.exe from C:\\rb\\beta\\dist (NSIS)
 #   msys.sh pack     C:\rb\beta\dist's native part: bin\ (the DLL and what it needs, yt-dlp, Deno, FFmpeg),
 #                    lib\gstreamer-1.0 (today's Windows app's plugins), the plugin scanner, GIO's modules
 set -uo pipefail
@@ -62,5 +63,9 @@ case "${1:-}" in
     copy_deps "$D/bin/ffmpeg.exe" "$D/bin/ffprobe.exe"
     echo "native part: $(find "$D/bin" "$D/lib" "$D/libexec" "$D/share" -type f | wc -l) files, $n plugins, $(ls "$D"/bin/*.dll | wc -l) DLLs in bin"
     ;;
-  *) echo "usage: msys.sh rust|deps|bindgen|pack"; exit 2 ;;
+  installer)
+    v=$(grep -o -E '<Version>[^<]+' windows/RadianceMusic.Windows/RadianceMusic.Windows.csproj | head -1 | cut -d'>' -f2)
+    makensis -V2 -DVERSION="$v" -DDIST="$(cygpath -w /c/rb/beta/dist)" -DOUT="$(cygpath -w /c/rb/beta/RadianceMusic-Beta-Setup.exe)" -DICON="$(cygpath -w packaging/windows/radiance-music.ico)" windows/installer-beta.nsi
+    ;;
+  *) echo "usage: msys.sh rust|deps|bindgen|pack|installer"; exit 2 ;;
 esac

@@ -6,7 +6,8 @@
 #       MSYS2's GStreamer, as today's Windows app: one C runtime, UCRT, for the DLL and GStreamer)
 # app:  the C# binding (uniffi-bindgen-cs), the WinUI app and its tests (.NET 10)
 # dist: C:\rb\beta\dist (the app, the DLL, GStreamer, the tools) and its self-check
-param([ValidateSet('rust', 'app', 'dist', 'all')][string]$Step = 'all')
+# installer: C:\rb\beta\RadianceMusic-Beta-Setup.exe from dist (NSIS, MSYS2's makensis) and its SHA-256
+param([ValidateSet('rust', 'app', 'dist', 'installer', 'all')][string]$Step = 'all')
 $ErrorActionPreference = 'Stop'
 (Get-Process -Id $PID).PriorityClass = 'Idle'   # what it starts gets the same
 $B = 'C:\rb\beta'
@@ -57,4 +58,11 @@ if ($Step -in 'dist', 'all') {
     if (-not $data -or -not $data.StartsWith("$Test\data")) { throw "the beta opened a data folder outside $Test : $data" }
     if ($p.ExitCode -ne 0) { throw "self-check failed" }
     Write-Output "dist: $((Get-ChildItem -Recurse -File "$B\dist").Count) files, $([math]::Round((Get-ChildItem -Recurse -File "$B\dist" | Measure-Object Length -Sum).Sum / 1MB)) MB"
+}
+
+if ($Step -eq 'installer') {
+    $version = ([xml](Get-Content "$Src\windows\RadianceMusic.Windows\RadianceMusic.Windows.csproj")).Project.PropertyGroup.Version | Where-Object { $_ } | Select-Object -First 1
+    Step 'the installer' { Msys installer }
+    $setup = "$B\RadianceMusic-Beta-Setup.exe"
+    Write-Output "$((Get-FileHash $setup -Algorithm SHA256).Hash.ToLower())  RadianceMusic-Beta-Setup.exe ($version, $([math]::Round((Get-Item $setup).Length / 1MB)) MB)"
 }
