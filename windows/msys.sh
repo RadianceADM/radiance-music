@@ -65,7 +65,7 @@ case "${1:-}" in
     ;;
   installer)
     v=$(grep -o -E '<Version>[^<]+' windows/RadianceMusic.Windows/RadianceMusic.Windows.csproj | head -1 | cut -d'>' -f2)
-    makensis -V2 -DVERSION="$v" -DDIST="$(cygpath -w /c/rb/beta/dist)" -DOUT="$(cygpath -w /c/rb/beta/RadianceMusic-Beta-Setup.exe)" -DICON="$(cygpath -w packaging/windows/radiance-music.ico)" windows/installer-beta.nsi
+    makensis -V2 -DVERSION="$v" -DDIST="$(cygpath -w /c/rb/beta/dist)" -DOUT="$(cygpath -w /c/rb/beta/RadianceMusic-Beta-Setup.exe)" -DICON="$(cygpath -aw packaging/windows/radiance-music.ico)" windows/installer-beta.nsi
     ;;
   *) echo "usage: msys.sh rust|deps|bindgen|pack|installer"; exit 2 ;;
 esac
