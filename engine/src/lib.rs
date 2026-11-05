@@ -11,6 +11,7 @@ pub mod align;
 pub mod archive;
 pub mod art;
 pub mod beat;
+pub mod controller;
 pub mod db;
 pub mod effects;
 pub mod feedback;
@@ -33,6 +34,7 @@ pub mod session;
 pub mod settings;
 pub mod setup;
 pub mod share;
+pub mod sources;
 pub mod split;
 pub mod storage;
 /// Songs: the core's (core/src/track.rs).
