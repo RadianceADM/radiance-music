@@ -1306,8 +1306,8 @@ impl Ui {
             rms: rms::Rms::default(),
             split_toggle: gtk::Button::builder().valign(gtk::Align::Center).css_classes(["flat"]).visible(false).build(),
             split_button: gtk::Button::builder()
-                .label("Split this song")
-                .tooltip_text("Splits it into the voice and the music on the split server (about 3 minutes, while it plays). Then No vocals and Vocals only switch at once.")
+                .child(&adw::ButtonContent::builder().icon_name("edit-cut-symbolic").label("Split this song").build())
+                .tooltip_text("Into Music and Vocals (a few seconds), or four parts for the Mixer (about 3 minutes). Then No vocals and Vocals only switch at once.")
                 .halign(gtk::Align::Start)
                 .css_classes(["pill-button"])
                 .visible(false)
@@ -1376,6 +1376,7 @@ impl Ui {
         let steps: Vec<(&'static str, Step)> = vec![
             ("search", Box::new(|ui| ui.render_results(""))),
             ("the last song", Box::new(|ui| {
+                ui.get_two_part_ready();
                 ui.restore_session();
                 ui.render_playlist_nav();
                 ui.start_servers();
@@ -2148,7 +2149,7 @@ impl Ui {
             if let Some(me) = me.upgrade() {
                 let t = me.current.borrow().clone();
                 if let Some(t) = t {
-                    me.split_now(&t);
+                    me.split_clicked(&t);
                 }
             }
         });
@@ -2928,7 +2929,7 @@ impl Ui {
         self.prefetch_next();
         if self.voice.get() != Voice::Song {
             if let Some(after) = self.next_track() {
-                self.request_split(&self.saved_copy(&after)); // ready by the time it plays
+                self.voice_split(&self.saved_copy(&after), false); // ready by the time it plays
             }
         }
         self.update_voice_status();
@@ -2967,11 +2968,11 @@ impl Ui {
         if v == Voice::Song || split::ready(&t, v).is_some() {
             self.switch_half(&t);
         } else {
-            self.split_now(&t);
+            self.voice_split(&t, true);
         }
         if v != Voice::Song {
             if let Some(next) = self.next_track() {
-                self.request_split(&self.saved_copy(&next)); // ready by the time it plays
+                self.voice_split(&self.saved_copy(&next), false); // ready by the time it plays
             }
         }
         self.replan();
@@ -3279,8 +3280,13 @@ impl Ui {
     }
 
     fn queue_split(self: &Rc<Self>, t: &Track, first: bool) {
-        // done when the four parts are there (two halves alone: split again, for the mixer)
-        if !self.can_split() || t.video || split::done(t) {
+        // done as asked: in two (the fast split, #43) once Music and Vocals are there, else
+        // once the four parts are (two halves alone: split again, for the mixer)
+        if t.video || split::done(t) {
+            return;
+        }
+        // four: this computer's splitter or the split server; two: inside the app, here
+        if !self.can_split() && !(split::wants_two(t) && self.can_split_two()) {
             return;
         }
         let key = t.key();
@@ -3371,7 +3377,7 @@ impl Ui {
         }
         let t = self.split_queue.borrow_mut().remove(0);
         let (server, local) = (self.settings.borrow().split.clone(), self.settings.borrow().local_split.clone());
-        if server.is_none() && local.is_none() {
+        if server.is_none() && local.is_none() && !split::wants_two(&t) {
             return;
         }
         let uri = self.uri_plain(&t);
@@ -3557,24 +3563,40 @@ impl Ui {
         let splitting_key = self.splitting.borrow().as_ref().map(|t| t.key());
         // not while it's being split or waiting in line for it
         let queued = |t: &Track| self.split_queue.borrow().iter().any(|x| x.key() == t.key());
+        // Music + Vocals already (the fast split): Four parts is what's left, where it can work
+        let halves = cur.as_ref().is_some_and(|t| Self::shown_parts(t).len() == 2 && !split::has_parts(t));
         let can = cur.as_ref().is_some_and(|t| {
             let there = self.splits_on_server(t).is_some();
-            (self.can_split() || there)
+            let more = if there {
+                Self::shown_parts(t).is_empty()
+            } else if halves {
+                self.can_split()
+            } else {
+                Self::shown_parts(t).is_empty() && (self.can_split() || self.can_split_two())
+            };
+            more
                 && !t.video
                 && (self.online.get() || t.file.is_some()) // offline, a song from the internet can't be fetched
-                && Self::shown_parts(t).is_empty()
                 && splitting_key.as_deref() != Some(t.key().as_str())
                 && !queued(t)
                 && !self.away_on_server(t)
         });
         self.split_button.set_visible(can);
+        if let Some(c) = self.split_button.child().and_downcast::<adw::ButtonContent>() {
+            c.set_label(if halves { "Split in four parts" } else { "Split this song" });
+        }
+        self.split_button.set_tooltip_text(Some(if halves {
+            "Drums, Bass, Other and Vocals for the Mixer (about 3 minutes, while it plays)"
+        } else {
+            "Into Music and Vocals (a few seconds), or four parts for the Mixer (about 3 minutes). Then No vocals and Vocals only switch at once."
+        }));
         let waiting = self.split_queue.borrow().len();
         // the vocals choices only where they can work (owner, 2026-11-04: "do not offer if not possible")
         self.voice_group.set_sensitive(true);
         let video = cur.as_ref().is_some_and(|t| t.video);
         let text = if Self::split_paused() && waiting > 0 {
             format!("Splitting is paused ({waiting} waiting). Resume it on Liked Songs or in the menu.")
-        } else if !self.can_split() && !cur.as_ref().is_some_and(|t| self.splits_on_server(t).is_some() || !Self::shown_parts(t).is_empty()) {
+        } else if !self.can_split() && !self.can_split_two() && !cur.as_ref().is_some_and(|t| self.splits_on_server(t).is_some() || !Self::shown_parts(t).is_empty()) {
             self.voice_group.set_sensitive(false);
             // (not over a server's split, in the same card)
             if self.has_away() { String::new() } else { "No vocals / Vocals only and the Mixer's parts need splitting: set it up in the menu, Splitting…".to_string() }
@@ -4073,12 +4095,16 @@ impl Ui {
                 let t1 = t.clone();
                 add(&mine, &format!("Split on {}", s.name), "split", Box::new(move |me| me.split_on_server(&t1)));
             }
-        } else if self.can_split() && !t.video && !split::done(&t) && (self.online.get() || t.file.is_some()) {
-            let t1 = t.clone();
-            add(&mine, "Split Vocals", "split", Box::new(move |me| {
-                me.split_now(&t1);
-                me.toast(&format!("Splitting “{}”: about 3 minutes", t1.title));
-            }));
+        } else if !t.video && (self.online.get() || t.file.is_some()) {
+            let halves = !Self::shown_parts(&t).is_empty();
+            if !halves && self.can_split_two() {
+                let t1 = t.clone();
+                add(&mine, "Split: Music + Vocals (Fast)", "split", Box::new(move |me| me.split_as(&t1, true)));
+            }
+            if self.can_split() && !split::has_parts(&t) {
+                let t1 = t.clone();
+                add(&mine, if halves { "Split in Four Parts" } else { "Split: Four Parts" }, "split-four", Box::new(move |me| me.split_as(&t1, false)));
+            }
         }
         menu.append_section(None, &mine);
 
@@ -5085,9 +5111,9 @@ impl Ui {
             return;
         }
         if self.voice.get() != Voice::Song {
-            self.split_now(&t);
+            self.voice_split(&t, true);
             if let Some(next) = self.next_track() {
-                self.request_split(&self.saved_copy(&next));
+                self.voice_split(&self.saved_copy(&next), false);
             }
         }
         self.update_voice_status();
@@ -6119,6 +6145,110 @@ impl Ui {
     fn can_split(&self) -> bool {
         let s = self.settings.borrow();
         s.split.is_some() || s.local_split.is_some()
+    }
+
+    /// What the fast split needs (about 50 MB: its two models and ONNX Runtime), fetched quietly
+    /// at the start when it isn't here yet (owner: what the app needs comes at the first open), so
+    /// a split is a few seconds the first time too. Gently while Bluetooth music plays (two_part).
+    fn get_two_part_ready(self: &Rc<Self>) {
+        if std::env::var_os("RADIANCE_SHOT").is_some() || !self.online.get() || crate::two_part::ready().is_some() {
+            return;
+        }
+        bg(
+            || crate::two_part::fetch(&|_| {}).map(|_| ()),
+            |done: Result<(), String>| {
+                if let Err(e) = done {
+                    crate::log::note(&format!("the fast split's files: {e} (fetched again when a song is split in two)"));
+                }
+            },
+        );
+    }
+
+    /// The fast split (Music + Vocals, #43) can run here: it's inside the app, and what it
+    /// needs is here or can be fetched.
+    fn can_split_two(&self) -> bool {
+        crate::two_part::ready().is_some() || self.online.get()
+    }
+
+    /// Split as picked on the Split button or the song's menu: in two (Music + Vocals, a few
+    /// seconds) or in four (Drums, Bass, Other, Vocals; a few minutes).
+    fn split_as(self: &Rc<Self>, t: &Track, two: bool) {
+        split::ask_two(t, two);
+        self.split_now(t);
+        self.toast(&if two {
+            format!("Splitting “{}” into Music and Vocals: a few seconds", t.title)
+        } else {
+            format!("Splitting “{}” into four parts: about 3 minutes", t.title)
+        });
+    }
+
+    /// For the vocals choices (No vocals, Vocals only): split in four where this computer (or
+    /// its split server) can, else in two, the fast split inside the app. `now`: first in line.
+    fn voice_split(self: &Rc<Self>, t: &Track, now: bool) {
+        if !self.can_split() && self.splits_on_server(t).is_none() && !split::done(t) {
+            if t.video || !self.can_split_two() {
+                return;
+            }
+            split::ask_two(t, true);
+        }
+        if now {
+            self.split_now(t);
+        } else {
+            self.request_split(t);
+        }
+    }
+
+    /// The Split button: a server's song splits there; else the two choices (in a pop-over)
+    /// where both can work, or the one that can (owner 2026-11-04: "do not offer if not possible").
+    fn split_clicked(self: &Rc<Self>, t: &Track) {
+        if self.splits_on_server(t).is_some() {
+            self.split_now(t);
+            return;
+        }
+        let halves = !Self::shown_parts(t).is_empty(); // Music + Vocals already: four is what's left
+        match (!halves && self.can_split_two(), self.can_split()) {
+            (true, true) => self.split_choices(t),
+            (true, false) => self.split_as(t, true),
+            (false, true) => self.split_as(t, false),
+            (false, false) => {}
+        }
+    }
+
+    /// The Split button's two choices (owner 2026-11-05: "Split button asks").
+    fn split_choices(self: &Rc<Self>, t: &Track) {
+        let pop = gtk::Popover::builder().position(gtk::PositionType::Top).build();
+        pop.set_parent(&self.split_button);
+        let column = gtk::Box::builder().orientation(gtk::Orientation::Vertical).spacing(4).margin_top(6).margin_bottom(6).margin_start(6).margin_end(6).build();
+        let choices = [
+            (true, "audio-input-microphone-symbolic", "Music + Vocals (fast)", "A few seconds. No vocals and Vocals only"),
+            (false, "view-grid-symbolic", "Four parts", "About 3 minutes. Drums, Bass, Other and Vocals in the Mixer"),
+        ];
+        for (two, icon, title, note) in choices {
+            let row = gtk::Box::builder().orientation(gtk::Orientation::Horizontal).spacing(12).build();
+            row.append(&gtk::Image::from_icon_name(icon));
+            let words = gtk::Box::builder().orientation(gtk::Orientation::Vertical).spacing(2).build();
+            words.append(&gtk::Label::builder().label(title).xalign(0.0).css_classes(["heading"]).build());
+            words.append(&gtk::Label::builder().label(note).xalign(0.0).css_classes(["dim-label", "caption"]).build());
+            row.append(&words);
+            let b = gtk::Button::builder().child(&row).css_classes(["flat"]).build();
+            let (me, t, p) = (Rc::downgrade(self), t.clone(), pop.downgrade());
+            b.connect_clicked(move |_| {
+                if let Some(p) = p.upgrade() {
+                    p.popdown();
+                }
+                if let Some(me) = me.upgrade() {
+                    me.split_as(&t, two);
+                }
+            });
+            column.append(&b);
+        }
+        pop.set_child(Some(&column));
+        // (let go of it once closed: a new one each time)
+        pop.connect_closed(|p| {
+            let p = p.clone();
+            glib::idle_add_local_once(move || p.unparent());
+        });
+        pop.popup();
     }
 
     /// Find Lyrics Again (the song's menu, Show Lyrics): see relook_lyrics.
