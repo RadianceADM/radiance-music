@@ -114,6 +114,27 @@ pub fn queue_note(nothing: bool, ahead: usize, adding: bool) -> String {
     }
 }
 
+/// A calendar day as a number: two days' numbers differ by the days between them, as the Linux
+/// app has always counted them (a month as 31 days: only "Today" / "Yesterday" use it).
+pub fn day_number(y: i32, m: u32, d: u32) -> i64 {
+    y as i64 * 372 + m as i64 * 31 + d as i64
+}
+
+/// History's day heading for a play `days_ago` calendar days and `hours_ago` hours back:
+/// "Today", "Yesterday", its weekday within a week (by the hour), else its full date.
+pub fn day_label(days_ago: i64, hours_ago: i64, weekday: &str, full_date: &str) -> String {
+    match days_ago {
+        0 => "Today".to_string(),
+        1 => "Yesterday".to_string(),
+        _ if hours_ago < 24 * 7 => weekday.to_string(),
+        _ => full_date.to_string(),
+    }
+}
+
+/// History when nothing was played yet, and the most plays it lists.
+pub const HISTORY_EMPTY: &str = "Songs you play show up here, with when you played them.";
+pub const HISTORY_ROWS: usize = 400;
+
 /// The queue panel's "Played before": this many songs, and its words.
 pub const RECENT_ROWS: usize = 5;
 pub const PLAYED_BEFORE_NOTE: &str = "Go back to one: it plays now, then the queue carries on";
@@ -188,6 +209,18 @@ mod tests {
         assert_eq!(counts_text(0, 0), "");
         assert_eq!(counts_text(1, 0), "Played once");
         assert_eq!(counts_text(12, 3), "Played 12 times · skipped 3 times");
+    }
+
+    #[test]
+    fn day_labels_count_back_from_today() {
+        assert_eq!(day_label(0, 3, "Friday", "Friday, November 6, 2026"), "Today");
+        assert_eq!(day_label(1, 20, "Thursday", "x"), "Yesterday");
+        assert_eq!(day_label(3, 70, "Tuesday", "x"), "Tuesday");
+        assert_eq!(day_label(7, 160, "Friday", "x"), "Friday", "under a week by the hour, as the Linux app counts");
+        assert_eq!(day_label(9, 216, "Wednesday", "Wednesday, October 28, 2026"), "Wednesday, October 28, 2026");
+        assert_eq!(day_label(-1, -5, "Saturday", "x"), "Saturday", "a play from the future (a clock moved): its weekday, as the Linux app shows");
+        assert_eq!(day_number(2026, 11, 6) - day_number(2026, 10, 31), 6);
+        assert_eq!(HISTORY_EMPTY, "Songs you play show up here, with when you played them.");
     }
 
     #[test]

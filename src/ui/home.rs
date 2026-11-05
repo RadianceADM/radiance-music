@@ -968,37 +968,19 @@ impl Ui {
         self.history_box.append(&gtk::Label::builder().label("History").xalign(0.0).css_classes(["page-title"]).build());
         let plays = self.history.borrow().clone();
         if plays.is_empty() {
-            self.history_box.append(&gtk::Label::builder().label("Songs you play show up here, with when you played them.").xalign(0.0).css_classes(["dim-label"]).build());
+            self.history_box.append(&gtk::Label::builder().label(radiance_core::library::HISTORY_EMPTY).xalign(0.0).css_classes(["dim-label"]).build());
             return;
         }
-        let today = glib::DateTime::now_local().ok();
-        let day_of = |at: i64| glib::DateTime::from_unix_local(at).ok();
-        let label_for = |d: &glib::DateTime| -> String {
-            let Some(t) = &today else { return d.format("%A, %B %-d").map(|s| s.to_string()).unwrap_or_default() };
-            let days = (t.ymd().0 as i64 * 372 + t.ymd().1 as i64 * 31 + t.ymd().2 as i64) - (d.ymd().0 as i64 * 372 + d.ymd().1 as i64 * 31 + d.ymd().2 as i64);
-            match t.difference(d).as_hours() {
-                _ if days == 0 => "Today".into(),
-                _ if days == 1 => "Yesterday".into(),
-                h if h < 24 * 7 => d.format("%A").map(|s| s.to_string()).unwrap_or_default(),
-                _ => d.format("%A, %B %-d, %Y").map(|s| s.to_string()).unwrap_or_default(),
-            }
-        };
+        let now = glib::DateTime::now_local().map(|d| d.to_unix()).unwrap_or_default();
         let all: Rc<Vec<Track>> = Rc::new(plays.iter().map(|(t, _)| t.clone()).collect());
-        let mut group: Option<(String, adw::PreferencesGroup)> = None;
-        for (i, (t, at)) in plays.iter().enumerate().take(400) {
-            let when = day_of(*at);
-            let name = when.as_ref().filter(|_| *at > 0).map(&label_for).unwrap_or_else(|| "Earlier".into());
-            if group.as_ref().map(|g| g.0 != name).unwrap_or(true) {
-                let g = adw::PreferencesGroup::builder().title(&name).build();
-                self.history_box.append(&g);
-                group = Some((name, g));
-            }
-            let row = self.track_row(t, Place::List(all.clone(), i));
-            if let Some(d) = when.filter(|_| *at > 0) {
-                let time = d.format("%-I:%M %p").map(|s| s.to_string()).unwrap_or_default();
-                row.add_suffix(&gtk::Label::builder().label(&time).css_classes(["dim-label", "numeric"]).valign(gtk::Align::Center).build());
-            }
-            if let Some((_, g)) = &group {
+        for day in crate::history::days(&plays, now) {
+            let g = adw::PreferencesGroup::builder().title(&day.label).build();
+            self.history_box.append(&g);
+            for play in &day.plays {
+                let row = self.track_row(&play.track, Place::List(all.clone(), play.index));
+                if !play.time.is_empty() {
+                    row.add_suffix(&gtk::Label::builder().label(&play.time).css_classes(["dim-label", "numeric"]).valign(gtk::Align::Center).build());
+                }
                 g.add(&row);
             }
         }
