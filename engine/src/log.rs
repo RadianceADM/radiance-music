@@ -5,7 +5,6 @@
 use std::io::Write;
 use std::sync::Mutex;
 
-use gtk::glib;
 
 /// The last line written and when: the same line again within 10 s isn't.
 static LAST: Mutex<Option<(String, std::time::Instant)>> = Mutex::new(None);

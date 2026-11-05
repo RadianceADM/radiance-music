@@ -8,27 +8,25 @@
 // Windows: a windowed program (no console window beside it)
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
-mod align;
-mod archive;
-mod art;
-mod beat;
-mod db;
-mod effects;
-mod feedback;
-mod fx;
-mod genre;
-mod library;
-mod log;
-mod limiter;
-mod lyrics;
-mod mix;
+use radiance_engine::align;
+use radiance_engine::archive;
+use radiance_engine::art;
+use radiance_engine::beat;
+use radiance_engine::db;
+use radiance_engine::effects;
+use radiance_engine::feedback;
+use radiance_engine::genre;
+use radiance_engine::library;
+use radiance_engine::log;
+use radiance_engine::lyrics;
+use radiance_engine::mix;
 #[cfg(unix)]
 mod mpris;
 // Windows' own media controls, with the same face as Linux's MPRIS
 #[cfg(windows)]
 #[path = "smtc.rs"]
 mod mpris;
-mod net;
+use radiance_engine::net;
 // Windows' notification area: the app's icon while it's open (#37)
 #[cfg(windows)]
 mod tray;
@@ -36,29 +34,29 @@ mod tray;
 #[cfg(windows)]
 mod speaker;
 #[cfg(feature = "onnx-split")]
-mod onnx_split;
-mod player;
-mod relay;
-mod report;
-mod servers;
-mod session;
-mod settings;
-mod setup;
-mod share;
-mod split;
-mod storage;
-mod track;
+use radiance_engine::onnx_split;
+use radiance_engine::player;
+use radiance_engine::relay;
+use radiance_engine::report;
+use radiance_engine::servers;
+use radiance_engine::session;
+use radiance_engine::settings;
+use radiance_engine::setup;
+use radiance_engine::share;
+use radiance_engine::split;
+use radiance_engine::storage;
+use radiance_engine::track;
 mod ui;
-mod update;
+use radiance_engine::update;
 mod watch;
-mod youtube;
+use radiance_engine::youtube;
 
 use std::fs;
 
 use adw::prelude::*;
 use gtk::{gdk, glib};
 
-pub const APP_ID: &str = "io.github.radianceadm.Music";
+pub use radiance_engine::APP_ID;
 
 const ICONS: [(&str, &str); 11] = [
     ("lossless-symbolic", include_str!("../data/icons/lossless-symbolic.svg")),

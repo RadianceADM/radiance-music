@@ -678,7 +678,7 @@ impl Player {
     pub fn new(on_event: impl Fn(Event) + 'static) -> Result<Player, String> {
         gst::init().map_err(|e| e.to_string())?;
         // Windows: the GTK 4 video sink is inside the app (music videos)
-        #[cfg(windows)]
+        #[cfg(all(windows, feature = "gtk"))]
         let _ = gstgtk4::plugin_register_static();
         let on_event: Rc<dyn Fn(Event)> = Rc::new(on_event);
         let active = Rc::new(Cell::new(0));
@@ -1047,7 +1047,8 @@ impl Player {
     }
 
     /// Plays a video: `picture` and `sound` are its two streams. Returns what
-    /// to show it in (a GdkPaintable for a gtk::Picture).
+    /// to show it in (a GdkPaintable for a gtk::Picture; the GTK app's, feature "gtk").
+    #[cfg(feature = "gtk")]
     pub fn load_video(&self, picture: &str, sound: &str) -> Result<gtk::gdk::Paintable, String> {
         self.stop();
         let silent = std::env::var_os("RADIANCE_SILENT").is_some();

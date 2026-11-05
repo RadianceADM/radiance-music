@@ -6,8 +6,7 @@ use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
-use gtk::prelude::*;
-use gtk::{gio, glib};
+use gio::prelude::*;
 
 use crate::track::{file_name, Source, Track};
 use crate::{lyrics, net, youtube};

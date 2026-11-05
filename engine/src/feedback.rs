@@ -21,7 +21,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::OnceLock;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use gtk::glib;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 

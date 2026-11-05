@@ -15,7 +15,7 @@ pub struct Pixels {
 /// next time instead of being fetched again.
 fn web_bytes(url: &str) -> Option<Vec<u8>> {
     let hash = url.bytes().fold(0xcbf29ce484222325u64, |h, b| (h ^ b as u64).wrapping_mul(0x100000001b3));
-    let path = gtk::glib::user_cache_dir().join("radiance-music/art").join(format!("{hash:016x}"));
+    let path = glib::user_cache_dir().join("radiance-music/art").join(format!("{hash:016x}"));
     if let Ok(bytes) = std::fs::read(&path) {
         return Some(bytes);
     }

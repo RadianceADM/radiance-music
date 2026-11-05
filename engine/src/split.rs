@@ -13,7 +13,6 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use gst::prelude::*;
-use gtk::glib;
 
 use crate::net;
 use crate::settings::{LocalSplitter, SplitServer};

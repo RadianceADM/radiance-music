@@ -8,13 +8,12 @@ use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-use gtk::glib;
 
 use crate::settings::LocalSplitter;
 
 /// The two scripts, kept up to date with the app.
-const SPLIT_PY: &str = include_str!("../server/split.py");
-const ALIGN_PY: &str = include_str!("../server/align.py");
+const SPLIT_PY: &str = include_str!("../../server/split.py");
+const ALIGN_PY: &str = include_str!("../../server/align.py");
 
 /// What splitting needs (see TIMINGS): up to 2.7 GB of memory while it works;
 /// the install is ~1.2 GB and the models (four parts, six parts, word timing) ~1.4 GB more.

@@ -130,7 +130,7 @@ impl Track {
 
 /// The first 16 hex digits of `text`'s SHA-256 (a short name that stays the same).
 pub fn digest(text: &str) -> String {
-    gtk::glib::compute_checksum_for_data(gtk::glib::ChecksumType::Sha256, text.as_bytes()).map(|h| h.chars().take(16).collect()).unwrap_or_default()
+    glib::compute_checksum_for_data(glib::ChecksumType::Sha256, text.as_bytes()).map(|h| h.chars().take(16).collect()).unwrap_or_default()
 }
 
 /// 245.3 -> "4:05".

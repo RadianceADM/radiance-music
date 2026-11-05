@@ -12,7 +12,6 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use gtk::glib;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::Value;
 

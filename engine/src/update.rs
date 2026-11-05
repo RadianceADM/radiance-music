@@ -24,8 +24,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use gtk::glib;
-use gtk::glib::prelude::*;
+use glib::prelude::*;
 use serde_json::{json, Value};
 
 use crate::net;
@@ -499,10 +498,10 @@ pub fn wait_for_old() {
         return;
     }
     std::env::remove_var(AFTER_UPDATE);
-    let Ok(bus) = gtk::gio::bus_get_sync(gtk::gio::BusType::Session, gtk::gio::Cancellable::NONE) else { return };
+    let Ok(bus) = gio::bus_get_sync(gio::BusType::Session, gio::Cancellable::NONE) else { return };
     for _ in 0..100 {
         let owned = bus
-            .call_sync(Some("org.freedesktop.DBus"), "/org/freedesktop/DBus", "org.freedesktop.DBus", "NameHasOwner", Some(&(crate::APP_ID,).to_variant()), Some(glib::VariantTy::new("(b)").unwrap()), gtk::gio::DBusCallFlags::NONE, 1000, gtk::gio::Cancellable::NONE)
+            .call_sync(Some("org.freedesktop.DBus"), "/org/freedesktop/DBus", "org.freedesktop.DBus", "NameHasOwner", Some(&(crate::APP_ID,).to_variant()), Some(glib::VariantTy::new("(b)").unwrap()), gio::DBusCallFlags::NONE, 1000, gio::Cancellable::NONE)
             .ok()
             .and_then(|v| v.child_value(0).get::<bool>())
             .unwrap_or(false);
@@ -535,7 +534,6 @@ pub enum FlatpakStep {
 /// (the first time, the computer asks once whether Radiance Music may update
 /// itself). `step` hears how it goes. Window thread.
 pub fn flatpak_update(step: impl Fn(FlatpakStep) + 'static) {
-    use gtk::gio;
     let step = std::rc::Rc::new(step);
     glib::spawn_future_local(async move {
         let bus = match gio::bus_get_future(gio::BusType::Session).await {
@@ -607,7 +605,6 @@ fn spawn_args() -> Result<glib::Variant, String> {
 /// Opens the newest installed version of this Flatpak (it waits for this one to
 /// close). Window thread.
 pub fn flatpak_open_newest() -> Result<(), String> {
-    use gtk::gio;
     let args = spawn_args()?;
     let bus = gio::bus_get_sync(gio::BusType::Session, gio::Cancellable::NONE).map_err(|e| e.to_string())?;
     bus.call_sync(Some(PORTAL), PORTAL_PATH, PORTAL, "Spawn", Some(&args), Some(glib::VariantTy::new("(u)").unwrap()), gio::DBusCallFlags::NONE, 10_000, gio::Cancellable::NONE)

@@ -89,7 +89,7 @@ pub fn system() -> String {
 /// A random id made once for this install (no personal data): reports from the same
 /// install can be told apart from others, and the admin can limit how many come.
 pub fn install_id() -> String {
-    let path = gtk::glib::user_data_dir().join("radiance-music/install-id");
+    let path = glib::user_data_dir().join("radiance-music/install-id");
     if let Some(id) = std::fs::read_to_string(&path).ok().map(|s| s.trim().to_string()).filter(|s| s.len() == 36) {
         return id;
     }
@@ -109,15 +109,15 @@ pub fn install_id() -> String {
 /// The app's log, its newest part (up to MOST_LOG, whole lines), with the person's
 /// name, home folder and email addresses taken out.
 pub fn recent_log() -> String {
-    let dir = gtk::glib::user_cache_dir().join("radiance-music");
+    let dir = glib::user_cache_dir().join("radiance-music");
     let mut text = String::new();
     for name in ["app.log.1", "app.log"] {
         if let Ok(t) = std::fs::read_to_string(dir.join(name)) {
             text.push_str(&t);
         }
     }
-    let home = gtk::glib::home_dir().to_string_lossy().to_string();
-    let user = gtk::glib::user_name().to_string_lossy().to_string();
+    let home = glib::home_dir().to_string_lossy().to_string();
+    let user = glib::user_name().to_string_lossy().to_string();
     let clean = scrub(&text, &home, &user);
     newest(&clean, MOST_LOG)
 }

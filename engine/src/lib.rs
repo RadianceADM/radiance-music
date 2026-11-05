@@ -1,0 +1,39 @@
+//! Radiance Music's engine: everything that isn't a screen (sources, the player and its parts,
+//! effects, lyrics, the library, splitting, servers, updates, …), shared by the GTK app and the
+//! Windows app (WinUI 3, through the ffi crate). Issue #45.
+//!
+//! SPDX-License-Identifier: GPL-3.0-or-later
+
+/// The app's id (GApplication, D-Bus, the desktop file, Flatpak).
+pub const APP_ID: &str = "io.github.radianceadm.Music";
+
+pub mod align;
+pub mod archive;
+pub mod art;
+pub mod beat;
+pub mod db;
+pub mod effects;
+pub mod feedback;
+pub mod fx;
+pub mod genre;
+pub mod library;
+pub mod limiter;
+pub mod log;
+pub mod lyrics;
+pub mod mix;
+pub mod net;
+#[cfg(feature = "onnx-split")]
+pub mod onnx_split;
+pub mod player;
+pub mod relay;
+pub mod report;
+pub mod servers;
+pub mod session;
+pub mod settings;
+pub mod setup;
+pub mod share;
+pub mod split;
+pub mod storage;
+pub mod track;
+pub mod update;
+pub mod youtube;

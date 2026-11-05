@@ -4,7 +4,6 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use gtk::glib;
 
 /// How many files, how many bytes.
 #[derive(Clone, Copy, Default)]
@@ -59,9 +58,9 @@ pub fn free_space(p: &Path) -> u64 {
 /// Free space on the drive holding `p`, in bytes (Windows: as GIO reads it).
 #[cfg(not(unix))]
 pub fn free_space(p: &Path) -> u64 {
-    use gtk::gio::prelude::*;
-    gtk::gio::File::for_path(p)
-        .query_filesystem_info("filesystem::free", gtk::gio::Cancellable::NONE)
+    use gio::prelude::*;
+    gio::File::for_path(p)
+        .query_filesystem_info("filesystem::free", gio::Cancellable::NONE)
         .map(|i| i.attribute_uint64("filesystem::free"))
         .unwrap_or(0)
 }

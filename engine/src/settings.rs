@@ -4,7 +4,6 @@
 use std::fs;
 use std::path::PathBuf;
 
-use gtk::glib;
 use serde_json::{json, Value};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

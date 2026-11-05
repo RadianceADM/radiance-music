@@ -4,7 +4,6 @@
 //! every play, the latest 1000 are shown). Saved every few seconds while
 //! playing; restored at start, so play carries on from the same spot.
 
-use gtk::glib;
 
 use crate::track::Track;
 

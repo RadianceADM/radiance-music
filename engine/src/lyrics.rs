@@ -205,7 +205,7 @@ pub(crate) fn even_hums(line: &mut Line) {
 }
 
 /// A line's words over its time, each by its length (karaoke without word times).
-pub(crate) fn spread(text: &str, start: f64, end: f64) -> Vec<Word> {
+pub fn spread(text: &str, start: f64, end: f64) -> Vec<Word> {
     let pieces: Vec<String> = text.split_inclusive(' ').map(String::from).collect();
     let total: usize = pieces.iter().map(|p| p.trim().chars().count().max(1)).sum();
     let span = (end - start).max(0.3);
