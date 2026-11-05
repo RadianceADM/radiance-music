@@ -15,7 +15,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-use radiance_core::library::Saved;
+use radiance_core::library::{self as shelf, GroupKind, Saved};
 use radiance_core::queue::{self, Queue, Repeat, Step};
 use radiance_core::search;
 use radiance_core::trouble::{self, After};
@@ -45,6 +45,50 @@ pub enum Change {
     Liked,
     /// A short note to show (read it with toast()).
     Toast,
+    /// Albums, Artists, Genres (the liked songs grouped; genres as they're found).
+    Library,
+    /// A song played (History).
+    History,
+}
+
+/// Liked Songs as a page: the songs shown (A to Z, the search applied), the words under it,
+/// the A to Z rail's letters (each with its first row; None: faint), and Fix missing's label
+/// (None: nothing missing) while `fixing`.
+#[derive(Clone, Debug)]
+pub struct LikedPage {
+    pub songs: Vec<(Track, Saved)>,
+    pub note: String,
+    pub letters: Vec<(char, Option<usize>)>,
+    pub fix: Option<String>,
+    pub fixing: bool,
+}
+
+/// An album's, an artist's or a genre's tile: its name, the line under it, the art of its
+/// first song, round for an artist.
+#[derive(Clone, Debug)]
+pub struct Tile {
+    pub name: String,
+    pub sub: String,
+    pub art: String,
+    pub round: bool,
+}
+
+/// An album's, artist's or genre's page.
+#[derive(Clone, Debug)]
+pub struct GroupPage {
+    pub title: String,
+    pub sub: String,
+    pub art: String,
+    pub round: bool,
+    pub songs: Vec<Track>,
+}
+
+/// Liked songs as Liked Songs shows them: A to Z by title, those matching `q`.
+fn shown_liked(liked: &[(Track, Saved)], q: &str) -> Vec<(Track, Saved)> {
+    let q = q.trim();
+    let mut v: Vec<(Track, Saved)> = liked.iter().filter(|(t, _)| q.is_empty() || crate::track::matches(t, q)).cloned().collect();
+    v.sort_by_cached_key(|(t, _)| crate::track::file_key(&t.title));
+    v
 }
 
 /// Told when something changed: on the engine's thread, so it must hand it on quickly.
@@ -53,7 +97,7 @@ pub trait Listener: Send + Sync + 'static {
 }
 
 /// A list on screen that a song is played from.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ListRef {
     /// Search: your liked songs that match.
     Mine,
@@ -69,6 +113,14 @@ pub enum ListRef {
     Liked,
     /// The queue.
     Queue,
+    /// Liked Songs as shown: A to Z, its last search (liked_page).
+    LikedShown,
+    /// An album's, an artist's or a genre's liked songs.
+    Group(GroupKind, String),
+    /// History's plays, newest first.
+    History,
+    /// A playlist's songs.
+    Playlist(i64),
 }
 
 /// Search's lists for `query` (None: still being searched).
@@ -150,6 +202,8 @@ struct View {
     liked: Vec<(Track, Saved)>,
     /// Notes to show, oldest first.
     toasts: VecDeque<String>,
+    /// History's plays, newest first (with when, unix seconds).
+    history: Vec<(Track, i64)>,
 }
 
 /// Between the app's threads and the engine's.
@@ -158,6 +212,8 @@ pub(crate) struct Shared {
     pub(crate) sources: Arc<dyn Sources>,
     quitting: AtomicBool,
     view: Mutex<View>,
+    /// Liked Songs' search as last shown (what LikedShown plays).
+    liked_q: Mutex<String>,
 }
 
 impl Shared {
@@ -241,7 +297,9 @@ impl Controller {
                 lyrics: LyricsState::None,
                 liked: Vec::new(),
                 toasts: VecDeque::new(),
+                history: Vec::new(),
             }),
+            liked_q: Mutex::new(String::new()),
         });
         let epoch = EPOCH.fetch_add(1, Ordering::SeqCst) + 1;
         let (ready_tx, ready_rx) = std::sync::mpsc::channel::<()>();
@@ -353,6 +411,63 @@ impl Controller {
         self.shared.view(|v| v.toasts.pop_front())
     }
 
+    /// Liked Songs as a page, searched for `q` (remembered: LikedShown plays what it shows).
+    pub fn liked_page(&self, q: &str) -> LikedPage {
+        *self.shared.liked_q.lock().unwrap_or_else(|e| e.into_inner()) = q.trim().to_string();
+        let liked = self.shared.view(|v| v.liked.clone());
+        let songs = shown_liked(&liked, q);
+        let shown: Vec<Track> = songs.iter().map(|(t, _)| t.clone()).collect();
+        let tracks: Vec<Track> = liked.iter().map(|(t, _)| t.clone()).collect();
+        let (missing, videos) = liking::missing(&tracks);
+        let n = missing.len().max(videos);
+        let fixing = liked.iter().any(|(_, s)| *s == Saved::Saving);
+        LikedPage {
+            note: shelf::liked_note(liked.len(), &crate::library::music_dir().display().to_string(), q.trim(), songs.len()),
+            letters: shelf::letters(&shown),
+            fix: (n > 0).then(|| words::fix_label(n, fixing)),
+            fixing,
+            songs,
+        }
+    }
+
+    /// The Albums, Artists or Genres page's tiles (A to Z).
+    pub fn library(&self, kind: GroupKind) -> Vec<Tile> {
+        let liked: Vec<Track> = self.shared.view(|v| v.liked.iter().map(|(t, _)| t.clone()).collect());
+        shelf::groups(&liked, kind)
+            .into_iter()
+            .map(|g| {
+                let round = kind == GroupKind::Artists;
+                Tile {
+                    sub: if kind == GroupKind::Albums { g.songs[0].credit() } else { shelf::songs_count(g.songs.len()) },
+                    art: crate::art::source_of(&g.songs[0]),
+                    round,
+                    name: g.name,
+                }
+            })
+            .collect()
+    }
+
+    /// An album's, artist's or genre's page.
+    pub fn group(&self, kind: GroupKind, name: &str) -> Option<GroupPage> {
+        let liked: Vec<Track> = self.shared.view(|v| v.liked.iter().map(|(t, _)| t.clone()).collect());
+        let g = shelf::groups(&liked, kind).into_iter().find(|g| g.name == name)?;
+        let n = shelf::songs_count(g.songs.len());
+        Some(GroupPage {
+            title: g.name,
+            sub: if kind == GroupKind::Albums { format!("{} · {n}", g.songs[0].credit()) } else { n },
+            art: crate::art::source_of(&g.songs[0]),
+            round: kind == GroupKind::Artists,
+            songs: g.songs,
+        })
+    }
+
+    /// History by day.
+    pub fn history(&self) -> Vec<crate::history::Day> {
+        let plays = self.shared.view(|v| v.history.clone());
+        let now = glib::DateTime::now_local().map(|d| d.to_unix()).unwrap_or_default();
+        crate::history::days(&plays, now)
+    }
+
     /// 0 to 1 (kept in the settings).
     pub fn set_volume(&self, level: f64) {
         self.post(move |e| e.set_volume(level));
@@ -452,6 +567,8 @@ struct Engine {
     liked: RefCell<Vec<Track>>,
     /// Liked songs being saved now.
     saving: RefCell<HashSet<String>>,
+    /// Liked songs' genres are being looked up.
+    genres_busy: Cell<bool>,
     history: RefCell<Vec<(Track, i64)>>,
     mix: RefCell<Vec<Track>>,
     mix_gen: Cell<u64>,
@@ -495,6 +612,7 @@ impl Engine {
             found: RefCell::new((Some(Vec::new()), Some(Vec::new()))),
             liked: RefCell::default(),
             saving: RefCell::default(),
+            genres_busy: Cell::new(false),
             history: RefCell::default(),
             mix: RefCell::default(),
             mix_gen: Cell::new(0),
@@ -550,6 +668,8 @@ impl Engine {
         self.restore_session();
         self.publish_home();
         self.publish_liked();
+        self.publish_history();
+        self.fill_genres();
         self.refresh_mix();
         // likes that weren't saved yet (offline, or the app closed while saving)
         let unsaved: Vec<Track> = self.liked.borrow().iter().filter(|t| t.file.is_none() && crate::library::saves(t)).cloned().collect();
@@ -603,7 +723,11 @@ impl Engine {
     }
 
     /// The songs of a list on screen.
-    fn list(&self, list: ListRef) -> Vec<Track> {
+    fn list(&self, list: &ListRef) -> Vec<Track> {
+        let q = self.shared.liked_q.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        if let ListRef::Playlist(id) = list {
+            return crate::db::playlist_songs(*id);
+        }
         self.shared.view(|v| match list {
             ListRef::Mine => v.results.mine.clone(),
             ListRef::Lossless => v.results.lossless.clone().unwrap_or_default(),
@@ -612,11 +736,18 @@ impl Engine {
             ListRef::Recent => v.home.recent.clone(),
             ListRef::Liked => v.home.liked.clone(),
             ListRef::Queue => v.queue.0.clone(),
+            ListRef::LikedShown => shown_liked(&v.liked, &q).into_iter().map(|(t, _)| t).collect(),
+            ListRef::Group(kind, name) => {
+                let liked: Vec<Track> = v.liked.iter().map(|(t, _)| t.clone()).collect();
+                shelf::groups(&liked, *kind).into_iter().find(|g| &g.name == name).map(|g| g.songs).unwrap_or_default()
+            }
+            ListRef::History => v.history.iter().map(|(t, _)| t.clone()).collect(),
+            ListRef::Playlist(_) => Vec::new(),
         })
     }
 
     fn play_from(self: &Rc<Self>, list: ListRef, i: usize, key: &str) {
-        let tracks = self.list(list);
+        let tracks = self.list(&list);
         // the song clicked: at its place, or (the list moved since) wherever it is now; gone: nothing
         let Some(i) = tracks.get(i).filter(|t| t.key() == key).map(|_| i).or_else(|| tracks.iter().position(|t| t.key() == key)) else { return };
         if list == ListRef::Queue {
@@ -644,7 +775,7 @@ impl Engine {
     }
 
     fn shuffle_from(self: &Rc<Self>, list: ListRef) {
-        let tracks = self.list(list);
+        let tracks = self.list(&list);
         if !tracks.is_empty() {
             let order = self.shuffled(tracks);
             self.play_list(order, 0);
@@ -938,10 +1069,56 @@ impl Engine {
         let list: Vec<(Track, Saved)> = self.liked.borrow().iter().map(|t| (t.clone(), self.saved_state(t))).collect();
         self.shared.view(|v| v.liked = list);
         self.shared.tell(Change::Liked);
+        self.shared.tell(Change::Library);
+    }
+
+    fn publish_history(&self) {
+        let plays = self.history.borrow().clone();
+        self.shared.view(|v| v.history = plays);
+        self.shared.tell(Change::History);
+    }
+
+    /// Liked songs without genres get them looked up, gently (250 ms apart, in the background),
+    /// as the Linux app does; then stored, and the library drawn again.
+    fn fill_genres(self: &Rc<Self>) {
+        if self.genres_busy.get() {
+            return;
+        }
+        let todo: Vec<Track> = self.liked.borrow().iter().filter(|t| t.genres.is_none()).cloned().collect();
+        if todo.is_empty() {
+            return;
+        }
+        self.genres_busy.set(true);
+        let sources = self.shared.sources.clone();
+        self.bg(
+            move || {
+                todo.iter()
+                    .map(|t| {
+                        std::thread::sleep(Duration::from_millis(250)); // gently
+                        (t.key(), sources.genres(t))
+                    })
+                    .collect::<Vec<_>>()
+            },
+            |e, found| {
+                e.genres_busy.set(false);
+                {
+                    let mut liked = e.liked.borrow_mut();
+                    for (key, g) in found {
+                        if let Some(t) = liked.iter_mut().find(|t| t.key() == key) {
+                            t.genres = Some(g);
+                        }
+                    }
+                }
+                crate::library::store(&e.liked.borrow());
+                e.publish_liked();
+                e.publish_home();
+            },
+        );
     }
 
     /// Liked Songs changed: it, the bar's heart, Home's row and Search's own matches.
-    fn liked_changed(&self) {
+    fn liked_changed(self: &Rc<Self>) {
+        self.fill_genres();
         self.publish_liked();
         self.publish_now();
         self.publish_home();
@@ -1118,6 +1295,7 @@ impl Engine {
         crate::session::played(&mut self.history.borrow_mut(), t);
         self.save_session();
         self.publish_home();
+        self.publish_history();
     }
 
     /// The song's lyrics: looked for (its file, its server, LRCLIB…), then shown.

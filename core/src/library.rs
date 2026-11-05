@@ -53,6 +53,11 @@ pub fn letters(shown: &[Track]) -> Vec<(char, Option<usize>)> {
     AZ.chars().map(|l| (l, shown.iter().position(|t| letter_of(&t.title) == l))).collect()
 }
 
+/// "1 song", "3 songs".
+pub fn songs_count(n: usize) -> String {
+    format!("{n} song{}", if n == 1 { "" } else { "s" })
+}
+
 /// The words under Liked Songs: `total` liked songs kept in `dir`, `found` of them matching `q`.
 pub fn liked_note(total: usize, dir: &str, q: &str, found: usize) -> String {
     if total == 0 {

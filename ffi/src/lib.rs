@@ -23,6 +23,8 @@ pub enum ChangeKind {
     Problem,
     Liked,
     Toast,
+    Library,
+    History,
 }
 
 impl From<Change> for ChangeKind {
@@ -38,6 +40,8 @@ impl From<Change> for ChangeKind {
             Change::Problem => ChangeKind::Problem,
             Change::Liked => ChangeKind::Liked,
             Change::Toast => ChangeKind::Toast,
+            Change::Library => ChangeKind::Library,
+            Change::History => ChangeKind::History,
         }
     }
 }

@@ -8,6 +8,7 @@ use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex, Once};
 use std::time::{Duration, Instant};
 
+use radiance_core::library::GroupKind;
 use radiance_engine::controller::{Change, Controller, ListRef, Listener};
 use radiance_engine::lyrics::Lyrics;
 use radiance_engine::sources::Sources;
@@ -54,6 +55,8 @@ pub struct Fake {
     pub lyrics: Mutex<Option<Lyrics>>,
     /// How long a download (a liked song being saved) takes.
     pub download_wait: Mutex<Duration>,
+    /// What a genre lookup finds.
+    pub genres: Mutex<Vec<String>>,
 }
 
 fn kind_name(k: Kind) -> &'static str {
@@ -99,7 +102,7 @@ impl Sources for Fake {
         std::fs::write(to, b"fLaC a test song").map_err(|e| e.to_string())
     }
     fn genres(&self, _t: &Track) -> Vec<String> {
-        Vec::new()
+        self.genres.lock().unwrap().clone()
     }
 }
 
@@ -604,4 +607,102 @@ fn the_bar_heart_follows_the_song() {
     c.toggle_like(&a.key());
     assert!(until(3.0, || !c.now().liked));
     let _ = toasts_for(&c, &rx, 1.0);
+}
+
+// ------------------------------------------------------------------ the library's pages (stage 2)
+
+/// Liked songs kept before the controller starts (as last time's); `fake` answers for it.
+fn with_liked(liked: &[Track], fake: Arc<Fake>) -> (Controller, Receiver<(Change, Instant)>) {
+    radiance_engine::library::store(liked);
+    let (heard, rx) = listener();
+    let c = Controller::start(heard, fake).unwrap();
+    (c, rx)
+}
+
+/// A liked song with its file here (a short WAV).
+fn liked_song(name: &str, title: &str, artist: &str, album: &str, genres: Option<Vec<&str>>) -> Track {
+    let mut t = wav(name, 20.0);
+    t.title = title.into();
+    t.artist = artist.into();
+    t.album = album.into();
+    t.genres = genres.map(|g| g.into_iter().map(String::from).collect());
+    t
+}
+
+fn titles(v: &[(Track, radiance_core::library::Saved)]) -> Vec<String> {
+    v.iter().map(|(t, _)| t.title.clone()).collect()
+}
+
+#[test]
+fn the_liked_page_filters_like_the_linux_app() {
+    let _g = setup();
+    let liked = vec![liked_song("halo", "Halo", "Beyoncé", "I Am", Some(vec![])), liked_song("another", "Another", "Zed", "", Some(vec![])), liked_song("cielo", "Cielo", "Cara", "", Some(vec![]))];
+    let (c, _rx) = with_liked(&liked, Arc::new(Fake::default()));
+    let page = c.liked_page("");
+    assert_eq!(titles(&page.songs), ["Another", "Cielo", "Halo"], "A to Z");
+    assert_eq!(page.note, format!("3 songs, saved in {}", radiance_engine::library::music_dir().display()));
+    assert_eq!(page.fix, None, "nothing missing");
+    let page = c.liked_page("beyonce");
+    assert_eq!(titles(&page.songs), ["Halo"], "accents and capitals aside");
+    assert_eq!(page.note, "1 of your 3 liked songs matches “beyonce”");
+    assert_eq!(page.letters[7], ('H', Some(0)));
+    assert_eq!(page.letters[0], ('A', None), "no match under A: faint");
+    c.play_from(ListRef::LikedShown, 0, &liked[0].key());
+    assert!(until(5.0, || now_id(&c) == "file-halo"), "plays what's shown");
+    c.quit();
+    radiance_engine::library::store(&[]);
+}
+
+#[test]
+fn albums_artists_and_genres_come_from_the_liked_songs() {
+    let _g = setup();
+    let liked = vec![liked_song("one", "One", "Ann & Bo", "Blue", Some(vec!["Pop"])), liked_song("two", "Two", "Bo", "Blue", Some(vec![])), liked_song("three", "Three", "Cy", "", Some(vec![]))];
+    let (c, _rx) = with_liked(&liked, Arc::new(Fake::default()));
+    let albums = c.library(GroupKind::Albums);
+    assert_eq!(albums.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(), ["Blue", "Singles"]);
+    assert_eq!((albums[0].sub.as_str(), albums[0].round), ("Ann & Bo", false));
+    let artists = c.library(GroupKind::Artists);
+    assert_eq!(artists.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(), ["Ann", "Bo", "Cy"]);
+    assert_eq!((artists[1].sub.as_str(), artists[1].round), ("2 songs", true));
+    assert_eq!(c.library(GroupKind::Genres).iter().map(|t| t.name.as_str()).collect::<Vec<_>>(), ["Other", "Pop"]);
+    let blue = c.group(GroupKind::Albums, "Blue").expect("the album");
+    assert_eq!((blue.title.as_str(), blue.sub.as_str()), ("Blue", "Ann & Bo · 2 songs"));
+    assert_eq!(blue.songs.iter().map(|t| t.title.as_str()).collect::<Vec<_>>(), ["One", "Two"]);
+    let bo = c.group(GroupKind::Artists, "Bo").expect("the artist");
+    assert_eq!((bo.sub.as_str(), bo.round), ("2 songs", true));
+    c.play_from(ListRef::Group(GroupKind::Albums, "Blue".into()), 1, &liked[1].key());
+    assert!(until(5.0, || now_id(&c) == "file-two"));
+    c.quit();
+    radiance_engine::library::store(&[]);
+}
+
+#[test]
+fn genres_are_looked_up_for_liked_songs() {
+    let _g = setup();
+    let fake = Arc::new(Fake::default());
+    *fake.genres.lock().unwrap() = vec!["Jazz".into()];
+    let liked = vec![liked_song("jazzy", "Jazzy", "Dee", "", None)];
+    let (c, rx) = with_liked(&liked, fake);
+    assert_eq!(c.library(GroupKind::Genres)[0].name, "Finding the genre…");
+    assert!(wait_for(&rx, Change::Library, 5.0), "the library changed once they came");
+    assert!(until(2.0, || c.library(GroupKind::Genres).first().is_some_and(|t| t.name == "Jazz")));
+    c.quit();
+    radiance_engine::library::store(&[]);
+}
+
+#[test]
+fn history_groups_today() {
+    let _g = setup();
+    let a = wav("history", 20.0);
+    let (c, _f, rx) = with_songs("history", vec![a.clone()]);
+    c.play_from(ListRef::Songs, 0, &a.key());
+    assert!(wait_for(&rx, Change::History, 5.0));
+    // (the start tells History too: wait for this song's play)
+    assert!(until(5.0, || c.history().first().and_then(|d| d.plays.first()).is_some_and(|p| p.track.key() == a.key())));
+    let days = c.history();
+    assert_eq!(days[0].label, "Today");
+    assert_eq!(days[0].plays[0].track.key(), a.key());
+    c.play_from(ListRef::History, 0, &a.key());
+    assert!(until(3.0, || now_id(&c) == "file-history"));
+    c.quit();
 }
