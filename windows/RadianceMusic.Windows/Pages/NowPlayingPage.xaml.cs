@@ -8,8 +8,9 @@ namespace RadianceMusic.Pages;
 
 public sealed partial class NowPlayingPage : Page
 {
-    /// <summary>Under these widths (px), as the GTK app: no lyrics column (1060), the cover above (860).</summary>
-    private const double Snug = 1060, Narrow = 860;
+    /// <summary>Under these widths of the page (px; the GTK app's window breakpoints, 1060 and 860, less
+    /// the sidebar): no lyrics column, a smaller cover.</summary>
+    private const double Snug = 780, Narrow = 600;
     private EngineHub? hub;
     private readonly LyricFollower follower = new();
     private readonly List<TextBlock> lines = new();
