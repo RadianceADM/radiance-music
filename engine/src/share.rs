@@ -30,7 +30,7 @@ pub const VERSION: u32 = 1;
 /// What a song can come with.
 pub const KINDS: [&str; 9] = ["song", "drums", "bass", "other", "vocals", "music", "lyrics", "cover", "video"];
 /// The parts that travel: Demucs' four, and the two-part split's Music (with Vocals; the phone's
-/// Spleeter, #43). The mixer plays either (split::mix_parts).
+/// Spleeter, #43). The mixer plays either (split::mix_parts). A song split in four is offered as its four.
 const PARTS: [&str; 5] = ["drums", "bass", "other", "vocals", "music"];
 /// The ports it listens on (the first free one): a firewall lets these in for the phone.
 pub const PORTS: std::ops::RangeInclusive<u16> = 47800..=47809;
@@ -90,7 +90,9 @@ fn offer(songs: &[Track], videos: bool) -> Vec<Item> {
         .filter_map(|t| {
             let song = t.file.as_ref()?;
             let mut files = vec![("song".to_string(), file_at(PathBuf::from(song))?)];
-            for p in PARTS {
+            // split in four: its four (its split's Music too would be a fifth file to carry)
+            let four = split::has_parts(t);
+            for p in PARTS.into_iter().filter(|p| !(four && *p == "music")) {
                 if let Some(f) = split::ready_part(t, p).and_then(file_at) {
                     files.push((p.to_string(), f));
                 }
@@ -620,6 +622,15 @@ mod tests {
         let mut kinds: Vec<&str> = offered[0].files.iter().map(|(k, _)| k.as_str()).collect();
         kinds.sort();
         assert_eq!(kinds, ["music", "song", "vocals"]);
+        // a song split in four (whose split wrote Music too) goes as its four: Music would be a fifth file to carry
+        fs::write(dir.join("Four - Parts.m4a"), b"song").unwrap();
+        for p in ["drums", "bass", "other", "vocals", "music"] {
+            fs::write(dir.join(format!("Four - Parts.{p}.ogg")), p).unwrap();
+        }
+        let four = Track::from_json(&json!({ "source": "youtube", "id": "four1", "title": "Parts", "artist": "Four", "file": dir.join("Four - Parts.m4a").to_string_lossy() })).unwrap();
+        let mut kinds: Vec<String> = offer(&[four], false)[0].files.iter().map(|(k, _)| k.clone()).collect();
+        kinds.sort();
+        assert_eq!(kinds, ["bass", "drums", "other", "song", "vocals"]);
         // a phone's Music is taken (its plan isn't filtered out) and kept beside the song
         assert!(KINDS.contains(&"music"));
         let (tx, _rx) = async_channel::unbounded();
