@@ -17,6 +17,8 @@ public partial class App : Application
     {
         InitializeComponent();
         UnhandledException += (_, e) => Crash.Note(e.Exception);
+        DebugSettings.XamlResourceReferenceFailed += (_, e) => Crash.Note("XAML resource: " + e.Message);
+        DebugSettings.BindingFailed += (_, e) => Crash.Note("XAML binding: " + e.Message);
         AppDomain.CurrentDomain.UnhandledException += (_, e) => Crash.Note(e.ExceptionObject);
     }
 
