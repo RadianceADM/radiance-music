@@ -51,6 +51,7 @@ marked 🔜.
 | Two-part songs: Music and Vocals sliders | ✅ | ✅ | 🔜 3 | 🔜 | the phone's split (0.5.17, #43); on the computer, songs split before there were four parts |
 | Keeps the loudness when parts are turned down | ✅ | ✅ | 🔜 3 | ✅ | |
 | Low cut, High cut, Reverb (one setting, every song) | ✅ | ✅ | 🔜 3 | ✅ | built into the computer app since 0.7.14 |
+| Fast split in two (Music + Vocals, a few seconds) | 🔜 | 🔜 | 🔜 3 | 🔜 | computer: inside the app, no Python; the Split button asks "Music + Vocals (fast)" or "Four parts" (#43); phone: its only split (0.5.17) |
 | Split a song on this device | ✅ | ✅ | 🔜 3 | ✅ | computer: Python Demucs, 4 parts (no-Python version in testing, #31); phone: 2 parts (Music + Vocals) with Spleeter, about 16× real time (🔜 0.5.17, #43; Demucs before), 4 parts only from the computer or a server |
 | Liked songs are split by themselves | ✅ | ✅ | 🔜 3 | ❌ | the phone splits when you ask |
 | Split queue, pause / stop splitting | ✅ | ✅ | 🔜 3 | ✅ | |
