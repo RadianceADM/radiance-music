@@ -18,8 +18,12 @@ so a moving background costs next to nothing, and the app looks and behaves like
   Radiance POS Windows app, already working on ribs03). Not Rust windows-reactor: no
   programmatic scrolling (the lyrics must scroll to the sung line), no right-click menus, tray
   issues still open in that preview.
-- **Look:** Radiance's look, Windows-native: the same dark sunset design, layout and pages as
-  today, built with WinUI's own controls (Windows 11 corners, scrollbars, menus, animations).
+- **Look (changed 2026-11-05, on seeing the first window):** "wag mo ipilit yung ui ng sa ubuntu sa
+  winui 3 gawen mo nalang native look and feel" ("ang panget eh"). Windows' own look and feel:
+  NavigationView, Mica, Windows' type ramp and theme colours, native lists and cards; it follows
+  Windows' light/dark setting and Windows' accent colour (dialog). The same pages and words as the
+  Linux app; not its colours or GTK-style banner. Now Playing keeps the moving album-art background
+  (dialog), dark over the art. (Before: "Radiance's look, Windows-native": the dark sunset design.)
 - **Release:** early, as a **separate beta** beside today's GTK Windows app, growing release by
   release; today's app stays what people get until the beta has everything.
 - **Build and test:** on **ribs03** (it's for Windows builds only; the owner's own PC, so builds

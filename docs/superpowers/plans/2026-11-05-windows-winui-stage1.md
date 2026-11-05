@@ -55,9 +55,9 @@ through uniffi 0.31. The GTK app (the root package) calls `core` and `engine` an
 **Words, look and naming**
 - Same words as the Linux app: every text the beta shows comes from `core::words` or is copied from the GTK code line
   cited in the task.
-- Look: Radiance's dark "Stone" look, built from WinUI's own controls. Exact values are in Task 9's `Theme.xaml`.
-  - Rounded corners and soft gradients, nothing sharp.
-  - Every button carries a leading icon.
+- Look (owner, 2026-11-05, replacing "Radiance's dark Stone look"): Windows' own look and feel: NavigationView,
+  Mica, WinUI's type ramp and theme brushes, native lists and cards; follows Windows' light/dark and accent.
+  Now Playing keeps the moving art. Nothing sharp; every button carries a leading icon.
 - The beta's name is "Radiance Music (beta)".
   - Version `0.8.0-beta.1` (the `ffi` crate and the C# assembly). The engine keeps the computer app's version (the
     workspace version).
