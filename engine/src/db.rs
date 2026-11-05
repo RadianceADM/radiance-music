@@ -39,6 +39,7 @@ CREATE TABLE IF NOT EXISTS playlist_songs (
 CREATE TABLE IF NOT EXISTS lyrics_checked (key TEXT PRIMARY KEY, at INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS videos (video_id TEXT PRIMARY KEY, song_key TEXT NOT NULL, file TEXT NOT NULL, saved_at INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS six_parts (key TEXT PRIMARY KEY, at INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS two_parts (key TEXT PRIMARY KEY, at INTEGER NOT NULL);
 ";
 
 fn dir() -> PathBuf {
@@ -226,6 +227,21 @@ pub fn set_six(key: &str, on: bool) {
         write(|c| c.execute("INSERT OR REPLACE INTO six_parts (key, at) VALUES (?1, ?2)", params![key, now()]).map(|_| ()));
     } else {
         write(|c| c.execute("DELETE FROM six_parts WHERE key = ?1", params![key]).map(|_| ()));
+    }
+}
+
+// ------------------------------------------------------------------ two parts
+
+/// The song was asked for in two (Music + Vocals, the fast split, #43), not since in four.
+pub fn wants_two(key: &str) -> bool {
+    with(|c| c.query_row("SELECT 1 FROM two_parts WHERE key = ?1", params![key], |_| Ok(())).optional()).flatten().is_some()
+}
+
+pub fn set_two(key: &str, on: bool) {
+    if on {
+        write(|c| c.execute("INSERT OR REPLACE INTO two_parts (key, at) VALUES (?1, ?2)", params![key, now()]).map(|_| ()));
+    } else {
+        write(|c| c.execute("DELETE FROM two_parts WHERE key = ?1", params![key]).map(|_| ()));
     }
 }
 

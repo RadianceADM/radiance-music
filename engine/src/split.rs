@@ -146,9 +146,31 @@ pub fn has_six(t: &Track) -> bool {
     SIX.iter().all(|p| ready_part(t, p).is_some())
 }
 
-/// Split as it should be: in six when it was ticked for six, else in four.
+/// The song was asked for in two (Music + Vocals, the fast split, #43), not since in four.
+pub fn wants_two(t: &Track) -> bool {
+    crate::db::wants_two(&t.key())
+}
+
+/// Asks for the song in two (`true`: Music + Vocals) or in four again (`false`); the split
+/// queue reads it as it splits the song.
+pub fn ask_two(t: &Track, two: bool) {
+    crate::db::set_two(&t.key(), two);
+}
+
+/// Split as it should be: as asked for (two, six, else four).
 pub fn done(t: &Track) -> bool {
-    if wants_six(t) { has_six(t) } else { has_parts(t) }
+    done_as(t, wants_two(t))
+}
+
+/// In two: Music and Vocals there (or more). Else in six when ticked for six, else in four.
+fn done_as(t: &Track, two: bool) -> bool {
+    if two {
+        (ready_part(t, "music").is_some() && ready_part(t, "vocals").is_some()) || has_parts(t)
+    } else if wants_six(t) {
+        has_six(t)
+    } else {
+        has_parts(t)
+    }
 }
 
 /// The parts a split of the song should have that `files` ("drums.ogg"…) lacks.
@@ -454,6 +476,9 @@ pub fn split(t: &Track, uri: &str, server: Option<&SplitServer>, local: Option<&
     let job = job_id(t);
     let work = glib::user_cache_dir().join("radiance-music/split-work").join(&job);
     fs::create_dir_all(&work).map_err(|e| e.to_string())?;
+    if wants_two(t) && !has_parts(t) {
+        return split_two(t, uri, local, &work, &job, &report);
+    }
     let Some(server) = server else {
         let local = local.ok_or("splitting isn't set up on this computer")?;
         report(0.0);
@@ -514,6 +539,32 @@ pub fn split(t: &Track, uri: &str, server: Option<&SplitServer>, local: Option<&
         let _ = fs::remove_file(&file);
     }
     let _ = fs::remove_dir_all(&work);
+    report(1.0);
+    result
+}
+
+/// The fast split (#43): Music and Vocals with Spleeter, on this computer always, inside the
+/// app (no Python; a few seconds a song). What it needs is fetched first if it isn't here yet.
+fn split_two(t: &Track, uri: &str, local: Option<&LocalSplitter>, work: &Path, job: &str, report: &Progress) -> Result<(), String> {
+    report(0.0);
+    let result = (|| {
+        let (runtime, models) = match crate::two_part::ready() {
+            Some(r) => r,
+            None => crate::two_part::fetch(&|p| report(0.3 * p))?,
+        };
+        let file = upload_file(uri, work, job)?;
+        report(0.35);
+        // this thread and the ones ONNX Runtime starts from it, below the music's (Linux: a
+        // thread is its own task, and new threads take its niceness)
+        #[cfg(unix)]
+        unsafe {
+            libc::setpriority(libc::PRIO_PROCESS, 0, 19);
+        }
+        let threads = local.map(|l| l.threads).unwrap_or_else(crate::setup::half_the_cores) as usize;
+        let out = work.join("two");
+        crate::spleeter::split(&runtime, &models, &file, &out, threads, &|p| report(0.35 + 0.6 * p)).and_then(|files| keep(t, &out, &files))
+    })();
+    let _ = fs::remove_dir_all(work);
     report(1.0);
     result
 }
@@ -628,6 +679,28 @@ pub fn align_on_server(t: &Track, server: &SplitServer, given: &serde_json::Valu
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The fast split (#43): a song asked for in two is split once Music and Vocals are there;
+    /// asked for in four, it waits for the four.
+    #[test]
+    fn a_song_asked_for_in_two_is_done_once_music_and_vocals_are_there() {
+        let dir = std::env::temp_dir().join(format!("radiance-split-two-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let song = dir.join("Artist - Song.opus");
+        fs::write(&song, b"song").unwrap();
+        let t = Track::from_json(&serde_json::json!({ "source": "youtube", "id": "two1", "title": "Song", "artist": "Artist", "file": song.to_string_lossy() })).unwrap();
+        assert!(!done_as(&t, true));
+        for p in ["music", "vocals"] {
+            fs::write(dir.join(format!("Artist - Song.{p}.ogg")), p).unwrap();
+        }
+        assert!(done_as(&t, true), "asked for two: Music and Vocals are enough");
+        assert!(!done_as(&t, false), "asked for four: not yet");
+        for p in ["drums", "bass", "other"] {
+            fs::write(dir.join(format!("Artist - Song.{p}.ogg")), p).unwrap();
+        }
+        assert!(done_as(&t, false) && done_as(&t, true));
+        let _ = fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn a_windows_path_survives_a_pipeline_description() {
