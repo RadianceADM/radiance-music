@@ -21,6 +21,8 @@ pub enum ChangeKind {
     Lyrics,
     Online,
     Problem,
+    Liked,
+    Toast,
 }
 
 impl From<Change> for ChangeKind {
@@ -34,6 +36,8 @@ impl From<Change> for ChangeKind {
             Change::Lyrics => ChangeKind::Lyrics,
             Change::Online => ChangeKind::Online,
             Change::Problem => ChangeKind::Problem,
+            Change::Liked => ChangeKind::Liked,
+            Change::Toast => ChangeKind::Toast,
         }
     }
 }
@@ -450,6 +454,12 @@ mod tests {
         }
         fn lyrics(&self, _t: &Track) -> Lyrics {
             Lyrics::None
+        }
+        fn download(&self, _url: &str, _to: &std::path::Path) -> Result<(), String> {
+            Err("no downloads in this test".into())
+        }
+        fn genres(&self, _t: &Track) -> Vec<String> {
+            Vec::new()
         }
     }
 
