@@ -37,6 +37,9 @@ use crate::settings::{self, Settings, Transition, FADE_RANGE};
 use crate::split::{self, Voice};
 use crate::track::{clock, file_key, letter_of, matches, Source, Track};
 use radiance_core::queue::{self, Queue, Removed, Repeat, Step};
+use radiance_core::sing;
+use radiance_core::trouble::{self, sound_device_gone, After};
+use radiance_core::words::{self, Kind};
 use crate::{align, archive, art, genre, library, mix, servers, storage, youtube, APP_ID};
 
 
@@ -644,12 +647,6 @@ fn count_play(t: &Track) {
     COUNTS.with(|c| c.borrow_mut().get_or_insert_with(crate::db::counts).entry(t.key()).or_default().0 += 1);
 }
 
-/// Windows' sound output lost its device (WASAPI: AUDCLNT_E_DEVICE_INVALIDATED), not a bad song.
-fn sound_device_gone(error: &str) -> bool {
-    let e = error.to_lowercase();
-    e.contains("audclnt_e_device_invalidated") || e.contains("88890004")
-}
-
 fn count_skip(t: &Track) {
     crate::db::add_skip(&t.key());
     COUNTS.with(|c| c.borrow_mut().get_or_insert_with(crate::db::counts).entry(t.key()).or_default().1 += 1);
@@ -707,10 +704,6 @@ fn aligned_by_mms(t: &Track) -> bool {
     fs::read_to_string(lyrics_file(t)).is_ok_and(|y| y.contains("MMS forced alignment"))
 }
 
-/// Words light this much ahead of the sound, and a line comes to the middle
-/// this much before it's sung (it has to get there first).
-const WORD_LEAD: f64 = 0.08;
-const LINE_LEAD: f64 = 0.35;
 
 /// The line being sung in Now Playing is drawn this much bigger than the rest
 /// (less when a long line wouldn't fit the view).
@@ -739,42 +732,10 @@ impl LyricView {
         format!("{}{}", self.head_markup(), glib::markup_escape_text(&self.line.text))
     }
 
-    /// How much of the line has been sung at `at` (characters): whole words
-    /// once they're over, the word being sung in proportion to its time.
+    /// How much of the line has been sung at `at` (characters; core's sing::sung_chars).
     fn sung_chars(&self, at: f64) -> usize {
-        if at >= self.line.end || self.spans.is_empty() {
-            return self.line.text.chars().count();
-        }
-        // each word lights whole, the moment it's sung (no sweep across its letters)
-        let at = at + WORD_LEAD;
-        let mut k = 0;
-        for (w, &(_, b)) in self.line.words.iter().zip(&self.spans) {
-            if at >= w.start {
-                k = b;
-            } else {
-                break;
-            }
-        }
-        k
+        sing::sung_chars(&self.line, &self.spans, at)
     }
-}
-
-/// Where each word sits in the line's text, in characters (words that can't be
-/// found follow on from the last one).
-fn word_spans(text: &str, words: &[lyrics::Word]) -> Vec<(usize, usize)> {
-    let chars: Vec<char> = text.chars().collect();
-    let mut pos = 0;
-    words
-        .iter()
-        .map(|w| {
-            let word: Vec<char> = w.text.trim().chars().collect();
-            let found = (pos..=chars.len().saturating_sub(word.len())).find(|&i| !word.is_empty() && chars[i..i + word.len()] == word[..]);
-            let a = found.unwrap_or(pos).min(chars.len());
-            let b = (a + word.len()).min(chars.len());
-            pos = b;
-            (a, b)
-        })
-        .collect()
 }
 
 /// A saved song's own sample rate, kept when it plays among its parts: Opus
@@ -1807,25 +1768,7 @@ impl Ui {
     /// Why a song won't play, in plain words, and whether every song would fail the same way
     /// now (then skipping on only makes a run of failures).
     fn why_not(&self, error: &str) -> (&'static str, bool) {
-        let e = error.to_lowercase();
-        let any = |words: &[&str]| words.iter().any(|w| e.contains(w));
-        if !self.online.get() || any(&["resolve", "name resolution", "unreachable", "no route", "getaddrinfo", "connection refused", "could not connect", "network is down", "failed to establish a new connection"]) {
-            ("you're offline", true)
-        } else if e.contains("yt-dlp isn't installed") {
-            ("yt-dlp, which plays YouTube songs, isn't installed", true)
-        } else if any(&["sign in to confirm", "not a bot"]) {
-            ("YouTube wants to check you're not a bot; try again in a while", true)
-        } else if any(&["timed out", "timeout"]) {
-            ("the internet is too slow right now", true)
-        } else if any(&["missing plugin", "no decoder", "not-negotiated", "not negotiated", "no element"]) {
-            ("this computer can't play this kind of file", false)
-        } else if sound_device_gone(&e) {
-            ("the sound device went away: check your speakers or headphones", true)
-        } else if any(&["unavailable", "private video", "removed", "copyright", "not available", "terminated"]) {
-            ("it isn't on YouTube anymore", false)
-        } else {
-            ("its source didn't answer", false)
-        }
+        trouble::why_not(error, self.online.get())
     }
 
     /// The start's last bits, and how long it all took (in the app log).
@@ -3983,43 +3926,25 @@ impl Ui {
             return;
         }
         self.search_view.set_visible_child_name("results");
-        // your own first: the liked songs that match (titles that match before artists that do)
-        let mut mine: Vec<Track> = self.liked.borrow().iter().filter(|t| matches(t, q)).cloned().collect();
-        let by_title = |t: &Track| matches(&Track { artist: String::new(), album: String::new(), ..t.clone() }, q);
-        mine.sort_by_cached_key(|t| (!by_title(t), file_key(&t.title)));
-        let yours = |t: &Track| mine.iter().any(|m| m.key() == t.key());
-        let lossless = self.found_lossless.borrow().clone().map(|v| v.into_iter().filter(|t| !yours(t)).collect::<Vec<_>>());
-        // a song found lossless isn't offered again from YouTube
-        let youtube = self.found_youtube.borrow().clone().map(|v| {
-            v.into_iter().filter(|t| !yours(t) && !lossless.as_ref().is_some_and(|l| l.iter().any(|x| x.same_song(t)))).collect::<Vec<_>>()
-        });
+        // your own first, then lossless, YouTube Music and videos, a song never twice (core's search)
+        let arranged = radiance_core::search::arrange(
+            &self.liked.borrow(),
+            self.found_lossless.borrow().clone(),
+            self.found_youtube.borrow().clone(),
+            self.found_videos.borrow().clone(),
+            q,
+        );
+        let (mine, lossless, youtube, videos) = (arranged.mine, arranged.lossless, arranged.youtube, arranged.videos);
         self.lossless_spin.set_visible(lossless.is_none());
         self.fallback_spin.set_visible(youtube.is_none());
         // offline, nothing is found anywhere: say that, not "no songs" (2026-10-31 audit)
         let off = !self.online.get();
-        const OFF: &str = "You're offline: searching needs the internet. Your liked songs still play; it searches again when you're back online.";
-        self.lossless.set_description(Some(&match &lossless {
-            None => "Searching the free lossless libraries (Internet Archive)…".to_string(),
-            Some(v) if v.is_empty() && off => OFF.to_string(),
-            Some(v) if v.is_empty() => format!("The free libraries have no lossless recording of “{q}”."),
-            Some(_) => "Free FLAC from the Internet Archive. Played first.".to_string(),
-        }));
-        self.fallback.set_description(Some(&match &youtube {
-            None => "Searching YouTube Music…".to_string(),
-            Some(v) if v.is_empty() && off => "YouTube Music too, once you're back online.".to_string(),
-            Some(v) if v.is_empty() => format!("YouTube Music found no other songs for “{q}”."),
-            Some(_) => "Compressed (Opus). The fallback when there's no lossless copy.".to_string(),
-        }));
-        let videos = self.found_videos.borrow().clone().map(|v| v.into_iter().filter(|t| !yours(t)).collect::<Vec<_>>());
+        self.lossless.set_description(Some(&words::search_note(Kind::Lossless, lossless.as_ref().map(Vec::len), off, q)));
+        self.fallback.set_description(Some(&words::search_note(Kind::Songs, youtube.as_ref().map(Vec::len), off, q)));
         self.videos_spin.set_visible(videos.is_none());
-        self.videos.set_description(Some(&match &videos {
-            None => "Searching music videos…".to_string(),
-            Some(v) if v.is_empty() && off => "Music videos too.".to_string(),
-            Some(v) if v.is_empty() => format!("No music videos for “{q}”."),
-            Some(_) => "Music videos from YouTube: they play with their picture in Now playing.".to_string(),
-        }));
+        self.videos.set_description(Some(&words::search_note(Kind::Videos, videos.as_ref().map(Vec::len), off, q)));
         self.in_liked.set_visible(!mine.is_empty());
-        self.in_liked.set_description(Some(&format!("{} of your liked songs {}", mine.len(), if mine.len() == 1 { "matches" } else { "match" })));
+        self.in_liked.set_description(Some(&words::liked_matches(mine.len())));
         if !mine.is_empty() {
             let mine = Rc::new(mine);
             for (i, t) in mine.iter().enumerate() {
@@ -5157,10 +5082,10 @@ impl Ui {
         self.render_mix();
         let me = Rc::downgrade(self);
         // the seeds: the likes you play most (ties: the latest), and nothing you keep skipping
-        let mut seeds = liked.clone();
-        seeds.sort_by(|a, b| liking(b).total_cmp(&liking(a)));
-        let avoid: HashSet<String> = self.history.borrow().iter().map(|(t, _)| t).chain(liked.iter()).filter(|t| often_skipped(t)).map(|t| t.key()).collect();
-        let seeds: Vec<Track> = seeds.into_iter().filter(|t| !avoid.contains(&t.key())).collect();
+        let (seeds, avoid) = queue::mix_seeds(&liked, &self.history.borrow(), |t| {
+            let (plays, skips) = counts_of(t);
+            (plays as u32, skips as u32)
+        });
         bg(move || mix::from_likes(&liked, &seeds, &avoid), move |list| {
             let Some(me) = me.upgrade() else { return };
             if me.mix_gen.get() == gen {
@@ -5676,8 +5601,8 @@ impl Ui {
             self.cant_work("YouTube songs can't play: yt-dlp, which gets them, isn't installed", "https://github.com/RadianceADM/radiance-music#to-play-music");
         }
         let more = self.queue.borrow().can_next();
-        if more && !every_song && fails < 3 {
-            self.toast(&format!("“{title}” can't play: {reason}. On to the next song."));
+        if trouble::after_failure(fails, more, every_song) == After::Next {
+            self.toast(&trouble::next_song_text(title, &reason));
             self.skip(1);
             return;
         }
@@ -5686,7 +5611,7 @@ impl Ui {
         }
         self.set_quality(None, false);
         self.set_controls();
-        let text = if fails >= 3 && !every_song { format!("{fails} songs in a row wouldn't play: {reason}") } else { format!("“{title}” can't play: {reason}") };
+        let text = trouble::cant_play_text(title, &reason, fails, every_song);
         let toast = adw::Toast::builder().use_markup(false).title(text).button_label("Try Again").timeout(10).build();
         let me = Rc::downgrade(self);
         toast.connect_button_clicked(move |_| {
@@ -5921,7 +5846,7 @@ impl Ui {
                     let (big, side) = (make(&["lyric"]), make(&["lyric", "side-lyric"]));
                     self.lyrics_list.append(&big);
                     self.side_lyrics_list.append(&side);
-                    let spans = word_spans(&line.text, &line.words);
+                    let spans = sing::word_spans(&line.text, &line.words);
                     // a new voice: its name above the line
                     let head = line.singer.clone().filter(|s| voice.as_deref() != Some(s.as_str()));
                     if line.singer.is_some() {
@@ -6792,11 +6717,7 @@ impl Ui {
         }
         let at = read + when.elapsed().as_secs_f64();
         // lines that have started and not ended; the latest one stays lit until the next starts
-        let last = lines.iter().rposition(|v| v.line.start <= at + LINE_LEAD);
-        let lit: Vec<usize> = match last {
-            Some(l) => (0..=l).filter(|&i| i == l || at + LINE_LEAD < lines[i].line.end).collect(),
-            None => vec![],
-        };
+        let lit = sing::lit_lines(lines.iter().map(|v| &v.line), at);
         let mut now = self.lyric_now.borrow_mut();
         for &i in now.iter().filter(|i| !lit.contains(i)) {
             if let Some(v) = lines.get(i) {
@@ -6915,14 +6836,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_lost_sound_device_isnt_a_bad_song() {
-        // ribs03's app.log, 2026-11-03 (#38)
-        assert!(sound_device_gone("IAudioClient::GetCurrentPadding failed (88890004): AUDCLNT_E_DEVICE_INVALIDATED"));
-        assert!(!sound_device_gone("Internal data stream error."));
-        assert!(!sound_device_gone("Could not resolve host: www.youtube.com"));
-    }
-
-    #[test]
     fn every_part_gets_a_volume() {
         // after Reset (nothing set) and Vocals down: drums, bass and other go at full, said
         let after_reset: HashMap<String, f64> = [("vocals".to_string(), 0.3)].into();
@@ -6935,14 +6848,6 @@ mod tests {
         let other_down: HashMap<String, f64> = [("other".to_string(), 0.4), ("piano".to_string(), 0.9)].into();
         assert_eq!(part_volumes(&other_down, false)["piano"], 0.4);
         assert_eq!(part_volumes(&other_down, true)["piano"], 0.9);
-    }
-
-    #[test]
-    fn words_found_in_their_line() {
-        let w = |t: &str| lyrics::Word { start: 0.0, end: 0.0, text: t.into() };
-        assert_eq!(word_spans("Stay until the morning", &[w("Stay "), w("until "), w("the "), w("morning")]), vec![(0, 4), (5, 10), (11, 14), (15, 22)]);
-        // a word the text doesn't have follows on from the last one
-        assert_eq!(word_spans("Oh, là là", &[w("Oh,"), w("xyz"), w("là")]), vec![(0, 3), (3, 6), (7, 9)]);
     }
 
     #[test]

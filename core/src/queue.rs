@@ -304,6 +304,25 @@ pub fn autoplay_picks(found: Vec<Track>, queued: &HashSet<String>, lately: &Hash
         .collect()
 }
 
+/// The mix's seeds: your likes, the ones you play most first (ties: as liked, newest first),
+/// none you keep skipping; and the songs it must avoid (liked or played, kept skipping).
+/// `counts`: a song's plays and skips.
+pub fn mix_seeds(liked: &[Track], history: &[(Track, i64)], counts: impl Fn(&Track) -> (u32, u32)) -> (Vec<Track>, HashSet<String>) {
+    let like = |t: &Track| {
+        let (p, s) = counts(t);
+        liking(p, s)
+    };
+    let skipped = |t: &Track| {
+        let (p, s) = counts(t);
+        often_skipped(p, s)
+    };
+    let mut seeds = liked.to_vec();
+    seeds.sort_by(|a, b| like(b).total_cmp(&like(a)));
+    let avoid: HashSet<String> = history.iter().map(|(t, _)| t).chain(liked.iter()).filter(|t| skipped(t)).map(|t| t.key()).collect();
+    let seeds = seeds.into_iter().filter(|t| !avoid.contains(&t.key())).collect();
+    (seeds, avoid)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -503,6 +522,23 @@ mod tests {
         let v = songs("a,b,c,d,e,f,g,h");
         let first = (1..200u64).filter(|s| shuffled(v.clone(), |t| if t.id == "h" { 8.0 } else { 0.2 }, *s)[0].id == "h").count();
         assert!(first > 150, "h came first {first} times of 199");
+    }
+
+    #[test]
+    fn a_mix_grows_from_the_likes_you_play_most() {
+        let liked = songs("a,b,c,d");
+        let history = vec![(song("h"), 1)];
+        let counts = |t: &Track| match t.id.as_str() {
+            "c" => (10, 0), // played most: first
+            "b" => (0, 3),  // kept skipping: no seed, and avoided
+            "h" => (0, 4),
+            _ => (0, 0),
+        };
+        let (seeds, avoid) = mix_seeds(&liked, &history, counts);
+        assert_eq!(seeds.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(), ["c", "a", "d"]);
+        let mut avoid: Vec<_> = avoid.into_iter().collect();
+        avoid.sort();
+        assert_eq!(avoid, [song("b").key(), song("h").key()]);
     }
 
     #[test]

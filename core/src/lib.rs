@@ -5,4 +5,8 @@
 
 pub mod lyrics;
 pub mod queue;
+pub mod search;
+pub mod sing;
 pub mod track;
+pub mod trouble;
+pub mod words;

@@ -16,6 +16,7 @@ pub mod effects;
 pub mod feedback;
 pub mod fx;
 pub mod genre;
+pub mod home;
 pub mod library;
 pub mod limiter;
 pub mod log;

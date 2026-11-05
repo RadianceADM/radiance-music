@@ -19,25 +19,6 @@ const NAV: [(&str, &str, &str, Option<&str>); 8] = [
     // low cut, high cut and reverb are the app's own now, fx.rs)
 ];
 
-/// Search's tiles before anything is typed: (what it says, what it searches).
-const BROWSE: [(&str, &str); 12] = [
-    ("Pinoy hip-hop", "pinoy hip hop"),
-    ("OPM", "OPM hits"),
-    ("R&B", "r&b"),
-    ("Pop", "pop hits"),
-    ("K-pop", "kpop"),
-    ("Lo-fi", "lofi beats"),
-    ("Live concerts", "live concert"),
-    ("Jazz", "jazz"),
-    ("Classical", "classical"),
-    ("Rock", "rock"),
-    ("Acoustic", "acoustic"),
-    ("Reggae", "reggae"),
-];
-
-/// Cards in a row on Home.
-const ROW_CARDS: usize = 20;
-
 /// Home's sections, top to bottom.
 #[derive(Clone, Copy)]
 pub(super) enum HomePart {
@@ -131,23 +112,10 @@ window.fullscreen-player .page-area { border-radius: 0; }
 ";
 
 fn greeting() -> String {
-    let hour = glib::DateTime::now_local().map(|d| d.hour()).unwrap_or(12);
-    let part = match hour {
-        5..=11 => "Good morning",
-        12..=17 => "Good afternoon",
-        _ => "Good evening",
-    };
+    let hour = glib::DateTime::now_local().map(|d| d.hour()).unwrap_or(12).max(0) as u32;
     // (RADIANCE_SHOT_ANON: screenshots for others say no name)
-    let name = if std::env::var_os("RADIANCE_SHOT_ANON").is_some() {
-        String::new()
-    } else {
-        glib::real_name().to_string_lossy().split_whitespace().next().unwrap_or_default().to_string()
-    };
-    if name.is_empty() || name.eq_ignore_ascii_case("unknown") {
-        part.to_string()
-    } else {
-        format!("{part}, {name}")
-    }
+    let name = if std::env::var_os("RADIANCE_SHOT_ANON").is_some() { String::new() } else { glib::real_name().to_string_lossy().to_string() };
+    radiance_core::words::greeting(hour, &name)
 }
 
 fn clear(b: &gtk::Box) {
@@ -627,7 +595,7 @@ impl Ui {
             HomePart::Hero => Some(self.hero()),
             HomePart::Mix => {
                 let mix = Rc::new(self.mix.borrow().clone());
-                let cards = mix.iter().take(ROW_CARDS).enumerate().map(|(i, t)| self.card(t, Place::List(mix.clone(), i)).upcast()).collect();
+                let cards = mix.iter().take(radiance_core::words::ROW_CARDS).enumerate().map(|(i, t)| self.card(t, Place::List(mix.clone(), i)).upcast()).collect();
                 let fresh = gtk::Button::builder().icon_name("view-refresh-symbolic").tooltip_text("New picks").css_classes(["flat", "circular"]).build();
                 let me = Rc::downgrade(self);
                 fresh.connect_clicked(move |_| {
@@ -639,12 +607,12 @@ impl Ui {
             }
             HomePart::Recent => {
                 let history = Rc::new(session::recent(&self.history.borrow()));
-                let cards = history.iter().take(ROW_CARDS).enumerate().map(|(i, t)| self.card(t, Place::List(history.clone(), i)).upcast()).collect();
+                let cards = history.iter().take(radiance_core::words::ROW_CARDS).enumerate().map(|(i, t)| self.card(t, Place::List(history.clone(), i)).upcast()).collect();
                 section("Recently played", cards, None)
             }
             HomePart::Liked => {
                 let liked = Rc::new(self.liked.borrow().clone());
-                let cards = liked.iter().take(ROW_CARDS).enumerate().map(|(i, t)| self.card(t, Place::Liked(liked.clone(), i)).upcast()).collect();
+                let cards = liked.iter().take(radiance_core::words::ROW_CARDS).enumerate().map(|(i, t)| self.card(t, Place::Liked(liked.clone(), i)).upcast()).collect();
                 let all = gtk::Button::builder().label("See all").css_classes(["flat"]).build();
                 let me = Rc::downgrade(self);
                 all.connect_clicked(move |_| {
@@ -660,7 +628,7 @@ impl Ui {
                     .groups_by(&liked, LikedView::Albums)
                     .into_iter()
                     .filter(|(name, _)| name != "Singles")
-                    .take(ROW_CARDS)
+                    .take(radiance_core::words::ROW_CARDS)
                     .map(|(name, songs)| self.group_card(&name, songs, false, "albums").upcast())
                     .collect();
                 section("Your albums", albums, None)
@@ -669,7 +637,7 @@ impl Ui {
                 let liked = self.liked.borrow().clone();
                 let mut artists = self.groups_by(&liked, LikedView::Artists);
                 artists.sort_by_key(|(_, songs)| std::cmp::Reverse(songs.len()));
-                let artists = artists.into_iter().take(ROW_CARDS).map(|(name, songs)| self.group_card(&name, songs, true, "artists").upcast()).collect();
+                let artists = artists.into_iter().take(radiance_core::words::ROW_CARDS).map(|(name, songs)| self.group_card(&name, songs, true, "artists").upcast()).collect();
                 section("Your artists", artists, None)
             }
             HomePart::Genres => {
@@ -678,7 +646,7 @@ impl Ui {
                 genres.retain(|(name, _)| !name.ends_with('…'));
                 genres.sort_by_key(|(_, songs)| std::cmp::Reverse(songs.len()));
                 let wide = if self.phone.get() { PHONE_CARD } else { 260 };
-                let tiles = genres.into_iter().take(ROW_CARDS).map(|(name, songs)| self.genre_tile(&name, songs, wide).upcast()).collect();
+                let tiles = genres.into_iter().take(radiance_core::words::ROW_CARDS).map(|(name, songs)| self.genre_tile(&name, songs, wide).upcast()).collect();
                 section("Your genres", tiles, None)
             }
         }
@@ -715,13 +683,7 @@ impl Ui {
         let content = gtk::Box::builder().spacing(24).margin_top(34).margin_bottom(34).margin_start(roomy).margin_end(roomy).build();
         let words = gtk::Box::builder().orientation(gtk::Orientation::Vertical).spacing(10).valign(gtk::Align::Center).hexpand(true).build();
         words.append(&gtk::Label::builder().label(greeting()).xalign(0.0).wrap(true).wrap_mode(gtk::pango::WrapMode::WordChar).css_classes(["hero-title"]).build());
-        let (sub, has_mix) = if !mix.is_empty() {
-            (format!("Your mix is ready: {} songs like the ones you liked.", mix.len()), true)
-        } else if !liked.is_empty() {
-            ("Finding songs like the ones you liked…".to_string(), false)
-        } else {
-            ("Like a few songs and a mix made from them shows up here.".to_string(), false)
-        };
+        let (sub, has_mix) = (radiance_core::words::mix_note(mix.len(), liked.len()), !mix.is_empty());
         words.append(&gtk::Label::builder().label(&sub).xalign(0.0).wrap(true).wrap_mode(gtk::pango::WrapMode::WordChar).max_width_chars(46).css_classes(["hero-sub"]).build());
         let buttons = gtk::Box::builder().spacing(10).margin_top(10).build();
         if has_mix {
@@ -923,7 +885,7 @@ impl Ui {
         let column = gtk::Box::builder().orientation(gtk::Orientation::Vertical).spacing(14).margin_top(14).margin_bottom(24).margin_start(18).margin_end(18).build();
         column.append(&gtk::Label::builder().label("Browse").xalign(0.0).css_classes(["section-title"]).build());
         let flow = gtk::FlowBox::builder().selection_mode(gtk::SelectionMode::None).homogeneous(true).column_spacing(14).row_spacing(14).min_children_per_line(2).max_children_per_line(6).build();
-        for (i, (label, query)) in BROWSE.iter().enumerate() {
+        for (i, (label, query)) in radiance_core::words::BROWSE.iter().enumerate() {
             let b = gtk::Button::builder().label(*label).css_classes(["browse-tile", &format!("b{}", i % 6)]).build();
             let me = Rc::downgrade(self);
             let q = query.to_string();
