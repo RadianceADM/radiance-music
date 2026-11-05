@@ -2,3 +2,8 @@
 __pycache__/
 *.pyc
 packaging/flatpak/out/
+
+# the Windows beta (windows/): builds and the generated C# binding
+windows/*/bin/
+windows/*/obj/
+windows/RadianceMusic.Windows/Native/

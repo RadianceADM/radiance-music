@@ -12,6 +12,7 @@ $ErrorActionPreference = 'Stop'
 $B = 'C:\rb\beta'
 $Src = "$B\src"
 $Test = 'C:\rb\beta-test'
+$env:PATH = "C:\Program Files\dotnet;C:\Program Files\Git\cmd;$env:PATH"
 $env:DOTNET_CLI_TELEMETRY_OPTOUT = '1'
 $env:DOTNET_NOLOGO = '1'
 $env:RADIANCE_SILENT = '1'
@@ -33,4 +34,27 @@ function Msys([string]$what) {
 if ($Step -in 'rust', 'all') {
     Step 'core, engine and ffi tests, then radiance_ffi.dll' { Msys rust }
     Step 'what the DLL needs' { Msys deps }
+}
+
+if ($Step -in 'app', 'all') {
+    Step 'the C# binding' { Msys bindgen }
+    Step 'the beta''s own tests' { dotnet test "$Src\windows\RadianceMusic.Windows.Tests" -c Release --nologo -v q }
+    Step 'the app' { dotnet publish "$Src\windows\RadianceMusic.Windows\RadianceMusic.Windows.csproj" -c Release -o "$B\app" --nologo -v q }
+}
+
+if ($Step -in 'dist', 'all') {
+    Remove-Item -Recurse -Force "$B\dist" -ErrorAction SilentlyContinue
+    Step 'the engine''s DLL, GStreamer and the tools' { Msys pack }
+    Copy-Item -Recurse -Force "$B\app\*" "$B\dist\"
+    $out = "$B\selfcheck.txt"
+    Remove-Item $out -ErrorAction SilentlyContinue
+    $p = Start-Process -FilePath "$B\dist\RadianceMusicBeta.exe" -ArgumentList @('--self-check', $out) -Wait -PassThru -NoNewWindow
+    Write-Output "== self-check (exit $($p.ExitCode))"
+    $lines = Get-Content $out -Encoding UTF8
+    $lines
+    # the owner's own library must never be what a test opens
+    $data = ($lines | Where-Object { $_ -like 'data *' } | Select-Object -First 1) -replace '^data ', ''
+    if (-not $data -or -not $data.StartsWith("$Test\data")) { throw "the beta opened a data folder outside $Test : $data" }
+    if ($p.ExitCode -ne 0) { throw "self-check failed" }
+    Write-Output "dist: $((Get-ChildItem -Recurse -File "$B\dist").Count) files, $([math]::Round((Get-ChildItem -Recurse -File "$B\dist" | Measure-Object Length -Sum).Sum / 1MB)) MB"
 }
