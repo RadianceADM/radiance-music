@@ -37,7 +37,7 @@ pub const PORTS: std::ops::RangeInclusive<u16> = 47800..=47809;
 /// Bigger than any song or video would be: refused.
 const MOST_BYTES: u64 = 4 << 30;
 /// While Bluetooth music plays and this computer is on Wi-Fi.
-const GENTLE: u64 = 256 * 1024;
+pub(crate) const GENTLE: u64 = 256 * 1024;
 
 /// What the share window hears.
 pub enum Event {
@@ -121,7 +121,7 @@ pub fn address() -> Option<IpAddr> {
 }
 
 /// Bluetooth music playing while this computer's way out is Wi-Fi (they share a radio).
-fn bluetooth_busy() -> bool {
+pub(crate) fn bluetooth_busy() -> bool {
     let wifi = fs::read_to_string("/proc/net/route").ok().and_then(|r| {
         r.lines().skip(1).find(|l| l.split_whitespace().nth(1) == Some("00000000")).and_then(|l| l.split_whitespace().next().map(String::from))
     });

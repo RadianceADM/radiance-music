@@ -9,6 +9,7 @@ use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 use sha2::{Digest, Sha256};
 
@@ -155,7 +156,10 @@ fn get(url: &str, range: Option<(u64, u64)>, moved: &mut dyn FnMut(u64)) -> Resu
     }
     let mut body = resp.body_mut().as_reader();
     let mut out = Vec::new();
-    let mut buf = vec![0u8; 256 * 1024];
+    let mut buf = vec![0u8; 64 * 1024];
+    // Bluetooth music over Wi-Fi: looked at every few seconds; meanwhile it goes gently
+    let (mut checked, mut busy) = (Instant::now(), crate::share::bluetooth_busy());
+    let (mut since, mut moved_since) = (Instant::now(), 0u64);
     loop {
         let n = body.read(&mut buf).map_err(|e| e.to_string())?;
         if n == 0 {
@@ -163,8 +167,26 @@ fn get(url: &str, range: Option<(u64, u64)>, moved: &mut dyn FnMut(u64)) -> Resu
         }
         out.extend_from_slice(&buf[..n]);
         moved(out.len() as u64);
+        if checked.elapsed() > Duration::from_secs(3) {
+            (checked, busy) = (Instant::now(), crate::share::bluetooth_busy());
+        }
+        if busy {
+            moved_since += n as u64;
+            std::thread::sleep(pause_for(moved_since, since.elapsed(), true));
+        } else {
+            (since, moved_since) = (Instant::now(), 0);
+        }
     }
     Ok(out)
+}
+
+/// How long to wait so `bytes` sent over `took` keep to 256 KB/s while `busy` (Bluetooth music
+/// over Wi-Fi: they share a radio, and a fast download makes the music stutter; as sharing does).
+fn pause_for(bytes: u64, took: Duration, busy: bool) -> Duration {
+    if !busy {
+        return Duration::ZERO;
+    }
+    Duration::from_secs_f64(bytes as f64 / crate::share::GENTLE as f64).saturating_sub(took)
 }
 
 /// The download is the file pinned: its size and SHA-256.
@@ -231,6 +253,15 @@ mod tests {
 
     fn sha(b: &[u8]) -> String {
         Sha256::digest(b).iter().map(|x| format!("{x:02x}")).collect()
+    }
+
+    /// While Bluetooth music plays over Wi-Fi (one radio), the download keeps to 256 KB/s.
+    #[test]
+    fn it_goes_gently_while_bluetooth_music_plays() {
+        use std::time::Duration;
+        assert_eq!(pause_for(10 << 20, Duration::from_millis(100), false), Duration::ZERO);
+        assert_eq!(pause_for(512 * 1024, Duration::from_millis(500), true), Duration::from_millis(1500), "512 KB takes 2 s");
+        assert_eq!(pause_for(128 * 1024, Duration::from_secs(1), true), Duration::ZERO, "already slower than that");
     }
 
     #[test]
