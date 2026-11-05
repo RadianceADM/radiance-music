@@ -3,7 +3,7 @@
 #   msys.sh rust     the core/engine/ffi tests, then radiance_ffi.dll
 #   msys.sh deps     what radiance_ffi.dll needs (GStreamer, GLib, the C runtime)
 #   msys.sh bindgen  uniffi-bindgen-cs (once) and the C# binding
-#   msys.sh installer  RadianceMusic-Beta-Setup.exe from C:\\rb\\beta\\dist (NSIS)
+#   msys.sh installer  RadianceMusic-Beta-Setup.exe from C:\rb\beta\dist (NSIS)
 #   msys.sh pack     C:\rb\beta\dist's native part: bin\ (the DLL and what it needs, yt-dlp, Deno, FFmpeg),
 #                    lib\gstreamer-1.0 (today's Windows app's plugins), the plugin scanner, GIO's modules
 set -uo pipefail
