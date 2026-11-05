@@ -162,7 +162,7 @@ internal sealed class PlayerBar : Grid
         playIcon.Glyph = now.Playing ? "\uE769" : "\uE768";
         ToolTipService.SetToolTip(play, now.Playing ? "Pause" : "Play");
         ToolTipService.SetToolTip(shuffle, now.Shuffle ? "Shuffle: on" : "Shuffle");
-        shuffle.Foreground = now.Shuffle ? (Brush)Application.Current.Resources["AccentTextFillColorPrimaryBrush"] : null;
+        Tint(shuffle, now.Shuffle);
         var (glyph, tip) = now.Repeat switch
         {
             RepeatMode.All => ("\uE8EE", "Repeat: the whole queue"),
@@ -172,7 +172,7 @@ internal sealed class PlayerBar : Grid
         repeatIcon.Glyph = glyph;
         ToolTipService.SetToolTip(repeat, tip);
         repeat.Opacity = now.Repeat == RepeatMode.Off ? 0.55 : 1;
-        repeat.Foreground = now.Repeat == RepeatMode.Off ? null : (Brush)Application.Current.Resources["AccentTextFillColorPrimaryBrush"];
+        Tint(repeat, now.Repeat != RepeatMode.Off);
         muteIcon.Glyph = now.Volume <= 0 ? "\uE74F" : now.Volume < 0.34 ? "\uE993" : now.Volume < 0.67 ? "\uE994" : "\uE767";
         ToolTipService.SetToolTip(mute, now.Volume <= 0 ? "Unmute" : "Mute");
         setting = true;
@@ -187,6 +187,13 @@ internal sealed class PlayerBar : Grid
             artFor = source;
             _ = LoadArt(source);
         }
+    }
+
+    /// <summary>On: the accent colour (Shuffle on, Repeat on); off: the button's own colour again.</summary>
+    private static void Tint(Button b, bool on)
+    {
+        if (on) b.Foreground = (Brush)Application.Current.Resources["AccentTextFillColorPrimaryBrush"];
+        else b.ClearValue(ForegroundProperty);
     }
 
     private void Position()
