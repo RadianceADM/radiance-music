@@ -18,12 +18,12 @@ $env:DOTNET_CLI_TELEMETRY_OPTOUT = '1'
 $env:DOTNET_NOLOGO = '1'
 $env:RADIANCE_SILENT = '1'
 # the test data: once, a copy of the GTK test copy's songs and settings (C:\rb\test, never the owner's)
-if (-not (Test-Path "$Test\data") -and (Test-Path 'C:\rb\test\data')) {
-    Copy-Item -Recurse 'C:\rb\test\data' "$Test\data"
-    if (Test-Path 'C:\rb\test\config') { Copy-Item -Recurse 'C:\rb\test\config' "$Test\config" }
+foreach ($d in 'data', 'config', 'cache') { New-Item -ItemType Directory -Force "$Test\$d" | Out-Null }
+if (-not (Test-Path "$Test\data\radiance-music") -and (Test-Path 'C:\rb\test\data\radiance-music')) {
+    Copy-Item -Recurse 'C:\rb\test\data\radiance-music' "$Test\data\"
+    if (Test-Path 'C:\rb\test\config\radiance-music') { Copy-Item -Recurse 'C:\rb\test\config\radiance-music' "$Test\config\" }
     Remove-Item "$Test\data\radiance-music\running.port" -ErrorAction SilentlyContinue
 }
-foreach ($d in 'data', 'config', 'cache') { New-Item -ItemType Directory -Force "$Test\$d" | Out-Null }
 $env:XDG_DATA_HOME = "$Test\data"; $env:XDG_CONFIG_HOME = "$Test\config"; $env:XDG_CACHE_HOME = "$Test\cache"
 
 function Step($what, [scriptblock]$run) {
