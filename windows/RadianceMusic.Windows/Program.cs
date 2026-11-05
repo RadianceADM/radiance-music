@@ -46,6 +46,8 @@ public sealed class Dev
     public int Height { get; private set; } = 800;
     public string? Search { get; private set; }
     public double Wait { get; private set; } = 8;
+    /// <summary>--again S: a second shot S seconds after the first (FILE-2.png), to see what moved.</summary>
+    public double Again { get; private set; }
     /// <summary>--play-test: plays the first of Home's recent songs after start.</summary>
     public bool PlayTest { get; private set; }
 
@@ -62,6 +64,7 @@ public sealed class Dev
                 case "--search": d.Search = Next(); break;
                 case "--wait": d.Wait = double.TryParse(Next(), System.Globalization.CultureInfo.InvariantCulture, out var w) ? w : 8; break;
                 case "--play-test": d.PlayTest = true; break;
+                case "--again": d.Again = double.TryParse(Next(), System.Globalization.CultureInfo.InvariantCulture, out var a) ? a : 0; break;
                 case "--size":
                     var wh = Next().Split('x');
                     if (wh.Length == 2 && int.TryParse(wh[0], out var x) && int.TryParse(wh[1], out var y)) { d.Width = x; d.Height = y; }

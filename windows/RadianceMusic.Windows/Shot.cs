@@ -18,14 +18,22 @@ internal static class Shot
         var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(window);
         Win32.SetForegroundWindow(hwnd);
         await Task.Delay(300);
-        Win32.GetWindowRect(hwnd, out var rect);
-        var bits = Win32.Grab(rect, out var w, out var h);
-        using (var file = File.Create(dev.Shot!))
+        await Save(hwnd, dev.Shot!);
+        if (dev.Again > 0)
         {
-            var encoder = await BitmapEncoder.CreateAsync(BitmapEncoder.PngEncoderId, file.AsRandomAccessStream());
-            encoder.SetPixelData(BitmapPixelFormat.Bgra8, BitmapAlphaMode.Ignore, (uint)w, (uint)h, 96, 96, bits);
-            await encoder.FlushAsync();
+            await Task.Delay(TimeSpan.FromSeconds(dev.Again));
+            await Save(hwnd, Path.ChangeExtension(dev.Shot!, null) + "-2.png");
         }
         App.Quit();
+    }
+
+    private static async Task Save(nint hwnd, string path)
+    {
+        Win32.GetWindowRect(hwnd, out var rect);
+        var bits = Win32.Grab(rect, out var w, out var h);
+        using var file = File.Create(path);
+        var encoder = await BitmapEncoder.CreateAsync(BitmapEncoder.PngEncoderId, file.AsRandomAccessStream());
+        encoder.SetPixelData(BitmapPixelFormat.Bgra8, BitmapAlphaMode.Ignore, (uint)w, (uint)h, 96, 96, bits);
+        await encoder.FlushAsync();
     }
 }
