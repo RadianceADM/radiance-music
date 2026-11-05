@@ -238,6 +238,8 @@ struct View {
     /// History's plays, newest first (with when, unix seconds).
     history: Vec<(Track, i64)>,
     panel: QueuePanel,
+    /// Each song's (plays, skips), by key.
+    counts: HashMap<String, (usize, usize)>,
 }
 
 /// Between the app's threads and the engine's.
@@ -333,6 +335,7 @@ impl Controller {
                 toasts: VecDeque::new(),
                 history: Vec::new(),
                 panel: QueuePanel::default(),
+                counts: HashMap::new(),
             }),
             liked_q: Mutex::new(String::new()),
         });
@@ -542,6 +545,11 @@ impl Controller {
     pub fn remove_from_playlist(&self, id: i64, key: &str) {
         crate::db::remove_from_playlist(id, key);
         self.shared.tell(Change::Playlists);
+    }
+
+    /// Each song's (plays, skips), by key (a row's "N×" and its words).
+    pub fn counts(&self) -> HashMap<String, (usize, usize)> {
+        self.shared.view(|v| v.counts.clone())
     }
 
     /// The lyric lines lit at `at` (seconds), each with how many characters are sung: what the
@@ -844,6 +852,7 @@ impl Engine {
         self.publish_home();
         self.publish_liked();
         self.publish_history();
+        self.publish_counts();
         self.fill_genres();
         self.refresh_mix();
         // likes that weren't saved yet (offline, or the app closed while saving)
@@ -1247,6 +1256,11 @@ impl Engine {
         self.shared.tell(Change::Library);
     }
 
+    fn publish_counts(&self) {
+        let counts = self.counts.borrow().clone();
+        self.shared.view(|v| v.counts = counts);
+    }
+
     fn publish_history(&self) {
         let plays = self.history.borrow().clone();
         self.shared.view(|v| v.history = plays);
@@ -1511,6 +1525,7 @@ impl Engine {
             if queue::is_early_skip(at, len) {
                 crate::db::add_skip(&t.key());
                 self.counts.borrow_mut().entry(t.key()).or_default().1 += 1;
+                self.publish_counts();
             }
         }
     }
@@ -1592,6 +1607,7 @@ impl Engine {
         self.save_session();
         self.publish_home();
         self.publish_history();
+        self.publish_counts();
         self.publish_queue(); // Played before
     }
 

@@ -21,7 +21,7 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <!-- Program.cs starts the app itself, so the self-check and the screenshots run their own way -->
     <DefineConstants>$(DefineConstants);DISABLE_XAML_GENERATED_MAIN</DefineConstants>
-    <Version>0.8.0-beta.1</Version>
+    <Version>0.8.0-beta.2</Version>
     <Product>Radiance Music (beta)</Product>
     <Company>Radiance Innovation Centers</Company>
     <Copyright>Radiance Innovation Centers. GPL-3.0-or-later.</Copyright>
