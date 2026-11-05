@@ -1,0 +1,3 @@
+[bindings.csharp]
+namespace = "RadianceMusic.Native"
+global_methods_class_name = "Native"

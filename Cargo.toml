@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "core", "engine"]
+members = [".", "core", "engine", "ffi"]
 # the GTK app alone, as before: cargo build --release (Flatpak, Snap, ribs03/build.sh, CI)
 default-members = ["."]
 resolver = "2"

@@ -7,10 +7,14 @@
 /// The app's id (GApplication, D-Bus, the desktop file, Flatpak).
 pub const APP_ID: &str = "io.github.radianceadm.Music";
 
+/// The engine's version: the computer app's.
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
 pub mod align;
 pub mod archive;
 pub mod art;
 pub mod beat;
+pub mod check;
 pub mod controller;
 pub mod db;
 pub mod effects;
@@ -23,6 +27,7 @@ pub mod limiter;
 pub mod log;
 pub mod lyrics;
 pub mod mix;
+pub mod one_copy;
 pub mod net;
 #[cfg(feature = "onnx-split")]
 pub mod onnx_split;
