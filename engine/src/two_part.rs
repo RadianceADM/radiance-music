@@ -179,7 +179,9 @@ pub fn fetch(say: &dyn Fn(f64)) -> Result<(PathBuf, PathBuf), String> {
         };
         say(done as f64 / total as f64);
     }
-    ready_in(&d).ok_or_else(|| "the two-part split's files aren't all there".into())
+    let ready = ready_in(&d).ok_or_else(|| "the two-part split's files aren't all there".to_string())?;
+    say(1.0); // (also when nothing was missing: what waits on it sees it done)
+    Ok(ready)
 }
 
 /// ONNX Runtime or a model wouldn't load: its files are checked again (each one's SHA-256);

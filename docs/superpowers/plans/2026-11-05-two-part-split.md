@@ -67,3 +67,4 @@ prerequisites download at first open), and again before a two-part split if miss
 - Final: minor (deferred): M12 a set-up but unreachable split server: No vocals waits on it instead of the fast split.
 - Final: minor (deferred): GStreamer's own threads in the fast split's reading/writing aren't niced (GLib's pool).
 - Final: Ruling: liked songs the person split in two stay in two (the owner's "Liked songs still split in four by themselves" read as the unsplit ones) — asked in a dialog.
+- Final (Windows rerun): the_real_pieces_come_and_check_out failed on ribs03 when nothing was missing: fetch said 0 % at its start and never 100 % — fixed (says done at the end); one controller test (engine didn't start within 30 s) failed once with ribs03 51 % busy at Idle priority, then 18/18 twice (the deferred 30 s start wait); the_windows_dll_comes_by_ranges failed once on ribs02 (a download hiccup; it fails cleanly), then 5/5.
