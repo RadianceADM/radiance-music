@@ -4062,7 +4062,7 @@ impl Ui {
             let name2 = name.clone();
             add(&to, &name, &format!("pl-add-{id}"), Box::new(move |me| {
                 let added = crate::db::add_to_playlist(id, &t1);
-                me.toast(&if added { format!("Added to “{name2}”") } else { format!("Already in “{name2}”") });
+                me.toast(&if added { words::added_to(&name2) } else { words::already_in(&name2) });
                 me.render_playlist_nav();
             }));
         }
@@ -5932,7 +5932,7 @@ impl Ui {
         };
         for (id, name, n) in crate::db::playlists() {
             let r = row("view-list-symbolic", &name, &format!("playlist:{id}"));
-            r.set_tooltip_text(Some(&format!("{name}: {n} song{}", if n == 1 { "" } else { "s" })));
+            r.set_tooltip_text(Some(&words::playlist_tip(&name, n)));
             self.nav.append(&r);
         }
         self.nav.append(&row("list-add-symbolic", "New Playlist", "new-playlist"));
@@ -5955,7 +5955,7 @@ impl Ui {
         let play = gtk::Button::builder().label("Play").css_classes(["suggested-action", "pill-button"]).sensitive(n > 0).build();
         let shuffle = gtk::Button::builder().label("Shuffle").css_classes(["pill-button"]).sensitive(n > 0).build();
         let rename = gtk::Button::builder().icon_name("document-edit-symbolic").tooltip_text("Rename").css_classes(["circular"]).build();
-        let delete = gtk::Button::builder().icon_name("user-trash-symbolic").tooltip_text("Delete the playlist").css_classes(["circular"]).build();
+        let delete = gtk::Button::builder().icon_name("user-trash-symbolic").tooltip_text(words::PLAYLIST_DELETE_TIP).css_classes(["circular"]).build();
         let (me, l) = (Rc::downgrade(self), songs.clone());
         play.connect_clicked(move |_| {
             if let Some(me) = me.upgrade() {
@@ -5981,7 +5981,7 @@ impl Ui {
         let (me, gone) = (Rc::downgrade(self), name.clone());
         delete.connect_clicked(move |_| {
             let Some(me) = me.upgrade() else { return };
-            let ask = adw::AlertDialog::new(Some(&format!("Delete “{gone}”?")), Some("The playlist goes; its songs stay in your library."));
+            let ask = adw::AlertDialog::new(Some(&words::delete_playlist_title(&gone)), Some(words::PLAYLIST_DELETE_BODY));
             ask.add_response("cancel", "Cancel");
             ask.add_response("delete", "Delete");
             ask.set_response_appearance("delete", adw::ResponseAppearance::Destructive);
@@ -6008,7 +6008,7 @@ impl Ui {
         self.playlist_box.append(&head);
         let group = adw::PreferencesGroup::new();
         if songs.is_empty() {
-            group.set_description(Some("No songs in it yet. Add one from any song's menu: Add to Playlist."));
+            group.set_description(Some(words::PLAYLIST_EMPTY));
         }
         for (i, t) in songs.iter().enumerate() {
             group.add(&self.track_row(t, Place::Playlist(id, songs.clone(), i)));
@@ -6020,7 +6020,7 @@ impl Ui {
     /// Asks for a name (a new playlist, a rename); `done` gets it, trimmed.
     fn name_dialog(self: &Rc<Self>, heading: &str, action: &str, start: &str, done: impl Fn(&Rc<Self>, &str) + 'static) {
         let ask = adw::AlertDialog::new(Some(heading), None);
-        let entry = gtk::Entry::builder().text(start).activates_default(true).placeholder_text("Playlist name").build();
+        let entry = gtk::Entry::builder().text(start).activates_default(true).placeholder_text(words::PLAYLIST_NAME_HINT).build();
         ask.set_extra_child(Some(&entry));
         ask.add_response("cancel", "Cancel");
         ask.add_response("ok", action);
@@ -6043,13 +6043,13 @@ impl Ui {
 
     /// A new playlist (with `first` in it, from a song's menu).
     pub(crate) fn new_playlist(self: &Rc<Self>, first: Option<Track>) {
-        let n = crate::db::playlists().len() + 1;
-        self.name_dialog("New Playlist", "Create", &format!("My Playlist {n}"), move |me, name| {
+        let suggested = words::next_playlist_name(crate::db::playlists().len());
+        self.name_dialog("New Playlist", "Create", &suggested, move |me, name| {
             let Some(id) = crate::db::create_playlist(name) else { return };
             match &first {
                 Some(t) => {
                     crate::db::add_to_playlist(id, t);
-                    me.toast(&format!("Added to “{name}”"));
+                    me.toast(&words::added_to(name));
                 }
                 None => me.open_playlist(id),
             }

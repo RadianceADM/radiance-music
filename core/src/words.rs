@@ -118,6 +118,34 @@ pub fn fixing_toast(songs: usize, videos: usize) -> String {
     }
 }
 
+/// Playlists (both apps, as the Linux app says them).
+pub const PLAYLIST_EMPTY: &str = "No songs in it yet. Add one from any song's menu: Add to Playlist.";
+pub const PLAYLIST_DELETE_BODY: &str = "The playlist goes; its songs stay in your library.";
+pub const PLAYLIST_DELETE_TIP: &str = "Delete the playlist";
+pub const PLAYLIST_NAME_HINT: &str = "Playlist name";
+
+pub fn added_to(playlist: &str) -> String {
+    format!("Added to “{playlist}”")
+}
+
+pub fn already_in(playlist: &str) -> String {
+    format!("Already in “{playlist}”")
+}
+
+pub fn delete_playlist_title(name: &str) -> String {
+    format!("Delete “{name}”?")
+}
+
+/// The sidebar's tooltip for a playlist.
+pub fn playlist_tip(name: &str, songs: usize) -> String {
+    format!("{name}: {}", crate::library::songs_count(songs))
+}
+
+/// A new playlist's suggested name, with `existing` playlists already.
+pub fn next_playlist_name(existing: usize) -> String {
+    format!("My Playlist {}", existing + 1)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -49,6 +49,8 @@ pub enum Change {
     Library,
     /// A song played (History).
     History,
+    /// A playlist made, renamed, deleted, or a song added or taken out.
+    Playlists,
 }
 
 /// Liked Songs as a page: the songs shown (A to Z, the search applied), the words under it,
@@ -81,6 +83,15 @@ pub struct GroupPage {
     pub art: String,
     pub round: bool,
     pub songs: Vec<Track>,
+}
+
+/// A playlist's page: its name, "N songs", its songs, and the words when it's empty.
+#[derive(Clone, Debug)]
+pub struct PlaylistPage {
+    pub name: String,
+    pub count: String,
+    pub songs: Vec<Track>,
+    pub empty: Option<String>,
 }
 
 /// Liked songs as Liked Songs shows them: A to Z by title, those matching `q`.
@@ -459,6 +470,54 @@ impl Controller {
             round: kind == GroupKind::Artists,
             songs: g.songs,
         })
+    }
+
+    /// The playlists: (id, name, how many songs).
+    pub fn playlists(&self) -> Vec<(i64, String, usize)> {
+        crate::db::playlists()
+    }
+
+    /// A playlist's page (None: there's no such playlist).
+    pub fn playlist(&self, id: i64) -> Option<PlaylistPage> {
+        let name = crate::db::playlists().into_iter().find(|(i, _, _)| *i == id)?.1;
+        let songs = crate::db::playlist_songs(id);
+        Some(PlaylistPage { name, count: shelf::songs_count(songs.len()), empty: songs.is_empty().then(|| words::PLAYLIST_EMPTY.to_string()), songs })
+    }
+
+    /// A new playlist's suggested name ("My Playlist N").
+    pub fn next_playlist_name(&self) -> String {
+        words::next_playlist_name(crate::db::playlists().len())
+    }
+
+    /// Makes a playlist (with `first` in it, from a song's menu); its id.
+    pub fn create_playlist(&self, name: &str, first: Option<&str>) -> Option<i64> {
+        let id = crate::db::create_playlist(name)?;
+        self.shared.tell(Change::Playlists);
+        if let Some(key) = first {
+            self.add_to_playlist(id, key);
+        }
+        Some(id)
+    }
+
+    pub fn rename_playlist(&self, id: i64, name: &str) {
+        crate::db::rename_playlist(id, name);
+        self.shared.tell(Change::Playlists);
+    }
+
+    pub fn delete_playlist(&self, id: i64) {
+        crate::db::delete_playlist(id);
+        self.shared.tell(Change::Playlists);
+    }
+
+    /// Adds the song to the playlist (said: "Added to …" or "Already in …").
+    pub fn add_to_playlist(&self, id: i64, key: &str) {
+        let key = key.to_string();
+        self.post(move |e| e.add_to_playlist(id, &key));
+    }
+
+    pub fn remove_from_playlist(&self, id: i64, key: &str) {
+        crate::db::remove_from_playlist(id, key);
+        self.shared.tell(Change::Playlists);
     }
 
     /// History by day.
@@ -1174,6 +1233,14 @@ impl Engine {
                 e.liked_changed();
             },
         );
+    }
+
+    fn add_to_playlist(&self, id: i64, key: &str) {
+        let Some(t) = self.find_track(key) else { return };
+        let Some(name) = crate::db::playlists().into_iter().find(|(i, _, _)| *i == id).map(|p| p.1) else { return };
+        let added = crate::db::add_to_playlist(id, &t);
+        self.toast(if added { words::added_to(&name) } else { words::already_in(&name) });
+        self.shared.tell(Change::Playlists);
     }
 
     fn fix_missing(self: &Rc<Self>) {

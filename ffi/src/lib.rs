@@ -25,6 +25,7 @@ pub enum ChangeKind {
     Toast,
     Library,
     History,
+    Playlists,
 }
 
 impl From<Change> for ChangeKind {
@@ -42,6 +43,7 @@ impl From<Change> for ChangeKind {
             Change::Toast => ChangeKind::Toast,
             Change::Library => ChangeKind::Library,
             Change::History => ChangeKind::History,
+            Change::Playlists => ChangeKind::Playlists,
         }
     }
 }

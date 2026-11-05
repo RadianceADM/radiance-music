@@ -708,3 +708,44 @@ fn history_groups_today() {
     assert!(until(3.0, || now_id(&c) == "file-history"));
     c.quit();
 }
+
+// ------------------------------------------------------------------ playlists (stage 2)
+
+#[test]
+fn a_playlist_is_made_named_and_emptied() {
+    let _g = setup();
+    let a = wav("pl-a", 10.0);
+    let (c, _f, rx) = with_songs("playlists", vec![a.clone()]);
+    let before = c.playlists().len();
+    let name = c.next_playlist_name();
+    assert_eq!(name, format!("My Playlist {}", before + 1));
+    let id = c.create_playlist(&name, Some(&a.key())).expect("made");
+    assert!(until(3.0, || c.playlist(id).is_some_and(|p| p.songs.len() == 1)));
+    assert!(toasts_for(&c, &rx, 1.5).contains(&format!("Added to “{name}”")));
+    let page = c.playlist(id).unwrap();
+    assert_eq!((page.name.as_str(), page.count.as_str(), page.empty.is_none()), (name.as_str(), "1 song", true));
+    assert!(c.playlists().iter().any(|(i, n, count)| *i == id && *n == name && *count == 1));
+    c.rename_playlist(id, "Road Trip");
+    assert_eq!(c.playlist(id).unwrap().name, "Road Trip");
+    c.remove_from_playlist(id, &a.key());
+    assert_eq!(c.playlist(id).unwrap().empty.as_deref(), Some("No songs in it yet. Add one from any song's menu: Add to Playlist."));
+    c.delete_playlist(id);
+    assert!(c.playlist(id).is_none());
+    assert_eq!(c.playlists().len(), before);
+    c.quit();
+}
+
+#[test]
+fn adding_twice_says_already_in() {
+    let _g = setup();
+    let a = wav("pl-twice", 10.0);
+    let (c, _f, rx) = with_songs("playlists twice", vec![a.clone()]);
+    let id = c.create_playlist("Twice", Some(&a.key())).unwrap();
+    assert!(until(3.0, || c.playlist(id).is_some_and(|p| p.songs.len() == 1)));
+    let _ = toasts_for(&c, &rx, 0.5);
+    c.add_to_playlist(id, &a.key());
+    assert!(toasts_for(&c, &rx, 1.5).contains(&"Already in “Twice”".to_string()));
+    assert_eq!(c.playlist(id).unwrap().songs.len(), 1);
+    c.delete_playlist(id);
+    c.quit();
+}
