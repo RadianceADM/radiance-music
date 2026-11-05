@@ -44,7 +44,15 @@ internal static class Shot
 
     private static async Task Save(nint hwnd, string path)
     {
+        if (Win32.IsIconic(hwnd))
+        {
+            Crash.Note("shot: the window was minimized; restored");
+            Win32.ShowWindow(hwnd, 9); // SW_RESTORE
+            Win32.SetForegroundWindow(hwnd);
+            await Task.Delay(800);
+        }
         Win32.GetWindowRect(hwnd, out var rect);
+        Crash.Note($"shot: window {rect.Right - rect.Left}x{rect.Bottom - rect.Top} at {rect.Left},{rect.Top}");
         var bits = Win32.Grab(rect, out var w, out var h);
         using var file = File.Create(path);
         var encoder = await BitmapEncoder.CreateAsync(BitmapEncoder.PngEncoderId, file.AsRandomAccessStream());

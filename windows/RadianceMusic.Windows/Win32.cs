@@ -22,6 +22,14 @@ internal static partial class Win32
     public static partial bool SetForegroundWindow(nint hwnd);
 
     [LibraryImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static partial bool IsIconic(nint hwnd);
+
+    [LibraryImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static partial bool ShowWindow(nint hwnd, int cmd);
+
+    [LibraryImport("user32.dll")]
     public static partial nint GetDC(nint hwnd);
 
     [LibraryImport("user32.dll")]
