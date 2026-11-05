@@ -12,6 +12,20 @@ internal static class Shot
 {
     public static async Task TakeAsync(MainWindow window, Dev dev)
     {
+        try
+        {
+            await Take(window, dev);
+        }
+        catch (Exception e)
+        {
+            Crash.Note("shot: " + e);
+            App.Quit();
+        }
+    }
+
+    private static async Task Take(MainWindow window, Dev dev)
+    {
+        Crash.Note($"shot: {dev.Page} {dev.Width}x{dev.Height}, in {dev.Wait} s");
         window.Show(dev.Page);
         if (dev.Search != null) window.SearchFor(dev.Search);
         await Task.Delay(TimeSpan.FromSeconds(dev.Wait));
@@ -19,6 +33,7 @@ internal static class Shot
         Win32.SetForegroundWindow(hwnd);
         await Task.Delay(300);
         await Save(hwnd, dev.Shot!);
+        Crash.Note("shot: saved " + dev.Shot);
         if (dev.Again > 0)
         {
             await Task.Delay(TimeSpan.FromSeconds(dev.Again));
