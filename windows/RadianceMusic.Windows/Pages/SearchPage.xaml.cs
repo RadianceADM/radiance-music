@@ -74,24 +74,24 @@ public sealed partial class SearchPage : Page
         BrowseArea.Visibility = typed ? Visibility.Collapsed : Visibility.Visible;
         ResultsArea.Visibility = typed ? Visibility.Visible : Visibility.Collapsed;
         if (!typed) return;
-        MineSection.Visibility = r.Mine.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+        MineSection.Visibility = r.Mine.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
         MineNote.Text = r.MineNote;
         LosslessNote.Text = r.LosslessNote;
         SongsNote.Text = r.SongsNote;
         LosslessSpin.IsActive = r.Lossless == null;
         SongsSpin.IsActive = r.Songs == null;
-        var key = r.Query + "|" + r.Mine.Count + "|" + (r.Lossless?.Count ?? -1) + "|" + (r.Songs?.Count ?? -1);
+        var key = r.Query + "|" + r.Mine.Length + "|" + (r.Lossless?.Length ?? -1) + "|" + (r.Songs?.Length ?? -1);
         if (key == shown) return;
         shown = key;
         Fill(MineRows, r.Mine, ListKind.Mine);
-        Fill(LosslessRows, r.Lossless ?? new List<SongView>(), ListKind.Lossless);
-        Fill(SongsRows, r.Songs ?? new List<SongView>(), ListKind.Songs);
+        Fill(LosslessRows, r.Lossless ?? Array.Empty<SongView>(), ListKind.Lossless);
+        Fill(SongsRows, r.Songs ?? Array.Empty<SongView>(), ListKind.Songs);
     }
 
-    private void Fill(StackPanel rows, List<SongView> songs, ListKind list)
+    private void Fill(StackPanel rows, SongView[] songs, ListKind list)
     {
         rows.Children.Clear();
-        for (var i = 0; i < songs.Count; i++)
+        for (var i = 0; i < songs.Length; i++)
         {
             var index = (uint)i;
             var row = new SongRow(hub!.Engine, songs[i]);

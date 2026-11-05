@@ -56,7 +56,7 @@ public sealed partial class HomePage : Page
         if (key == shown) return;
         shown = key;
         HeroButtons.Children.Clear();
-        if (home.Mix.Count > 0)
+        if (home.Mix.Length > 0)
         {
             HeroButtons.Children.Add(Pill("\uE768", "Play your mix", true, () => hub.Engine.PlayFrom(ListKind.Mix, 0)));
             HeroButtons.Children.Add(Pill("\uE8B1", "Shuffle", false, () => hub.Engine.ShuffleFrom(ListKind.Mix)));
@@ -65,7 +65,7 @@ public sealed partial class HomePage : Page
         {
             HeroButtons.Children.Add(Pill("\uE721", "Search for music", true, () => App.Window?.FocusSearch()));
         }
-        var covers = (home.Mix.Count > 0 ? home.Mix : home.Liked).Take(4).ToList();
+        var covers = (home.Mix.Length > 0 ? home.Mix : home.Liked).Take(4).ToList();
         _ = Fill(covers);
         Rows.Children.Clear();
         AddRow("Made for you", home.Mix, ListKind.Mix, Refresh());
@@ -115,14 +115,14 @@ public sealed partial class HomePage : Page
     }
 
     /// <summary>A row of cards (none: no row), as home.rs carousel.</summary>
-    private void AddRow(string title, List<SongView> songs, ListKind list, FrameworkElement? extra)
+    private void AddRow(string title, SongView[] songs, ListKind list, FrameworkElement? extra)
     {
-        if (songs.Count == 0 || hub == null) return;
+        if (songs.Length == 0 || hub == null) return;
         var head = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
         head.Children.Add(new TextBlock { Text = title, Style = (Style)Application.Current.Resources["SectionTitle"], VerticalAlignment = VerticalAlignment.Center });
         if (extra != null) head.Children.Add(extra);
         var cards = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6 };
-        for (var i = 0; i < Math.Min(songs.Count, RowCards); i++)
+        for (var i = 0; i < Math.Min(songs.Length, RowCards); i++)
         {
             var index = (uint)i;
             var card = new SongCard(hub.Engine, songs[i], cardSize);

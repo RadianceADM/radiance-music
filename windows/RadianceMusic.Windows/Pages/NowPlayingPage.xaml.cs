@@ -108,7 +108,7 @@ public sealed partial class NowPlayingPage : Page
     {
         if (hub == null) return;
         var l = hub.Engine.Lyrics();
-        var key = songKey + "|" + l.Kind + "|" + l.Lines.Count + "|" + l.Plain.Length + "|" + hub.Engine.Online();
+        var key = songKey + "|" + l.Kind + "|" + l.Lines.Length + "|" + l.Plain.Length + "|" + hub.Engine.Online();
         if (key == lyricsKey) return;
         lyricsKey = key;
         Lines.Children.Clear();
@@ -146,7 +146,7 @@ public sealed partial class NowPlayingPage : Page
     }
 
     /// <summary>The lines sung now lit; the first of them brought to the middle (once, as it changes).</summary>
-    private void Light(List<uint> lit)
+    private void Light(uint[] lit)
     {
         if (lines.Count == 0) return;
         for (var i = 0; i < lines.Count; i++) lines[i].Opacity = lit.Contains((uint)i) ? 1.0 : 0.34;

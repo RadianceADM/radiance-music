@@ -27,7 +27,7 @@ public static class Program
         }
         Dev = Dev.Parse(args);
         WinRT.ComWrappersSupport.InitializeComWrappers();
-        Application.Start(_ =>
+        Application.Start(started =>
         {
             SynchronizationContext.SetSynchronizationContext(new DispatcherQueueSynchronizationContext(DispatcherQueue.GetForCurrentThread()));
             _ = new App();
