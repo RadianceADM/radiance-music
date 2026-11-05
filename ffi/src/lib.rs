@@ -161,6 +161,12 @@ pub struct NowView {
     pub liked: bool,
     /// When `at` was read, on clock_ms()'s clock (count on from there while playing).
     pub since: u64,
+    /// A music video is playing (its picture: video_swapchain()).
+    pub video: bool,
+    /// The song's other version is known: show the video button.
+    pub has_counterpart: bool,
+    /// What's really playing, in the Linux app's words ("Lossless · FLAC · 24-bit · 96 kHz").
+    pub quality: String,
 }
 
 /// What went wrong; `retry`: it stopped (show Try Again).
@@ -356,6 +362,9 @@ impl MusicEngine {
             lit: n.lit.iter().map(|&i| i as u32).collect(),
             liked: n.liked,
             since: n.since,
+            video: n.video,
+            has_counterpart: n.has_counterpart,
+            quality: n.quality,
         }
     }
 
@@ -677,6 +686,21 @@ fn lit_views(v: Vec<(usize, usize)>) -> Vec<LitView> {
 
 #[uniffi::export]
 impl MusicEngine {
+    // music videos
+    /// The song's other version, from where it is: its music video (`want_video`) or the song.
+    pub fn switch_version(&self, want_video: bool) {
+        self.inner.switch_version(want_video);
+    }
+    /// The playing video's DXGI swapchain (an IDXGISwapChain1*, for ISwapChainPanelNative::
+    /// SetSwapChain); None: no video playing.
+    pub fn video_swapchain(&self) -> Option<u64> {
+        self.inner.video_swapchain()
+    }
+    /// The video's panel is `w`×`h` pixels now (the swapchain follows).
+    pub fn resize_video(&self, w: u32, h: u32) {
+        self.inner.resize_video(w, h);
+    }
+
     // liking
     pub fn toggle_like(&self, key: String) {
         self.inner.toggle_like(&key);
@@ -922,6 +946,12 @@ mod tests {
         }
         fn genres(&self, _t: &Track) -> Vec<String> {
             Vec::new()
+        }
+        fn counterpart(&self, _t: &Track) -> Option<Track> {
+            None
+        }
+        fn video_streams(&self, _id: &str) -> Result<(radiance_engine::youtube::Stream, radiance_engine::youtube::Stream), String> {
+            Err("no videos in this test".into())
         }
     }
 

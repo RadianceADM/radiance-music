@@ -651,6 +651,29 @@ fn format_of(pad: &gst::Pad) -> Option<(u32, usize)> {
     Some((s.get::<i32>("rate").ok()? as u32, s.get::<i32>("channels").ok()? as usize))
 }
 
+/// A music video's picture outside GTK (Player::load_video_out): what the app shows it in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct VideoOut {
+    /// d3d12swapchainsink's DXGI swapchain (an IDXGISwapChain1*, for ISwapChainPanelNative::
+    /// SetSwapChain), kept alive by the sink while the video plays; 0: none (not Windows).
+    pub swapchain: u64,
+}
+
+/// Where a video's picture goes outside GTK: Windows' Direct3D 12 swapchain sink (made for
+/// composition: a SwapChainPanel shows it), elsewhere nowhere (the engine's tests).
+#[cfg(windows)]
+const PICTURE_OUT: &str = "videoconvert ! d3d12swapchainsink name=picture";
+#[cfg(not(windows))]
+const PICTURE_OUT: &str = "fakesink name=picture sync=true";
+
+/// The swapchain d3d12swapchainsink draws into (0: not that sink).
+fn swapchain_of(sink: &gst::Element) -> u64 {
+    if sink.find_property("swapchain").is_none() {
+        return 0;
+    }
+    sink.property::<glib::Pointer>("swapchain") as u64
+}
+
 /// A video: its picture and its sound (two streams) played together, in sync.
 struct VideoPipe {
     pipeline: gst::Pipeline,
@@ -1050,27 +1073,63 @@ impl Player {
     /// to show it in (a GdkPaintable for a gtk::Picture; the GTK app's, feature "gtk").
     #[cfg(feature = "gtk")]
     pub fn load_video(&self, picture: &str, sound: &str) -> Result<gtk::gdk::Paintable, String> {
+        let pipeline = self.video_pipeline(picture, sound, "videoconvert ! gtk4paintablesink name=picture")?;
+        let shown = pipeline.by_name("picture").ok_or("no picture")?.property::<gtk::gdk::Paintable>("paintable");
+        self.run_video(pipeline)?;
+        Ok(shown)
+    }
+
+    /// Plays a video outside GTK (the Windows app): `picture` and `sound` are its two streams
+    /// (the same: a saved file). On Windows the picture goes to d3d12swapchainsink, whose DXGI
+    /// swapchain the app sets on a SwapChainPanel (the compositor shows it: no copies through
+    /// the CPU); elsewhere nowhere (tests).
+    pub fn load_video_out(&self, picture: &str, sound: &str) -> Result<VideoOut, String> {
+        let pipeline = self.video_pipeline(picture, sound, PICTURE_OUT)?;
+        let swapchain = swapchain_of(&pipeline.by_name("picture").ok_or("no picture")?);
+        self.run_video(pipeline)?;
+        Ok(VideoOut { swapchain })
+    }
+
+    /// The video's panel is `w`×`h` pixels now: the swapchain's buffers follow (Windows).
+    pub fn resize_video(&self, w: u32, h: u32) {
+        #[cfg(windows)]
+        if let Some(sink) = self.video.borrow().as_ref().and_then(|v| v.pipeline.by_name("picture")) {
+            if sink.factory().is_some_and(|f| f.name() == "d3d12swapchainsink") && w > 0 && h > 0 {
+                sink.emit_by_name::<()>("resize", &[&w, &h]);
+            }
+        }
+        #[cfg(not(windows))]
+        let _ = (w, h);
+    }
+
+    /// A video's pipeline (not started): its picture into `picture_sink` (named "picture"), its
+    /// sound through the Mixer's effects and the app's volume. Whatever played before stops.
+    fn video_pipeline(&self, picture: &str, sound: &str, picture_sink: &str) -> Result<gst::Pipeline, String> {
         self.stop();
         let silent = std::env::var_os("RADIANCE_SILENT").is_some();
         let out = if silent { "fakesink sync=true" } else { SOUND_OUT };
         // a saved video: one file, picture and sound together; else two streams
         let desc = if picture == sound {
             format!(
-                "uridecodebin name=file uri=\"{picture}\" file. ! queue ! videoconvert ! gtk4paintablesink name=picture \
+                "uridecodebin name=file uri=\"{picture}\" file. ! queue ! {picture_sink} \
                  file. ! queue ! audioconvert ! audioresample ! audio/x-raw,format=F32LE ! identity name=fx ! volume name=volume ! audioconvert ! {out} name=sound"
             )
         } else {
             format!(
-                "uridecodebin uri=\"{picture}\" ! videoconvert ! gtk4paintablesink name=picture \
+                "uridecodebin uri=\"{picture}\" ! {picture_sink} \
                  uridecodebin uri=\"{sound}\" ! audioconvert ! audioresample ! audio/x-raw,format=F32LE ! identity name=fx ! volume name=volume ! audioconvert ! {out} name=sound"
             )
         };
-        let pipeline = gst::parse::launch(&desc).map_err(|e| e.to_string())?.downcast::<gst::Pipeline>().map_err(|_| "not a pipeline")?;
+        gst::parse::launch(&desc).map_err(|e| e.to_string())?.downcast::<gst::Pipeline>().map_err(|_| "not a pipeline".into())
+    }
+
+    /// Starts a video's pipeline (video_pipeline's) and keeps it as the one playing.
+    fn run_video(&self, pipeline: gst::Pipeline) -> Result<(), String> {
+        let silent = std::env::var_os("RADIANCE_SILENT").is_some();
         // the Mixer's effects on the video's sound too
         if let Some(fx) = pipeline.by_name("fx") {
             crate::fx::listen(&fx);
         }
-        let shown = pipeline.by_name("picture").ok_or("no picture")?.property::<gtk::gdk::Paintable>("paintable");
         let volume = pipeline.by_name("volume").ok_or("no volume")?;
         volume.set_property("volume", self.master.get());
         if let (false, Some(out)) = (silent, pipeline.by_name("sound")) {
@@ -1093,7 +1152,7 @@ impl Player {
             .map_err(|e| e.to_string())?;
         pipeline.set_state(gst::State::Playing).map_err(|e| e.to_string())?;
         *self.video.borrow_mut() = Some(VideoPipe { pipeline, volume, _bus: guard });
-        Ok(shown)
+        Ok(())
     }
 
     pub fn is_video(&self) -> bool {

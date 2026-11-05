@@ -17,6 +17,7 @@ use std::time::{Duration, Instant};
 
 use radiance_core::library::{self as shelf, GroupKind, Saved};
 use radiance_core::menu::{self, Action, Item, Place};
+use radiance_core::quality::{self, Heard};
 use radiance_core::queue::{self, Queue, Repeat, Step};
 use radiance_core::search;
 use radiance_core::trouble::{self, After};
@@ -182,6 +183,12 @@ pub struct NowState {
     pub liked: bool,
     /// When `at` was read, on clock_ms()'s clock (the app counts on from there while playing).
     pub since: u64,
+    /// A music video is playing (its picture: video_swapchain()).
+    pub video: bool,
+    /// The song's other version is known (the video button: its music video, or back to the song).
+    pub has_counterpart: bool,
+    /// What's really playing, in the Linux app's words ("Lossless · FLAC · 24-bit · 96 kHz").
+    pub quality: String,
 }
 
 /// Milliseconds on the engine's monotonic clock (NowState::since's).
@@ -240,6 +247,8 @@ struct View {
     panel: QueuePanel,
     /// Each song's (plays, skips), by key.
     counts: HashMap<String, (usize, usize)>,
+    /// The music video's swapchain, while one plays (Windows).
+    video: Option<u64>,
 }
 
 /// Between the app's threads and the engine's.
@@ -336,6 +345,7 @@ impl Controller {
                 history: Vec::new(),
                 panel: QueuePanel::default(),
                 counts: HashMap::new(),
+                video: None,
             }),
             liked_q: Mutex::new(String::new()),
         });
@@ -426,6 +436,22 @@ impl Controller {
     /// To `at` seconds into the song.
     pub fn seek(&self, at: f64) {
         self.post(move |e| e.seek(at));
+    }
+
+    /// The song's other version, from where it is: its music video (`want_video`) or the song.
+    pub fn switch_version(&self, want_video: bool) {
+        self.post(move |e| e.switch_version(want_video));
+    }
+
+    /// The music video's picture while one plays: its DXGI swapchain (Windows), for a
+    /// SwapChainPanel. None: no video, or no swapchain (not Windows).
+    pub fn video_swapchain(&self) -> Option<u64> {
+        self.shared.view(|v| v.video)
+    }
+
+    /// The video's panel is `w`×`h` pixels now (the swapchain follows).
+    pub fn resize_video(&self, w: u32, h: u32) {
+        self.post(move |e| e.resize_video(w, h));
     }
 
     /// The heart: likes the song (it's saved, where it's saved) or takes it out of Liked.
@@ -783,7 +809,36 @@ struct Engine {
     /// The song's timed lines (the lit ones go in NowState).
     lines: RefCell<Vec<Line>>,
     last_save: Cell<Option<Instant>>,
+
+    // music videos
+    /// The playing song's other version: (the key it belongs to, that version).
+    counterpart: RefCell<Option<(String, Track)>>,
+    /// A video's streams found last: (its id, picture, sound, height, sound's kbps, when).
+    found_video: RefCell<Option<FoundVideo>>,
+    /// A switch to a music video under way: the song to go back to, where it was, the video's
+    /// key (cleared once the video plays).
+    switching: RefCell<Option<(Track, f64, String)>>,
+    /// The video's picture height (the quality line's "720p").
+    video_height: Cell<u32>,
+    /// The video's swapchain (0: none).
+    swapchain: Cell<u64>,
+    /// What's really playing, in words (NowState::quality).
+    quality: RefCell<String>,
 }
+
+/// A music video's streams, as found (through the relay).
+#[derive(Clone)]
+struct FoundVideo {
+    id: String,
+    picture: String,
+    sound: String,
+    height: u32,
+    kbps: u32,
+    when: Instant,
+}
+
+/// How long a found video's streams are used again (YouTube's addresses last about 6 hours).
+const VIDEO_FRESH: Duration = Duration::from_secs(3600);
 
 impl Engine {
     fn new(shared: Arc<Shared>, epoch: u64) -> Engine {
@@ -818,6 +873,12 @@ impl Engine {
             muted: Cell::new(false),
             lines: RefCell::default(),
             last_save: Cell::new(None),
+            counterpart: RefCell::default(),
+            found_video: RefCell::default(),
+            switching: RefCell::default(),
+            video_height: Cell::new(0),
+            swapchain: Cell::new(0),
+            quality: RefCell::default(),
         }
     }
 
@@ -1004,15 +1065,28 @@ impl Engine {
         self.kbps.set(0);
         self.position.set(self.restore_at.get().unwrap_or(0.0));
         *self.current.borrow_mut() = Some(t.clone());
+        if self.switching.borrow().as_ref().is_some_and(|(_, _, key)| *key != t.key()) {
+            self.switching.replace(None); // another song picked since the switch
+        }
         self.load_lyrics(&t, gen);
         self.note_played(&t);
-        let lookup = t.source == Source::YouTube && t.file.is_none() && self.streams.borrow().fresh(&t.id).is_none();
+        self.find_counterpart(&t);
+        self.video_height.set(0);
+        let video = t.video && t.file.is_none();
+        let lookup = if video {
+            self.video_at_hand(&t.id).is_none()
+        } else {
+            t.source == Source::YouTube && t.file.is_none() && self.streams.borrow().fresh(&t.id).is_none()
+        };
         if lookup {
             if let Some(p) = self.player.borrow().as_ref() {
                 p.stop(); // not the last song under this one's name while it's found
             }
         }
-        if let Some(f) = &t.file {
+        self.update_quality();
+        if video {
+            self.play_video(&t, gen);
+        } else if let Some(f) = &t.file {
             use gio::prelude::*;
             self.start(&gio::File::for_path(f).uri(), gen);
         } else {
@@ -1163,12 +1237,20 @@ impl Engine {
                         p.seek(at);
                     }
                 }
+                if self.player.borrow().as_ref().is_some_and(|p| p.is_video()) {
+                    self.switching.replace(None); // the video plays: no way back needed
+                }
+                self.update_quality();
                 self.publish_now();
             }
             Event::Ended if self.queue.borrow().repeat() == Repeat::One => self.play_current(),
             Event::Ended => self.skip(1),
             Event::Error(e) if trouble::sound_device_gone(&e) && self.sound_tries.get() < 3 => self.carry_on(),
-            Event::Error(e) => self.unavailable(&song, &e),
+            Event::Error(e) => {
+                if !self.back_from_video(&e) {
+                    self.unavailable(&song, &e);
+                }
+            }
         }
     }
 
@@ -1312,6 +1394,196 @@ impl Engine {
         self.publish_now();
         self.publish_home();
         self.publish_results();
+    }
+
+    /// The other version (song <-> its official music video), from the same spot. A video's
+    /// streams are found first, the song playing on meanwhile: if they can't be, it says why
+    /// and the song goes on.
+    fn switch_version(self: &Rc<Self>, want_video: bool) {
+        let Some(cur) = self.current.borrow().clone() else { return };
+        if cur.video == want_video {
+            return;
+        }
+        let Some((key, other)) = self.counterpart.borrow().clone() else { return };
+        if key != cur.key() {
+            return;
+        }
+        if other.video && other.file.is_none() && self.video_at_hand(&other.id).is_none() {
+            let gen = self.play_gen.get();
+            let title = other.title.clone();
+            self.find_video(&other, move |e, found| {
+                if e.play_gen.get() != gen {
+                    return; // another song since
+                }
+                match found {
+                    Ok(()) => e.switch_version(want_video),
+                    Err(why) => {
+                        crate::log::note(&format!("“{title}” won't play: {why}"));
+                        let (reason, _) = trouble::why_not(&why, e.shared.view(|v| v.online));
+                        e.say(trouble::cant_play_text(&title, reason, 1, false), false);
+                    }
+                }
+            });
+            return;
+        }
+        let at = self.player.borrow().as_ref().and_then(|p| p.position()).unwrap_or(self.position.get());
+        {
+            let mut q = self.queue.borrow_mut();
+            let i = q.index();
+            q.set_at(i, other.clone());
+        }
+        // the way back is known already
+        self.counterpart.replace(Some((other.key(), cur.clone())));
+        self.switching.replace(other.video.then(|| (cur, at, other.key())));
+        self.restored.set(false);
+        self.restore_at.set((at > 1.0).then_some(at));
+        self.play_current();
+    }
+
+    /// A video switched to didn't play: back to the song, from where it was, saying why.
+    /// False: no switch was under way (an ordinary song that won't play).
+    fn back_from_video(self: &Rc<Self>, why: &str) -> bool {
+        let Some((song, at, key)) = self.switching.take() else { return false };
+        let Some(video) = self.current.borrow().clone().filter(|c| c.key() == key) else { return false };
+        crate::log::note(&format!("“{}” won't play: {why}", video.title));
+        let (reason, _) = trouble::why_not(why, self.shared.view(|v| v.online));
+        {
+            let mut q = self.queue.borrow_mut();
+            let i = q.index();
+            q.set_at(i, song.clone());
+        }
+        self.counterpart.replace(Some((song.key(), video.clone())));
+        self.restore_at.set((at > 1.0).then_some(at));
+        self.play_current();
+        self.say(trouble::cant_play_text(&video.title, reason, 1, false), false);
+        true
+    }
+
+    /// Looks for the playing song's other version (its music video, or the song of a video).
+    fn find_counterpart(self: &Rc<Self>, t: &Track) {
+        let known = self.counterpart.borrow().as_ref().is_some_and(|(k, _)| *k == t.key());
+        if known || t.source != Source::YouTube {
+            return;
+        }
+        let sources = self.shared.sources.clone();
+        let (song, key) = (t.clone(), t.key());
+        self.bg(
+            move || sources.counterpart(&song),
+            move |e, found| {
+                if e.current.borrow().as_ref().map(|c| c.key()) != Some(key.clone()) {
+                    return; // another song since
+                }
+                if let Some(other) = found {
+                    e.counterpart.replace(Some((key, other)));
+                    e.publish_now();
+                }
+            },
+        );
+    }
+
+    /// A video's picture and sound, when they're at hand: its saved file (both), or the streams
+    /// found lately. (picture, sound, height, kbps)
+    fn video_at_hand(&self, id: &str) -> Option<(String, String, u32, u32)> {
+        if let Some(file) = crate::db::video_file(id) {
+            use gio::prelude::*;
+            let uri = gio::File::for_path(file).uri().to_string();
+            return Some((uri.clone(), uri, 720, 0)); // saved: from the file, offline
+        }
+        let found = self.found_video.borrow();
+        found.as_ref().filter(|f| f.id == id && f.when.elapsed() < VIDEO_FRESH).map(|f| (f.picture.clone(), f.sound.clone(), f.height, f.kbps))
+    }
+
+    /// Finds a video's streams (YouTube, through the relay); `done` with how it went.
+    fn find_video(self: &Rc<Self>, t: &Track, done: impl FnOnce(&Rc<Engine>, Result<(), String>) + Send + 'static) {
+        let Some(relay) = self.relay.clone() else {
+            done(self, Err("the local relay didn't start".into()));
+            return;
+        };
+        let sources = self.shared.sources.clone();
+        let id = t.id.clone();
+        self.bg(
+            {
+                let id = id.clone();
+                move || sources.video_streams(&id).map(|(v, a)| (relay.add(v.url, v.size, v.mime), v.kbps, relay.add(a.url, a.size, a.mime), a.kbps))
+            },
+            move |e, found| match found {
+                Ok((picture, height, sound, kbps)) => {
+                    e.found_video.replace(Some(FoundVideo { id, picture, sound, height, kbps, when: Instant::now() }));
+                    done(e, Ok(()));
+                }
+                Err(why) => done(e, Err(why)),
+            },
+        );
+    }
+
+    /// A music video: its picture where the cover goes, its sound as a song's.
+    fn play_video(self: &Rc<Self>, t: &Track, gen: u64) {
+        if let Some((picture, sound, height, kbps)) = self.video_at_hand(&t.id) {
+            self.start_video(&t.title, &picture, &sound, height, kbps, gen);
+            return;
+        }
+        let title = t.title.clone();
+        self.find_video(t, move |e, found| {
+            if e.play_gen.get() != gen {
+                return; // another song since
+            }
+            let at_hand = e.current.borrow().as_ref().and_then(|c| e.video_at_hand(&c.id));
+            match (found, at_hand) {
+                (Ok(()), Some((picture, sound, height, kbps))) => e.start_video(&title, &picture, &sound, height, kbps, gen),
+                (Ok(()), None) => e.unavailable(&title, "YouTube didn't give this video"),
+                (Err(why), _) => e.unavailable(&title, &why),
+            }
+        });
+    }
+
+    fn start_video(self: &Rc<Self>, title: &str, picture: &str, sound: &str, height: u32, kbps: u32, gen: u64) {
+        if gen != self.play_gen.get() {
+            return; // another song was picked meanwhile
+        }
+        self.video_height.set(height);
+        self.kbps.set(kbps);
+        let out = self.player.borrow().as_ref().map(|p| p.load_video_out(picture, sound));
+        match out {
+            Some(Ok(v)) => {
+                self.swapchain.set(v.swapchain);
+                self.update_quality();
+                self.publish_now();
+            }
+            Some(Err(why)) => {
+                if !self.back_from_video(&why) {
+                    self.unavailable(title, &why);
+                }
+            }
+            None => {}
+        }
+    }
+
+    fn resize_video(&self, w: u32, h: u32) {
+        if let Some(p) = self.player.borrow().as_ref() {
+            p.resize_video(w, h);
+        }
+    }
+
+    /// What's really playing, in the Linux app's words (core's quality): the video's, or the
+    /// song's as decoded once its sound flows (before that, what it is).
+    fn update_quality(&self) {
+        let Some(t) = self.current.borrow().clone() else {
+            self.quality.borrow_mut().clear();
+            return;
+        };
+        let player = self.player.borrow();
+        let text = if player.as_ref().is_some_and(|p| p.is_video()) || (t.video && t.file.is_none()) {
+            quality::text(Heard::Video { height: self.video_height.get(), kbps: self.kbps.get() })
+        } else {
+            let flac = t.lossless() || t.file.as_deref().is_some_and(|f| f.ends_with(".flac"));
+            match player.as_ref().and_then(|p| p.output()) {
+                Some((rate, bits)) if flac => quality::text(Heard::Flac { bits: &bits, rate }),
+                None if flac => quality::text(Heard::Flac { bits: "", rate: 0 }),
+                _ if t.source == Source::Server && t.file.is_none() => quality::text(Heard::Server { format: &t.format }),
+                _ => quality::text(Heard::Opus { kbps: self.kbps.get() }),
+            }
+        };
+        *self.quality.borrow_mut() = text;
     }
 
     fn toggle_like(self: &Rc<Self>, key: &str) {
@@ -1675,6 +1947,7 @@ impl Engine {
             }
         };
         let length = length.or_else(|| song.as_ref().map(|t| t.seconds as f64)).unwrap_or(0.0);
+        let video = self.player.borrow().as_ref().is_some_and(|p| p.is_video());
         let lit = radiance_core::sing::lit_lines(self.lines.borrow().iter(), at);
         let q = self.queue.borrow();
         let now = NowState {
@@ -1692,10 +1965,17 @@ impl Engine {
             lit,
             liked: song.as_ref().is_some_and(|t| self.liked.borrow().iter().any(|x| x.key() == t.key())),
             since: clock_ms(),
+            video,
+            has_counterpart: song.as_ref().is_some_and(|t| self.counterpart.borrow().as_ref().is_some_and(|(k, _)| *k == t.key())),
+            quality: self.quality.borrow().clone(),
             song,
         };
         drop(q);
-        self.shared.view(|v| v.now = now);
+        let swapchain = (video && self.swapchain.get() != 0).then_some(self.swapchain.get());
+        self.shared.view(|v| {
+            v.now = now;
+            v.video = swapchain;
+        });
         self.shared.tell(Change::Now);
     }
 

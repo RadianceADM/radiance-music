@@ -57,6 +57,10 @@ pub struct Fake {
     pub download_wait: Mutex<Duration>,
     /// What a genre lookup finds.
     pub genres: Mutex<Vec<String>>,
+    /// Songs' other versions (their music videos), by the song's id.
+    pub counterparts: Mutex<HashMap<String, Track>>,
+    /// Videos' streams (picture, sound), by the video's id.
+    pub videos: Mutex<HashMap<String, Result<(String, String), String>>>,
 }
 
 fn kind_name(k: Kind) -> &'static str {
@@ -103,6 +107,13 @@ impl Sources for Fake {
     }
     fn genres(&self, _t: &Track) -> Vec<String> {
         self.genres.lock().unwrap().clone()
+    }
+    fn counterpart(&self, t: &Track) -> Option<Track> {
+        self.counterparts.lock().unwrap().get(&t.id).cloned()
+    }
+    fn video_streams(&self, id: &str) -> Result<(Stream, Stream), String> {
+        let answer = self.videos.lock().unwrap().get(id).cloned().unwrap_or_else(|| Err("no video in this test".into()));
+        answer.map(|(picture, sound)| (Stream { url: picture, size: 0, mime: "video/mp4".into(), kbps: 720 }, Stream { url: sound, size: 0, mime: "audio/webm".into(), kbps: 160 }))
     }
 }
 
@@ -854,5 +865,89 @@ fn sung_follows_core_sing_and_two_voices_light_together() {
     // the clock the beta counts on with
     let n = c.now();
     assert!(n.since <= radiance_engine::controller::clock_ms());
+    c.quit();
+}
+
+/// A small music video of `secs` seconds (a test picture and a quiet tone, Matroska), made by
+/// GStreamer: the file's path.
+fn test_video(name: &str, secs: u32) -> String {
+    let dir = std::env::temp_dir().join(format!("radiance-controller-test-{}", std::process::id())).join("videos");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join(format!("{name}.mkv"));
+    gst::init().unwrap();
+    use gst::prelude::*;
+    let desc = format!(
+        "videotestsrc num-buffers={} ! video/x-raw,format=I420,width=64,height=36,framerate=5/1 ! queue ! mux. \
+         audiotestsrc num-buffers={} samplesperbuffer=4410 volume=0.05 ! audio/x-raw,format=S16LE,rate=44100,channels=1 ! queue ! mux. \
+         matroskamux name=mux ! filesink location=\"{}\"",
+        secs * 5,
+        secs * 10,
+        path.display()
+    );
+    let p = gst::parse::launch(&desc).unwrap();
+    p.set_state(gst::State::Playing).unwrap();
+    let done = p.bus().unwrap().timed_pop_filtered(gst::ClockTime::from_seconds(60), &[gst::MessageType::Eos, gst::MessageType::Error]);
+    p.set_state(gst::State::Null).unwrap();
+    assert_eq!(done.map(|m| m.type_()), Some(gst::MessageType::Eos), "the test video wasn't made");
+    path.display().to_string()
+}
+
+/// A song's music video (a YouTube video, `video` set), as a counterpart search finds it.
+fn clip(id: &str, title: &str) -> Track {
+    let mut t = song(Source::YouTube, id, title);
+    t.video = true;
+    t.seconds = 30;
+    t
+}
+
+#[test]
+fn switching_versions_keeps_the_place() {
+    let _l = setup();
+    let s = wav("versioned", 30.0);
+    let v = clip("vid-versioned", "Song versioned (Official Video)");
+    // its video saved on this computer: played from the file
+    radiance_engine::db::add_video(&v.id, &s.key(), &test_video("versioned", 30));
+    let (c, fake, _rx) = with_songs("files video", vec![s.clone()]);
+    fake.counterparts.lock().unwrap().insert(s.id.clone(), v.clone());
+    c.play_from(ListRef::Songs, 0, "yt:file-versioned");
+    assert!(until(3.0, || c.now().playing && now_id(&c) == "file-versioned" && c.now().at > 0.2), "the song didn't play");
+    assert!(until(3.0, || c.now().has_counterpart), "its video wasn't found");
+    assert!(!c.now().video);
+    c.seek(12.0);
+    assert!(until(2.0, || now_id(&c) == "file-versioned" && c.now().at >= 12.0));
+    c.switch_version(true);
+    assert!(until(5.0, || now_id(&c) == "vid-versioned" && c.now().video && c.now().playing && c.now().at >= 11.5), "the video didn't play from 12 s: {:?}", c.now().at);
+    let at = c.now().at;
+    assert!(at < 14.5, "the video started at {at} s");
+    assert_eq!(c.now().quality, "Video · 720p");
+    assert!(c.now().has_counterpart, "the way back to the song");
+    assert_eq!(c.queue().0[c.queue().1].id, "vid-versioned", "the queue holds the version playing");
+    c.switch_version(false);
+    assert!(until(5.0, || now_id(&c) == "file-versioned" && !c.now().video && c.now().playing && c.now().at >= 11.5), "didn't come back near the same place: {:?}", c.now().at);
+    assert!(c.now().at < 17.0, "came back at {} s", c.now().at);
+    assert!(c.now().has_counterpart, "the way to the video again");
+    assert!(c.video_swapchain().is_none());
+    c.quit();
+}
+
+#[test]
+fn a_video_that_cant_play_leaves_the_song() {
+    let _l = setup();
+    let s = wav("no-video", 20.0);
+    let v = clip("vid-gone", "No Video (Official Video)");
+    let (c, fake, rx) = with_songs("files no video", vec![s.clone()]);
+    fake.counterparts.lock().unwrap().insert(s.id.clone(), v.clone());
+    fake.videos.lock().unwrap().insert(v.id.clone(), Err("ERROR: [youtube] vid-gone: Video unavailable".into()));
+    c.play_from(ListRef::Songs, 0, "yt:file-no-video");
+    assert!(until(3.0, || c.now().playing && now_id(&c) == "file-no-video" && c.now().has_counterpart && c.now().at > 0.5), "the song didn't play");
+    c.switch_version(true);
+    assert!(wait_for(&rx, Change::Problem, 3.0), "it didn't say why");
+    assert_eq!(c.problem().map(|p| p.text).as_deref(), Some("“No Video (Official Video)” can't play: it isn't on YouTube anymore"));
+    let n = c.now();
+    assert!(n.playing && !n.video, "the song stopped");
+    assert_eq!(now_id(&c), "file-no-video");
+    let at = n.at;
+    assert!(until(2.0, || c.now().at > at + 0.3), "the song isn't going on");
+    assert_eq!(c.queue().0[c.queue().1].id, "file-no-video");
     c.quit();
 }

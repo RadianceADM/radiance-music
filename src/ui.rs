@@ -36,6 +36,7 @@ use crate::relay::Relay;
 use crate::settings::{self, Settings, Transition, FADE_RANGE};
 use crate::split::{self, Voice};
 use crate::track::{clock, file_key, letter_of, matches, Source, Track};
+use radiance_core::quality::{self, Heard};
 use radiance_core::queue::{self, Queue, Removed, Repeat, Step};
 use radiance_core::library::{self as shelf, GroupKind as LikedView, Saved, AZ, RECENT_ROWS};
 use radiance_core::sing;
@@ -315,14 +316,6 @@ fn offline_pill() -> gtk::Box {
     pill.append(&gtk::Image::from_icon_name("network-offline-symbolic"));
     pill.append(&gtk::Label::new(Some("Offline")));
     pill
-}
-
-fn khz(rate: i32) -> String {
-    if rate % 1000 == 0 {
-        format!("{} kHz", rate / 1000)
-    } else {
-        format!("{:.1} kHz", rate as f64 / 1000.0)
-    }
 }
 
 /// The song's page on the web, to share.
@@ -5297,7 +5290,7 @@ impl Ui {
     fn update_quality(&self) {
         let Some(t) = self.current.borrow().clone() else { return };
         if self.player.borrow().as_ref().is_some_and(|p| p.hears_parts()) {
-            self.set_quality(Some("Mixer · its four parts"), false);
+            self.set_quality(Some(&quality::text(Heard::Parts)), false);
             if let Some(d) = self.player.borrow().as_ref().and_then(|p| p.duration()) {
                 self.seek.set_range(0.0, d.max(1.0));
                 self.len.set_label(&clock(d));
@@ -5306,8 +5299,7 @@ impl Ui {
             return;
         }
         if self.player.borrow().as_ref().is_some_and(|p| p.is_video()) {
-            let h = self.video_height.get();
-            let text = if self.kbps.get() > 0 { format!("Video · {h}p · Opus {} kbps", self.kbps.get()) } else { format!("Video · {h}p") };
+            let text = quality::text(Heard::Video { height: self.video_height.get(), kbps: self.kbps.get() });
             self.set_quality(Some(&text), false);
             if let Some(d) = self.player.borrow().as_ref().and_then(|p| p.duration()) {
                 self.seek.set_range(0.0, d.max(1.0));
@@ -5318,17 +5310,15 @@ impl Ui {
         }
         let Some((rate, bits)) = self.player.borrow().as_ref().and_then(|p| p.output()) else { return };
         let flac = t.lossless() || t.file.as_deref().is_some_and(|f| f.ends_with(".flac"));
-        let text = if let Some(v) = self.on_half.get() {
-            format!("{} · split · {bits} · {}", v.label(), khz(rate))
+        let text = quality::text(if let Some(v) = self.on_half.get() {
+            Heard::Half { voice: v.label(), bits: &bits, rate }
         } else if flac {
-            if bits.is_empty() { "Lossless · FLAC".to_string() } else { format!("Lossless · FLAC · {bits} · {}", khz(rate)) }
+            Heard::Flac { bits: &bits, rate }
         } else if t.source == Source::Server && t.file.is_none() {
-            format!("Compressed · {}", t.format)
-        } else if self.kbps.get() > 0 {
-            format!("Compressed · Opus · {} kbps", self.kbps.get())
+            Heard::Server { format: &t.format }
         } else {
-            "Compressed · Opus".into()
-        };
+            Heard::Opus { kbps: self.kbps.get() }
+        });
         self.set_quality(Some(&text), flac);
         if let Some(d) = self.player.borrow().as_ref().and_then(|p| p.duration()) {
             self.seek.set_range(0.0, d.max(1.0));

@@ -23,6 +23,10 @@ pub trait Sources: Send + Sync + 'static {
     fn download(&self, url: &str, to: &std::path::Path) -> Result<(), String>;
     /// A song's genres (looked up for liked songs).
     fn genres(&self, t: &Track) -> Vec<String>;
+    /// The other version of a song: its official music video (for a song), or the song (for a video).
+    fn counterpart(&self, t: &Track) -> Option<Track>;
+    /// A YouTube video's picture and its sound, as two streams.
+    fn video_streams(&self, id: &str) -> Result<(Stream, Stream), String>;
 }
 
 /// The real ones: the Internet Archive, YouTube Music (yt-dlp), LRCLIB.
@@ -53,5 +57,11 @@ impl Sources for Real {
     }
     fn genres(&self, t: &Track) -> Vec<String> {
         crate::genre::lookup(t)
+    }
+    fn counterpart(&self, t: &Track) -> Option<Track> {
+        crate::youtube::counterpart(t)
+    }
+    fn video_streams(&self, id: &str) -> Result<(Stream, Stream), String> {
+        crate::youtube::video_streams(id)
     }
 }
