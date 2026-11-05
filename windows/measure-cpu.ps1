@@ -41,7 +41,9 @@ if ($App -eq 'beta') {
 function Cpu($p, $label) {
     $p.Refresh(); $a = $p.TotalProcessorTime.TotalSeconds; $t = Get-Date
     Start-Sleep -Seconds $Seconds
-    $p.Refresh(); $b = $p.TotalProcessorTime.TotalSeconds
+    $p.Refresh()
+    if ($p.HasExited) { Write-Output "$App, ${label}: the app quit while measured"; return }
+    $b = $p.TotalProcessorTime.TotalSeconds
     $pct = [math]::Round(100 * ($b - $a) / ((Get-Date) - $t).TotalSeconds, 1)
     Write-Output ("{0,-34} {1,6} % of one core" -f "$App, $label", $pct)
 }
@@ -53,7 +55,9 @@ try {
     [IO.File]::WriteAllText($start, $cmd)
     schtasks /run /tn RadianceMusicTest | Out-Null
     Start-Sleep -Seconds 15
-    $p = Get-Process $name -ErrorAction SilentlyContinue | Where-Object { $before -notcontains $_.Id } | Select-Object -First 1
+    # (the new one with the most memory: the app's window, not a short-lived helper of the same name)
+    $p = Get-Process $name -ErrorAction SilentlyContinue | Where-Object { $before -notcontains $_.Id } | Sort-Object WorkingSet64 -Descending | Select-Object -First 1
+    Write-Output "measuring $name, process $($p.Id), $([math]::Round($p.WorkingSet64 / 1MB)) MB"
     if (-not $p) { throw "$name didn't start" }
     Cpu $p 'Now Playing in front'
     $h = [Win]::Find([uint32]$p.Id)
