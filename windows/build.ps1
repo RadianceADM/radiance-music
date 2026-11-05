@@ -46,7 +46,10 @@ if ($Step -in 'rust', 'all') {
 if ($Step -in 'app', 'all') {
     Step 'the C# binding' { Msys bindgen }
     Step 'the beta''s own tests' { dotnet test "$Src\windows\RadianceMusic.Windows.Tests" -c Release --nologo -v q }
-    Step 'the app' { dotnet publish "$Src\windows\RadianceMusic.Windows\RadianceMusic.Windows.csproj" -c Release -o "$B\app" --nologo -v q }
+    # dotnet build's folder (as the POS app's): publish leaves out the app's .pri and compiled XAML
+    Step 'the app' { dotnet build "$Src\windows\RadianceMusic.Windows\RadianceMusic.Windows.csproj" -c Release --nologo -v q }
+    Remove-Item -Recurse -Force "$B\app" -ErrorAction SilentlyContinue
+    Copy-Item -Recurse "$Src\windows\RadianceMusic.Windows\bin\Release\net10.0-windows10.0.19041.0\win-x64" "$B\app"
 }
 
 if ($Step -in 'dist', 'all') {
