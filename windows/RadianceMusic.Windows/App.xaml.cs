@@ -38,23 +38,34 @@ public partial class App : Application
     private void Launch()
     {
         var ui = DispatcherQueue.GetForCurrentThread();
+        Trace("start");
         // one copy at a time, today's app or this one: the other comes forward (it shares the data)
         if (Ffi.AskTheOther(null))
         {
             if (Program.Dev.Shot == null)
                 Win32.Message("Radiance Music is already open. Close it to use Radiance Music (beta).", "Radiance Music (beta)");
+            Trace("another copy runs: quitting");
             Exit();
             return;
         }
         Ffi.ListenForOthers(new Others(ui));
         Hub = EngineHub.Start(ui);
+        Trace("engine started");
         Window = new MainWindow(Hub);
         Window.Activate();
+        Trace("window shown");
         var icon = Path.Combine(AppContext.BaseDirectory, "radiance-music.ico");
         tray = new Tray(Hub, icon);
         keys = new MediaKeys(Hub, WinRT.Interop.WindowNative.GetWindowHandle(Window));
+        Trace("tray and media keys");
         if (Program.Dev.Shot != null) _ = Shot.TakeAsync(Window, Program.Dev);
         if (Program.Dev.PlayTest) Hub.Engine.PlayFrom(ListKind.Recent, 0);
+    }
+
+    /// <summary>Developer runs (--shot, --play-test): each step of the start in the crash note.</summary>
+    private static void Trace(string step)
+    {
+        if (Program.Dev.Shot != null || Program.Dev.PlayTest) Crash.Note($"[{Environment.ProcessId}] {step}");
     }
 
     /// <summary>Quits: where you are saved, the tray icon gone, the window closed.</summary>
