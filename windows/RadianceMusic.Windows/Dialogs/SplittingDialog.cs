@@ -32,7 +32,7 @@ internal static class SplittingDialog
         var n = new NumberBox
         {
             Header = cores.Title,
-            Description = cores.Note,
+            Description = new TextBlock { Text = cores.Note, TextWrapping = TextWrapping.Wrap, MaxWidth = 380, Style = (Style)res["CaptionTextBlockStyle"] }, // the note wraps (a plain Description runs off the edge)
             Minimum = 1,
             Maximum = Math.Max(1, cores.Max),
             Value = cores.Now,
