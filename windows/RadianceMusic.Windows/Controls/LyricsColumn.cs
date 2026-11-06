@@ -33,6 +33,10 @@ internal sealed class LyricsColumn : Grid
         public required Run Rest;
         public required string Words;
         public CompositionPropertySet? Props;
+        /// <summary>Its letters lit now (0: none, its words plain): changed only when that does, since
+        /// touching a line's text lays the column out again (a Run's Foreground is never null).</summary>
+        public int Chars;
+        public bool Faded;
     }
 
     private const double Grow = 2.5, Least = 1.5, Room = 0.6;
@@ -211,8 +215,10 @@ internal sealed class LyricsColumn : Grid
             {
                 line.Box.Opacity = 1;
                 var n = Math.Clamp(chars, 0, line.Words.Length);
-                if (line.Lit.Text.Length != n)
+                if (line.Chars != n || !line.Faded)
                 {
+                    line.Chars = n;
+                    line.Faded = true;
                     line.Lit.Text = line.Words[..n];
                     line.Rest.Text = line.Words[n..];
                     line.Rest.Foreground = Faint(line.Text);
@@ -221,8 +227,10 @@ internal sealed class LyricsColumn : Grid
             else
             {
                 line.Box.Opacity = 0.34;
-                if (line.Lit.Text.Length != 0 || line.Rest.Foreground != null)
+                if (line.Chars != 0 || line.Faded)
                 {
+                    line.Chars = 0;
+                    line.Faded = false;
                     line.Lit.Text = "";
                     line.Rest.Text = line.Words;
                     line.Rest.ClearValue(TextElement.ForegroundProperty);
