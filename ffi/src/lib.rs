@@ -514,6 +514,12 @@ pub enum MenuAction {
     GoToArtist { q: String },
     GoToAlbum { q: String },
     ShowInFiles,
+    /// Stage 3: split in two or four; the lyrics shown, edited, looked up again.
+    SplitTwo,
+    SplitFour,
+    ShowLyrics,
+    EditLyrics,
+    FindLyricsAgain,
 }
 
 impl From<MenuAction> for menu::Action {
@@ -533,6 +539,11 @@ impl From<MenuAction> for menu::Action {
             MenuAction::GoToArtist { q } => A::GoToArtist(q),
             MenuAction::GoToAlbum { q } => A::GoToAlbum(q),
             MenuAction::ShowInFiles => A::ShowInFiles,
+            MenuAction::SplitTwo => A::SplitTwo,
+            MenuAction::SplitFour => A::SplitFour,
+            MenuAction::ShowLyrics => A::ShowLyrics,
+            MenuAction::EditLyrics => A::EditLyrics,
+            MenuAction::FindLyricsAgain => A::FindLyricsAgain,
         }
     }
 }
@@ -554,6 +565,11 @@ impl From<menu::Action> for MenuAction {
             A::GoToArtist(q) => MenuAction::GoToArtist { q },
             A::GoToAlbum(q) => MenuAction::GoToAlbum { q },
             A::ShowInFiles => MenuAction::ShowInFiles,
+            A::SplitTwo => MenuAction::SplitTwo,
+            A::SplitFour => MenuAction::SplitFour,
+            A::ShowLyrics => MenuAction::ShowLyrics,
+            A::EditLyrics => MenuAction::EditLyrics,
+            A::FindLyricsAgain => MenuAction::FindLyricsAgain,
         }
     }
 }

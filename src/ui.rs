@@ -3895,16 +3895,20 @@ impl Ui {
                 let t1 = t.clone();
                 add(&mine, &format!("Split on {}", s.name), "split", Box::new(move |me| me.split_on_server(&t1)));
             }
-        } else if !t.video && (self.online.get() || t.file.is_some()) {
-            let halves = !Self::shown_parts(&t).is_empty();
-            if !halves && self.can_split_two() && !self.fast_busy(&t) {
+        } else {
+            // core's split items (the Windows beta's menu has the same)
+            let ability = radiance_core::menu::SplitAbility {
+                online: self.online.get(),
+                parts: Self::shown_parts(&t).len(),
+                can_two: self.can_split_two(),
+                can_four: self.can_split(),
+                busy_two: self.fast_busy(&t),
+                busy_four: self.split_q.borrow().place(&t.key()).is_some(),
+            };
+            for item in radiance_core::menu::split_items(&t, &ability) {
                 let t1 = t.clone();
-                add(&mine, "Split: Music + Vocals (Fast)", "split", Box::new(move |me| me.split_as(&t1, true)));
-            }
-            let four_busy = self.split_q.borrow().place(&t.key()).is_some();
-            if self.can_split() && Self::shown_parts(&t).len() < 4 && !four_busy {
-                let t1 = t.clone();
-                add(&mine, if halves { "Split in Four Parts" } else { "Split: Four Parts" }, "split-four", Box::new(move |me| me.split_as(&t1, false)));
+                let two = item.action == radiance_core::menu::Action::SplitTwo;
+                add(&mine, &item.label, if two { "split" } else { "split-four" }, Box::new(move |me| me.split_as(&t1, two)));
             }
         }
         menu.append_section(None, &mine);
@@ -3937,11 +3941,11 @@ impl Ui {
 
         let more = gio::Menu::new();
         let t1 = t.clone();
-        add(&more, "Show Lyrics", "lyrics", Box::new(move |me| me.lyrics_dialog(&t1)));
+        add(&more, words::SHOW_LYRICS, "lyrics", Box::new(move |me| me.lyrics_dialog(&t1)));
         let t1 = t.clone();
-        add(&more, "Edit Lyrics…", "edit-lyrics", Box::new(move |me| me.edit_lyrics(&t1)));
+        add(&more, words::EDIT_LYRICS, "edit-lyrics", Box::new(move |me| me.edit_lyrics(&t1)));
         let t1 = t.clone();
-        add(&more, "Find Lyrics Again", "relook-lyrics", Box::new(move |me| me.find_lyrics_again(&t1)));
+        add(&more, words::FIND_LYRICS_AGAIN, "relook-lyrics", Box::new(move |me| me.find_lyrics_again(&t1)));
         let t1 = t.clone();
         add(&more, "Track Info", "info", Box::new(move |me| me.info_dialog(&t1)));
         let t1 = t.clone();

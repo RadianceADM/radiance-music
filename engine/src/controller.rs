@@ -737,14 +737,26 @@ impl Controller {
         let Some(t) = t else { return Vec::new() };
         let saved = t.file.as_ref().is_some_and(|f| std::path::Path::new(f).exists());
         let lists: Vec<(i64, String)> = crate::db::playlists().into_iter().map(|(id, name, _)| (id, name)).collect();
-        menu::song_menu(&t, place, liked, saved, &lists)
+        let key = t.key();
+        let split = self.shared.view(|v| menu::SplitAbility {
+            online: v.online,
+            parts: split::mix_parts(&t).len(),
+            can_two: v.splits.can_split_two,
+            can_four: v.splits.can_split,
+            busy_two: v.splits.two_now.as_ref().is_some_and(|x| x.key() == key) || v.splits.two_waiting.iter().any(|x| x.key() == key),
+            busy_four: v.splits.now.as_ref().is_some_and(|(x, _)| x.key() == key) || v.splits.waiting.iter().any(|x| x.key() == key),
+        });
+        menu::song_menu(&t, place, liked, saved, &lists, &split)
     }
 
     /// A menu item for the song `key` (`index`: its place in the queue, for Remove from Queue).
     /// Play and New Playlist… are the app's (it knows the list, and asks for the name).
     pub fn do_menu(&self, key: &str, index: usize, action: Action) {
         match action {
-            Action::Play | Action::NewPlaylistWith => {}
+            Action::Play | Action::NewPlaylistWith | Action::ShowLyrics | Action::EditLyrics => {}
+            Action::SplitTwo => self.split(key, true),
+            Action::SplitFour => self.split(key, false),
+            Action::FindLyricsAgain => self.find_lyrics_again(key),
             Action::PlayNext => self.play_next(key),
             Action::AddToQueue => self.enqueue(key),
             Action::RemoveFromQueue => self.unqueue(index, key),
