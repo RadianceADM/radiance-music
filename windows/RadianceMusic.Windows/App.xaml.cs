@@ -82,6 +82,7 @@ public partial class App : Application
         // developer runs: layout passes every 5 s (a page laying itself out over and over shows here)
         if (Program.Dev.Shot != null || Program.Dev.PlayTest || Program.Dev.Behind)
         {
+            DevWatch.Start(Win32.GetCurrentThreadId());
             var passes = 0;
             ((FrameworkElement)Window.Content).LayoutUpdated += (_, _) => passes++;
             var count = DispatcherQueue.GetForCurrentThread().CreateTimer();
