@@ -92,9 +92,9 @@ public sealed partial class MainWindow : Window
         what = whatNow;
         if (moved) Pages.Navigate(type, args, new Microsoft.UI.Xaml.Media.Animation.EntranceNavigationTransitionInfo());
         // an album's, artist's or genre's songs: its grid's item stays the one lit
-        var lit = name == "group" && subject is ValueTuple<GroupKind, string> g ? LibraryPage.Name(g.Item1).ToLowerInvariant() : name;
+        var lit = name == "group" && subject is ValueTuple<GroupKind, string> g ? LibraryPage.KindName(g.Item1).ToLowerInvariant() : name;
         foreach (var item in Nav.MenuItems.OfType<NavigationViewItem>())
-            if ((string)item.Tag == lit && Nav.SelectedItem != item) Nav.SelectedItem = item;
+            if ((string)item.Tag == lit && !ReferenceEquals(Nav.SelectedItem, item)) Nav.SelectedItem = item;
     }
 
     private async Task NewPlaylist()
@@ -115,7 +115,7 @@ public sealed partial class MainWindow : Window
         }
         Nav.MenuItems.Add(new NavigationViewItem { Content = "New Playlist", Tag = "new-playlist", Icon = new FontIcon { Glyph = "\uE710" }, SelectsOnInvoked = false });
         foreach (var item in Nav.MenuItems.OfType<NavigationViewItem>())
-            if ((string)item.Tag == page && Nav.SelectedItem != item) Nav.SelectedItem = item;
+            if ((string)item.Tag == page && !ReferenceEquals(Nav.SelectedItem, item)) Nav.SelectedItem = item;
     }
 
     /// <summary>The engine's notes ("Liked “X”", "Added to “Y”"), one at a time, 4 s each.</summary>

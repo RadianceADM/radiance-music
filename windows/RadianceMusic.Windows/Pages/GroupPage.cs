@@ -48,7 +48,7 @@ internal sealed class GroupPage : Page
     {
         if (hub == null) return;
         body.Children.Clear();
-        var back = PageKit.IconButton("", LibraryPage.Name(kind), () => App.Window?.Show(LibraryPage.Name(kind).ToLowerInvariant()));
+        var back = PageKit.IconButton("", LibraryPage.KindName(kind), () => App.Window?.Show(LibraryPage.KindName(kind).ToLowerInvariant()));
         body.Children.Add(back);
         if (hub.Engine.Group(kind, name) is not { } g)
         {

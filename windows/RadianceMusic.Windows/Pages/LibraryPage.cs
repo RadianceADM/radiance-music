@@ -35,7 +35,7 @@ internal sealed class LibraryPage : Page
         if (e.Parameter is not PageArgs { What: GroupKind k } a) return;
         hub = a.Hub;
         kind = k;
-        title.Text = Name(k);
+        title.Text = KindName(k);
         hub.Change += OnChange;
         Render();
     }
@@ -50,7 +50,7 @@ internal sealed class LibraryPage : Page
         if (what == ChangeKind.Library) Render();
     }
 
-    public static string Name(GroupKind k) => k switch { GroupKind.Albums => "Albums", GroupKind.Artists => "Artists", _ => "Genres" };
+    public static string KindName(GroupKind k) => k switch { GroupKind.Albums => "Albums", GroupKind.Artists => "Artists", _ => "Genres" };
 
     private void Render()
     {
