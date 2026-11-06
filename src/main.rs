@@ -1129,7 +1129,7 @@ fn main() -> glib::ExitCode {
             return glib::ExitCode::FAILURE;
         };
         let started = std::time::Instant::now();
-        match ui::relook_lyrics(&t, ui::Aligner::of(&settings::load()).as_ref()) {
+        match radiance_engine::word_times::relook_lyrics(&t, radiance_engine::word_times::Aligner::of(&settings::load()).as_ref()) {
             Ok(timed) => println!("{} by {}: new lyrics{} in {:.0} s", t.title, t.artist, if timed { ", every word timed" } else { "" }, started.elapsed().as_secs_f64()),
             Err(e) => {
                 println!("{}: {e}", t.title);
@@ -1147,7 +1147,7 @@ fn main() -> glib::ExitCode {
             return glib::ExitCode::FAILURE;
         };
         let started = std::time::Instant::now();
-        ui::keep_on_server(&t, &server, &|| println!("timing the words…"));
+        radiance_engine::word_times::keep_on_server(&t, &server, &|| println!("timing the words…"));
         println!("{}: kept in {:.1} s, hosted now: {}", t.title, started.elapsed().as_secs_f64(), split::hosted().contains(&t.key()));
         return glib::ExitCode::SUCCESS;
     }

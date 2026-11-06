@@ -262,8 +262,69 @@ pub fn to_file(l: &Lyrics, t: Option<&Track>, notes: &[&str]) -> Option<(&'stati
     }
 }
 
+/// The lyrics editor's rows as lyrics (moved from ui.rs's editor, issue #45 stage 3): each row's
+/// start (None: not set), text and singer. Empty lines are dropped; with no times at all it's plain
+/// text; a line without a time sits halfway between its neighbours' (or 4 s after the last time),
+/// and each line ends where the next starts (5 s on for the last, never under 0.3 s).
+pub fn from_edited(rows: &[(Option<f64>, String, Option<String>)]) -> Lyrics {
+    let picked: Vec<(Option<f64>, String, Option<String>)> =
+        rows.iter().map(|(at, text, who)| (*at, text.trim().to_string(), who.clone())).filter(|(_, text, _)| !text.is_empty()).collect();
+    if picked.iter().all(|(at, _, _)| at.is_none()) {
+        return Lyrics::Plain(picked.iter().map(|x| x.1.clone()).collect::<Vec<_>>().join("\n"));
+    }
+    // lines without a time: between their neighbours
+    let mut times: Vec<Option<f64>> = picked.iter().map(|x| x.0).collect();
+    for i in 0..times.len() {
+        if times[i].is_none() {
+            let before = times[..i].iter().rev().flatten().next().copied().unwrap_or(0.0);
+            let after = times[i + 1..].iter().flatten().next().copied().unwrap_or(before + 4.0);
+            times[i] = Some(before + (after - before) / 2.0);
+        }
+    }
+    let lines = picked
+        .iter()
+        .enumerate()
+        .map(|(i, (_, text, who))| {
+            let start = times[i].unwrap_or(0.0);
+            let end = times.get(i + 1).copied().flatten().unwrap_or(start + 5.0).max(start + 0.3);
+            Line { start, end, text: text.clone(), words: spread(text, start, end), singer: who.clone() }
+        })
+        .collect();
+    Lyrics::Timed { lines, exact: false }
+}
+
 #[cfg(test)]
 mod tests {
+    fn row(at: Option<f64>, text: &str) -> (Option<f64>, String, Option<String>) {
+        (at, text.to_string(), None)
+    }
+
+    #[test]
+    fn from_edited_fills_times_between_neighbours() {
+        let Lyrics::Timed { lines, exact } = from_edited(&[row(Some(10.0), "a"), row(None, "b"), row(Some(20.0), "c"), row(None, "d")]) else { panic!("timed") };
+        assert!(!exact);
+        let starts: Vec<f64> = lines.iter().map(|l| l.start).collect();
+        // the last one has no time after it: halfway to 4 s after the one before (the Linux editor's)
+        assert_eq!(starts, [10.0, 15.0, 20.0, 22.0]);
+        assert_eq!(lines[0].end, 15.0);
+        assert_eq!(lines[2].end, 22.0);
+        assert_eq!(lines[3].end, 27.0, "the last: 5 s on");
+        assert!(lines.iter().all(|l| !l.words.is_empty()));
+    }
+
+    #[test]
+    fn from_edited_with_no_times_is_plain() {
+        assert!(matches!(from_edited(&[row(None, "a"), row(None, "b")]), Lyrics::Plain(t) if t == "a\nb"));
+    }
+
+    #[test]
+    fn from_edited_drops_empty_lines_and_keeps_singers() {
+        let Lyrics::Timed { lines, .. } = from_edited(&[(Some(1.0), "a".into(), Some("Nairud".into())), row(Some(2.0), "   "), row(Some(3.0), "c")]) else { panic!("timed") };
+        assert_eq!(lines.iter().map(|l| l.text.as_str()).collect::<Vec<_>>(), ["a", "c"]);
+        assert_eq!(lines[0].singer.as_deref(), Some("Nairud"));
+        assert_eq!(lines[0].end, 3.0);
+    }
+
     use super::*;
 
     // the Lyricsfile project's own examples (examples/*.lyricsfile.yaml)

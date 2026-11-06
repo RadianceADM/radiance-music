@@ -30,7 +30,7 @@ use backdrop::Backdrop;
 use lens::Lens;
 
 use crate::beat::{self, Plan};
-use crate::lyrics::{self, lyrics_and_source, lyrics_file, lyrics_for, lyrics_path, Lyrics};
+use crate::lyrics::{self, lyrics_and_source, lyrics_for, lyrics_path, Lyrics};
 use crate::player::{Event, Player};
 use crate::relay::Relay;
 use crate::settings::{self, Settings, Transition, FADE_RANGE};
@@ -39,6 +39,8 @@ use crate::track::{clock, file_key, letter_of, matches, Source, Track};
 use radiance_core::mix::{self as mixer, part_volumes};
 use radiance_core::quality::{self, Heard};
 use radiance_core::split_queue::{self, SplitQueue};
+use radiance_engine::word_times::{aligned_by_mms, hand_edited, keep_on_server, relook_lyrics, time_words, Aligner};
+pub(crate) use radiance_engine::word_times;
 use radiance_core::queue::{self, Queue, Removed, Repeat, Step};
 use radiance_core::library::{self as shelf, GroupKind as LikedView, Saved, AZ, RECENT_ROWS};
 use radiance_core::sing;
@@ -335,19 +337,6 @@ fn link(t: &Track) -> String {
     }
 }
 
-/// A split song's lyrics for the server's library (worker thread): its
-/// Lyricsfile (words timed from its vocals when they can be), else plain text.
-fn hosted_lyrics(t: &Track) -> Option<(&'static str, String)> {
-    let (l, from_vocals) = lyrics_and_source(t);
-    if let Some(text) = t.file.as_deref().and_then(|f| fs::read_to_string(library::beside(f, "lyrics.yaml")).ok()) {
-        return Some(("lyrics.lyricsfile.yaml", text));
-    }
-    match &l {
-        Lyrics::Timed { .. } => lyrics::to_file(&l, Some(t), if from_vocals { &[lyrics::VOCALS_NOTE] } else { &[] }).map(|(_, y)| ("lyrics.lyricsfile.yaml", y)),
-        Lyrics::Plain(text) => Some(("lyrics.txt", text.clone())),
-        Lyrics::None => None,
-    }
-}
 
 /// A liked song's official music video, saved next to it (worker thread; minutes).
 /// Ok(None): it has none (remembered, not looked for again).
@@ -421,112 +410,11 @@ fn recheck_lyrics(t: &Track, f: &str) {
     crate::db::set_lyrics_checked(&t.key());
 }
 
-/// Where splitting and word timing happen: the split server (yours, if you
-/// set one up), else this computer.
-#[derive(Clone)]
-pub(crate) enum Aligner {
-    Server(settings::SplitServer),
-    Here(settings::LocalSplitter),
-}
 
-impl Aligner {
-    pub(crate) fn of(s: &settings::Settings) -> Option<Aligner> {
-        match (&s.split, &s.local_split) {
-            (Some(server), _) => Some(Aligner::Server(server.clone())),
-            (None, Some(local)) => Some(Aligner::Here(local.clone())),
-            _ => None,
-        }
-    }
-}
 
-/// A song's lyrics looked up again, as asked (worker thread; minutes when it's
-/// split): the kept ones go to the Trash (they can be brought back), yours
-/// too; the ones found take their place; a split song gets every word timed
-/// to its Vocals part on the server. Ok(true): timed. Err: none found (the
-/// kept ones stay).
-pub(crate) fn relook_lyrics(t: &Track, aligner: Option<&Aligner>) -> Result<bool, String> {
-    let fresh = lyrics::find(t);
-    if matches!(fresh, Lyrics::None) {
-        return Err("No other lyrics found for this song: yours stay. Edit Lyrics… to type them in.".into());
-    }
-    let lrc = t.file.as_deref().map(|f| library::beside(f, "lrc"));
-    for p in [Some(lyrics_path(t)), lrc.clone()].into_iter().flatten().filter(|p| p.exists()) {
-        gio::File::for_path(&p).trash(gio::Cancellable::NONE).map_err(|e| format!("Couldn't move the old lyrics to the Trash: {e}"))?;
-    }
-    let written = match (&fresh, &lrc) {
-        (Lyrics::Plain(text), Some(lrc)) => fs::write(lrc, text),
-        (Lyrics::Plain(_), None) => Ok(()), // a song not saved: looked up each time
-        _ => match lyrics::to_file(&fresh, Some(t), &[]) {
-            Some((_, text)) => fs::write(lyrics_file(t), text),
-            None => Ok(()),
-        },
-    };
-    written.map_err(|e| format!("Couldn't keep the new lyrics: {e}"))?;
-    crate::db::set_lyrics_checked(&t.key());
-    crate::log::note(&format!("lyrics of “{}” looked up again: {}", t.title, match &fresh { Lyrics::Timed { lines, .. } => format!("{} timed lines", lines.len()), Lyrics::Plain(p) => format!("{} lines of text", p.lines().count()), Lyrics::None => "none".into() }));
-    match (aligner, split::has_parts(t)) {
-        (Some(a), true) => time_words(t, a).map(|_| true),
-        _ => Ok(false),
-    }
-}
 
-/// Keeps a split song in the server's library, its words timed first (worker thread).
-pub(crate) fn keep_on_server(t: &Track, server: &settings::SplitServer, timing: &dyn Fn()) {
-    if let Err(e) = split::host_copy(t, server, hosted_lyrics(t)) {
-        debug(&format!("library copy of {}: {e}", t.title));
-        return;
-    }
-    split::mark_hosted(&t.key());
-    // the words' real times, from MMS on the server (the quick ones stand in till then)
-    if !aligned_by_mms(t) {
-        timing();
-        if let Err(e) = time_words(t, &Aligner::Server(server.clone())) {
-            debug(&format!("word times for {}: {e}", t.title));
-        }
-    }
-}
 
-/// The lyrics were edited by hand (in the lyrics editor): never replaced by a lookup.
-fn hand_edited(t: &Track) -> bool {
-    fs::read_to_string(lyrics_path(t)).is_ok_and(|y| y.contains(lyrics::HAND_NOTE))
-}
 
-/// Every word's time from MMS, on the split server or this computer (worker
-/// thread; minutes): for lyrics edited by hand, their lines (and singers,
-/// kept); else LRCLIB's or YouTube Music's. The Lyricsfile is kept for the song.
-fn time_words(t: &Track, aligner: &Aligner) -> Result<(), String> {
-    let mine = if hand_edited(t) {
-        fs::read_to_string(lyrics_path(t)).ok().and_then(|y| lyrics::parse_lyricsfile(&y))
-    } else {
-        None
-    };
-    let source = mine.clone().unwrap_or_else(|| lyrics::find(t));
-    let given = match &source {
-        Lyrics::Timed { lines, exact } if mine.is_some() || !exact => serde_json::json!({
-            "lines": lines.iter().filter(|l| !l.text.trim().is_empty()).map(|l| serde_json::json!({ "start": l.start, "end": l.end, "text": l.text })).collect::<Vec<_>>()
-        }),
-        Lyrics::Plain(text) => serde_json::json!({ "plain": text }),
-        _ => return Ok(()), // none, or the song's own word times already
-    };
-    let yaml = match aligner {
-        Aligner::Server(server) => split::align_on_server(t, server, &given)?,
-        Aligner::Here(local) => split::align_here(t, local, &given)?,
-    };
-    let Some(Lyrics::Timed { mut lines, exact }) = lyrics::parse_lyricsfile(&yaml) else { return Err("nothing came back".into()) };
-    let Some(Lyrics::Timed { lines: hand, .. }) = mine else {
-        let _ = fs::write(lyrics_file(t), yaml);
-        return Ok(());
-    };
-    // yours: the same lines in the same order, each with its singer again
-    for (line, was) in lines.iter_mut().zip(hand.iter().filter(|l| !l.text.trim().is_empty())) {
-        line.singer = was.singer.clone();
-    }
-    let mms = "word times: MMS forced alignment (Meta, torchaudio MMS_FA) on the song's Vocals part";
-    if let Some((_, text)) = lyrics::to_file(&Lyrics::Timed { lines, exact }, Some(t), &[lyrics::HAND_NOTE, mms]) {
-        let _ = fs::write(lyrics_file(t), text);
-    }
-    Ok(())
-}
 
 /// What lyrics a song has on this computer.
 #[derive(Clone, Copy, PartialEq)]
@@ -600,10 +488,6 @@ fn lyrics_kind(t: &Track) -> Option<LyricsKind> {
     None
 }
 
-/// Its words were timed by MMS already.
-fn aligned_by_mms(t: &Track) -> bool {
-    fs::read_to_string(lyrics_file(t)).is_ok_and(|y| y.contains("MMS forced alignment"))
-}
 
 
 /// The line being sung in Now Playing is drawn this much bigger than the rest
@@ -6514,48 +6398,16 @@ impl Ui {
                     .iter()
                     .map(|r| {
                         let who = (r.singer.selected() > 0).then(|| names.string(r.singer.selected()).map(|s| s.to_string())).flatten();
-                        (r.at.get(), r.text.text().trim().to_string(), who)
+                        (r.at.get(), r.text.text().to_string(), who)
                     })
-                    .filter(|(_, text, _)| !text.is_empty())
                     .collect();
-                let lyrics = if picked.iter().all(|(at, _, _)| at.is_none()) {
-                    Lyrics::Plain(picked.iter().map(|x| x.1.clone()).collect::<Vec<_>>().join("\n"))
-                } else {
-                    // lines without a time: between their neighbours
-                    let mut times: Vec<Option<f64>> = picked.iter().map(|x| x.0).collect();
-                    for i in 0..times.len() {
-                        if times[i].is_none() {
-                            let before = times[..i].iter().rev().flatten().next().copied().unwrap_or(0.0);
-                            let after = times[i + 1..].iter().flatten().next().copied().unwrap_or(before + 4.0);
-                            times[i] = Some(before + (after - before) / 2.0);
-                        }
-                    }
-                    let lines = picked
-                        .iter()
-                        .enumerate()
-                        .map(|(i, (_, text, who))| {
-                            let start = times[i].unwrap_or(0.0);
-                            let end = times.get(i + 1).copied().flatten().unwrap_or(start + 5.0).max(start + 0.3);
-                            lyrics::Line { start, end, text: text.clone(), words: lyrics::spread(text, start, end), singer: who.clone() }
-                        })
-                        .collect();
-                    Lyrics::Timed { lines, exact: false }
-                };
-                let Some((_, text)) = lyrics::to_file(&lyrics, Some(&song), &[lyrics::HAND_NOTE]) else { return };
-                let path = lyrics_file(&song);
-                if let Some(f) = song.file.as_deref() {
-                    // the old .lrc, if any, goes to the Trash: the Lyricsfile is the one now
-                    let lrc = library::beside(f, "lrc");
-                    if lrc.exists() {
-                        let _ = gio::File::for_path(&lrc).trash(gio::Cancellable::NONE);
-                    }
-                }
-                if fs::write(&path, text).is_err() {
-                    me.toast("Couldn't save the lyrics");
+                // (core's from_edited and the engine's save_edited: the Windows beta's editor saves the same way)
+                let lyrics = lyrics::from_edited(&picked);
+                if word_times::save_edited(&song, &lyrics).is_err() {
+                    me.toast(words::LYRICS_NOT_SAVED);
                     return;
                 }
-                crate::db::set_lyrics_checked(&song.key());
-                me.toast("Lyrics saved");
+                me.toast(words::LYRICS_SAVED);
                 if me.current.borrow().as_ref().is_some_and(|c| c.key() == song.key()) {
                     me.refresh_lyrics();
                 }

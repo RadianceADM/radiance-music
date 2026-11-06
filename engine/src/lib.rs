@@ -53,4 +53,5 @@ pub mod two_part;
 pub use radiance_core::track;
 pub mod update;
 pub mod video_probe;
+pub mod word_times;
 pub mod youtube;
