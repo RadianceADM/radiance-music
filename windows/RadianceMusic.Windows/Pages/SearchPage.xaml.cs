@@ -73,8 +73,23 @@ public sealed partial class SearchPage : Page
         if (hub == null) return;
         var items = hub.Engine.Suggestions().Select(c => c.Mine ? Mine + c.Text : c.Text).ToList();
         Box.ItemsSource = items;
+        // a hidden screenshot sees only the window's own picture: the list kept inside it, as the song menu
+        if (Program.Dev.Hidden && Find<Microsoft.UI.Xaml.Controls.Primitives.Popup>(Box, "SuggestionsPopup") is { IsOpen: false } list)
+            list.ShouldConstrainToRootBounds = true;
         // (the box opens its list by itself only as you type: your songs on an empty box's focus open it too)
         Box.IsSuggestionListOpen = items.Count > 0 && Box.FocusState != FocusState.Unfocused;
+        App.Trace($"suggestions: {items.Count}, focus {Box.FocusState}, list open {Box.IsSuggestionListOpen}");
+    }
+
+    private static T? Find<T>(DependencyObject root, string name) where T : FrameworkElement
+    {
+        for (var i = 0; i < Microsoft.UI.Xaml.Media.VisualTreeHelper.GetChildrenCount(root); i++)
+        {
+            var child = Microsoft.UI.Xaml.Media.VisualTreeHelper.GetChild(root, i);
+            if (child is T t && t.Name == name) return t;
+            if (Find<T>(child, name) is { } found) return found;
+        }
+        return null;
     }
 
     private Button Tile(BrowseTile t)
