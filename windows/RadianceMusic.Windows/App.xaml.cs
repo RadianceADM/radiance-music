@@ -180,11 +180,14 @@ public partial class App : Application
         return p;
     }
 
+    private static readonly List<DispatcherQueueTimer> devTimers = new();
+
     /// <summary>A developer run's step `seconds` after the start (0: none).</summary>
     private static void Later(double seconds, Action step, string what)
     {
         if (seconds <= 0) return;
         var timer = DispatcherQueue.GetForCurrentThread().CreateTimer();
+        devTimers.Add(timer); // (kept: a timer nothing holds is collected and never fires)
         timer.Interval = TimeSpan.FromSeconds(seconds);
         timer.IsRepeating = false;
         timer.Tick += (_, _) =>
