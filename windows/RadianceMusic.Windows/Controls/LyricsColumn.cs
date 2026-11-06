@@ -36,6 +36,17 @@ internal sealed class LyricsColumn : Grid
     }
 
     private const double Grow = 2.5, Least = 1.5, Room = 0.6;
+
+    /// <summary>Where the column's time goes (the screenshots' log, Shot): calls and milliseconds.</summary>
+    private static readonly Dictionary<string, (int Calls, double Ms)> Spent = new();
+
+    private static void Count(string what, long started)
+    {
+        var ms = (System.Diagnostics.Stopwatch.GetTimestamp() - started) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+        Spent[what] = Spent.TryGetValue(what, out var s) ? (s.Calls + 1, s.Ms + ms) : (1, ms);
+    }
+
+    public static string Stats() => string.Join(", ", Spent.Select(kv => $"{kv.Key} {kv.Value.Calls}x {kv.Value.Ms:F0} ms"));
     private readonly EngineHub hub;
     private readonly bool big;
     private readonly ScrollViewer scroll = new() { VerticalScrollBarVisibility = ScrollBarVisibility.Hidden, HorizontalScrollMode = ScrollMode.Disabled };
@@ -61,7 +72,7 @@ internal sealed class LyricsColumn : Grid
         Children.Add(note);
         tick = DispatcherQueue.GetForCurrentThread().CreateTimer();
         tick.Interval = TimeSpan.FromMilliseconds(33);
-        tick.Tick += (_, _) => Light();
+        tick.Tick += (_, _) => { var t = System.Diagnostics.Stopwatch.GetTimestamp(); Light(); Count("light", t); };
         check = DispatcherQueue.GetForCurrentThread().CreateTimer();
         check.Interval = TimeSpan.FromSeconds(1);
         check.Tick += (_, _) => KeepLeadShown();
@@ -70,7 +81,7 @@ internal sealed class LyricsColumn : Grid
             panel.Padding = new Thickness(0, Math.Max(0, e.NewSize.Height / 2 - 40), 0, Math.Max(0, e.NewSize.Height / 2 - 40));
             view?.InsertScalar("Half", (float)(e.NewSize.Height / 2));
         };
-        panel.LayoutUpdated += (_, _) => PlaceLenses();
+        panel.LayoutUpdated += (_, _) => { var t = System.Diagnostics.Stopwatch.GetTimestamp(); PlaceLenses(); Count("lenses", t); };
         Loaded += (_, _) =>
         {
             var s = ElementCompositionPreview.GetScrollViewerManipulationPropertySet(scroll);

@@ -48,6 +48,7 @@ internal static class Shot
         }
         await Save(hwnd, dev.Shot!);
         Crash.Note("shot: saved " + dev.Shot);
+        Crash.Note("shot: the lyrics column's time: " + Controls.LyricsColumn.Stats());
         if (dev.Again > 0)
         {
             await Task.Delay(TimeSpan.FromSeconds(dev.Again));
