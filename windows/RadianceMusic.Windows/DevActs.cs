@@ -10,7 +10,7 @@ namespace RadianceMusic;
 /// --act STEP (developer screenshots on ribs03, through --shot): what a person would do before
 /// the shot, done by the app itself, so no clicks or keys go to the owner's desktop:
 ///   like:TITLE    likes Home's recent song of that title (if it isn't already)
-///   menu          opens the first song row's menu on the page
+///   menu          opens the menu of the song row highest on screen
 ///   click:TEXT    presses the button or menu item whose words start with TEXT (a menu's or dialog's first)
 ///   group:KIND:NAME   an album's, artist's or genre's songs (KIND: albums, artists, genres)
 /// </summary>

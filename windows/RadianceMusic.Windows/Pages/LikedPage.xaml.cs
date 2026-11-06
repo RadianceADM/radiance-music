@@ -1,5 +1,6 @@
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Navigation;
 using RadianceMusic.Controls;
 using RadianceMusic.Native;
@@ -41,8 +42,10 @@ public sealed partial class LikedPage : Page
         body.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         body.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         body.Children.Add(list);
-        Grid.SetColumn(rail, 1);
-        body.Children.Add(rail);
+        // the whole rail stays reachable in a short window: it only ever shrinks to fit its column
+        var fit = new Viewbox { Child = rail, Stretch = Stretch.Uniform, StretchDirection = StretchDirection.DownOnly, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 4, 0, 4) };
+        Grid.SetColumn(fit, 1);
+        body.Children.Add(fit);
         var root = new Grid();
         root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });

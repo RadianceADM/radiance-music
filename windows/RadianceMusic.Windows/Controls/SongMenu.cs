@@ -29,17 +29,20 @@ internal static class SongMenu
     /// <summary>Each row's menu, as its right-click opens it (DevActs' "menu": the screenshots).</summary>
     private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<FrameworkElement, Action> Openers = new();
 
-    /// <summary>The first song row's menu under `root` (in the order it's drawn).</summary>
-    public static bool OpenFirst(DependencyObject root)
+    /// <summary>The menu of the song row highest on screen under `root`.</summary>
+    public static bool OpenFirst(UIElement root)
     {
-        if (root is FrameworkElement f && Openers.TryGetValue(f, out var open))
+        var rows = new List<(double Y, Action Open)>();
+        void Walk(DependencyObject at)
         {
-            open();
-            return true;
+            if (at is FrameworkElement f && f.ActualHeight > 0 && Openers.TryGetValue(f, out var open))
+                rows.Add((f.TransformToVisual(root).TransformPoint(new Windows.Foundation.Point(0, 0)).Y, open));
+            for (var i = 0; i < Microsoft.UI.Xaml.Media.VisualTreeHelper.GetChildrenCount(at); i++) Walk(Microsoft.UI.Xaml.Media.VisualTreeHelper.GetChild(at, i));
         }
-        for (var i = 0; i < Microsoft.UI.Xaml.Media.VisualTreeHelper.GetChildrenCount(root); i++)
-            if (OpenFirst(Microsoft.UI.Xaml.Media.VisualTreeHelper.GetChild(root, i))) return true;
-        return false;
+        Walk(root);
+        if (rows.Count == 0) return false;
+        rows.MinBy(r => r.Y).Open();
+        return true;
     }
 
     private static MenuFlyout Build(EngineHub hub, FrameworkElement row, string key, uint index, MenuPlace place, Action? play)
