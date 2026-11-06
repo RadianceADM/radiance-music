@@ -28,12 +28,36 @@ internal static class Shot
         Crash.Note($"shot: {dev.Page} {dev.Width}x{dev.Height}, in {dev.Wait} s");
         window.Show(dev.Page);
         if (dev.Search != null) window.SearchFor(dev.Search);
+        if (dev.Acts.Count > 0) Crash.Note("shot: queue before the steps: " + window.SidePanel.Titles());
+        // the side panel open for the steps too (a queue row's menu needs its row on screen)
+        if (dev.Side != null && dev.Acts.Count > 0) window.OpenSide(dev.Side);
+        foreach (var act in dev.Acts)
+        {
+            await Task.Delay(1500);
+            // wait:N: N seconds more before the next step (a song's other version is found online)
+            if (act.StartsWith("wait:") && double.TryParse(act[5..], System.Globalization.CultureInfo.InvariantCulture, out var secs)) await Task.Delay(TimeSpan.FromSeconds(secs));
+            else
+            {
+                if (act.StartsWith("queue-") || act.StartsWith("click:")) Crash.Note($"shot: queue before {act}: " + window.SidePanel.Titles());
+                DevActs.Run(window, act);
+            }
+        }
         await Task.Delay(TimeSpan.FromSeconds(dev.Wait));
         var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(window);
+        if (dev.Acts.Count > 0) Crash.Note("shot: queue after the steps: " + window.SidePanel.Titles());
+        if (dev.Acts.Count > 0) Crash.Note($"shot: playing at {App.Hub.Engine.Now().At:F1} s");
         Win32.SetForegroundWindow(hwnd);
         await Task.Delay(300);
+        // opened in front, as a click on the bar's button does (over the page, the panel closes when the window loses focus)
+        if (dev.Side != null)
+        {
+            window.OpenSide(dev.Side);
+            await Task.Delay(800);
+            Crash.Note($"shot: side panel open on {dev.Side}: {window.SideState}");
+        }
         await Save(hwnd, dev.Shot!);
         Crash.Note("shot: saved " + dev.Shot);
+        Crash.Note("shot: the lyrics column's time: " + Controls.LyricsColumn.Stats());
         if (dev.Again > 0)
         {
             await Task.Delay(TimeSpan.FromSeconds(dev.Again));
@@ -42,7 +66,7 @@ internal static class Shot
         App.Quit();
     }
 
-    private static async Task Save(nint hwnd, string path)
+    internal static async Task Save(nint hwnd, string path)
     {
         if (Win32.IsIconic(hwnd))
         {

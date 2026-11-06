@@ -39,6 +39,14 @@ public partial class App : Application
     {
         var ui = DispatcherQueue.GetForCurrentThread();
         Trace("start");
+        // the music videos' spike: only the video, in a window of its own (no engine, no data)
+        if (Program.Dev.VideoProbe is { } video)
+        {
+            var probe = new VideoProbeWindow(video);
+            probe.Activate();
+            if (Program.Dev.Shot != null) _ = probe.ShootAsync(Program.Dev);
+            return;
+        }
         // one copy at a time, today's app or this one: the other comes forward (it shares the data)
         if (Ffi.AskTheOther(null))
         {
@@ -59,7 +67,11 @@ public partial class App : Application
         keys = new MediaKeys(Hub, WinRT.Interop.WindowNative.GetWindowHandle(Window));
         Trace($"tray icon added: {tray.Added}; media keys: on");
         if (Program.Dev.Shot != null) _ = Shot.TakeAsync(Window, Program.Dev);
-        if (Program.Dev.PlayTest && Hub.Engine.Home().Recent is { Length: > 0 } recent) Hub.Engine.PlayFrom(ListKind.Recent, 0, recent[0].Key);
+        if (Program.Dev.PlayTest && Hub.Engine.Home().Recent is { Length: > 0 } recent)
+        {
+            var i = Program.Dev.PlayTitle is { } title ? Math.Max(0, Array.FindIndex(recent, s => s.Title.Contains(title, StringComparison.OrdinalIgnoreCase))) : 0;
+            Hub.Engine.PlayFrom(ListKind.Recent, (uint)i, recent[i].Key);
+        }
     }
 
     /// <summary>Developer runs (--shot, --play-test): each step of the start in the crash note.</summary>

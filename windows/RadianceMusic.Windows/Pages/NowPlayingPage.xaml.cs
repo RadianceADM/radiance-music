@@ -12,16 +12,29 @@ public sealed partial class NowPlayingPage : Page
     /// the sidebar): no lyrics column, a smaller cover.</summary>
     private const double Snug = 780, Narrow = 600;
     private EngineHub? hub;
-    private readonly LyricFollower follower = new();
-    private readonly List<TextBlock> lines = new();
     private string songKey = "";
-    private string lyricsKey = "";
+    /// <summary>The music video's swapchain on the panel (0: none, the cover shows), and fullscreen.</summary>
+    private nint shown;
+    private bool full;
+
+    /// <summary>A tap on lyric line `i` (DevActs: the screenshots).</summary>
+    internal bool TapLyric(int i) => Right.Children.Count > 0 && Right.Children[0] is Controls.LyricsColumn c && c.TapLine(i);
+
+    /// <summary>A music video is on the panel (F11 and double-click make it fullscreen).</summary>
+    public bool HasVideo => shown != 0;
+
+    /// <summary>Whether the page shows its lyrics column (not under Snug), and when that changes.</summary>
+    public bool ShowsLyrics { get; private set; } = true;
+    public event Action? ShowsLyricsChanged;
 
     public NowPlayingPage()
     {
         InitializeComponent();
         SizeChanged += (_, e) => Fit(e.NewSize.Width);
-        LyricsScroll.SizeChanged += (_, e) => Lines.Padding = new Thickness(0, e.NewSize.Height / 2, 0, e.NewSize.Height / 2);
+        // the swapchain's buffers follow the panel (its size in DIPs: the spike's ruling)
+        VideoPanel.SizeChanged += (_, _) => FitVideo();
+        VideoPanel.CompositionScaleChanged += (_, _) => FitVideo();
+        ToolTipService.SetToolTip(FullscreenButton, "Fullscreen (F11)");
     }
 
     protected override void OnNavigatedTo(NavigationEventArgs e)
@@ -29,28 +42,103 @@ public sealed partial class NowPlayingPage : Page
         if (hub == null && e.Parameter is EngineHub h)
         {
             hub = h;
+            // the lyrics column: word by word, growing toward the middle (Controls/LyricsColumn)
+            Right.Children.Clear();
+            Right.Children.Add(new Controls.LyricsColumn(hub, big: true));
             hub.Change += kind =>
             {
-                switch (kind)
-                {
-                    case ChangeKind.Now: RenderNow(); break;
-                    case ChangeKind.Position: Light(hub.Engine.Now().Lit); break;
-                    case ChangeKind.Lyrics or ChangeKind.Online: RenderLyrics(); break;
-                }
+                if (kind == ChangeKind.Now) RenderNow();
             };
         }
         RenderNow();
-        RenderLyrics();
     }
 
     private void Fit(double width)
     {
         var lyrics = width >= Snug;
         Right.Visibility = lyrics ? Visibility.Visible : Visibility.Collapsed;
+        if (lyrics != ShowsLyrics)
+        {
+            ShowsLyrics = lyrics;
+            ShowsLyricsChanged?.Invoke();
+        }
+        if (full)
+        {
+            // fullscreen: the video alone, the whole window
+            Right.Visibility = Visibility.Collapsed;
+            Grid.SetColumnSpan(Left, 2);
+            Left.Width = Art.Width = Math.Max(1, Root.ActualWidth);
+            Art.Height = Math.Max(1, Root.ActualHeight);
+            return;
+        }
         Left.HorizontalAlignment = lyrics ? HorizontalAlignment.Left : HorizontalAlignment.Center;
         Grid.SetColumnSpan(Left, lyrics ? 1 : 2);
         var side = width < Narrow ? Math.Max(160, Math.Min(340, width - 96)) : 340;
-        Cover.Width = Cover.Height = Left.Width = side;
+        // a music video is wider (16:9), as far as the room beside the lyrics lets it
+        var (w, h) = ArtFit.Of(side, width - 72 - (lyrics ? 48 + 320 : 0), shown != 0);
+        Left.Width = Art.Width = w;
+        Art.Height = h;
+    }
+
+    /// <summary>The video's buttons: the version switch (both ways) and fullscreen.</summary>
+    private void OnVideo(object sender, RoutedEventArgs e)
+    {
+        if (hub != null) hub.Engine.SwitchVersion(!hub.Engine.Now().Video);
+    }
+
+    private void OnFullscreen(object sender, RoutedEventArgs e) => App.Window?.SetVideoFullscreen(!full);
+
+    private void OnVideoDoubleTapped(object sender, Microsoft.UI.Xaml.Input.DoubleTappedRoutedEventArgs e) => App.Window?.SetVideoFullscreen(!full);
+
+    /// <summary>The window went fullscreen for the video, or came back (MainWindow.SetVideoFullscreen).</summary>
+    public void SetFullscreen(bool on)
+    {
+        full = on;
+        Body.Padding = on ? new Thickness(0) : new Thickness(36, 24, 36, 24);
+        Art.Margin = on ? new Thickness(0) : new Thickness(0, 0, 0, 8);
+        var words = on ? Visibility.Collapsed : Visibility.Visible;
+        SongTitle.Visibility = Byline.Visibility = words;
+        if (on) Quality.Visibility = Visibility.Collapsed;
+        Back.Visibility = words;
+        Root.Background = on ? new SolidColorBrush(Microsoft.UI.Colors.Black) : null;
+        FullscreenIcon.Glyph = on ? "\uE73F" : "\uE740";
+        ToolTipService.SetToolTip(FullscreenButton, on ? "Leave fullscreen (Esc)" : "Fullscreen (F11)");
+        if (!on) RenderNow();
+        Fit(ActualWidth);
+    }
+
+    /// <summary>The engine's swapchain on the panel, or none (0 lets the last frame go: no stale picture).</summary>
+    private void ShowVideo(ulong? swapchain)
+    {
+        var ptr = (nint)(long)(swapchain ?? 0);
+        try
+        {
+            Show(ptr);
+        }
+        finally
+        {
+            // the engine gave us a reference of our own (video_swapchain): the panel holds its own now
+            if (ptr != 0) System.Runtime.InteropServices.Marshal.Release(ptr);
+        }
+    }
+
+    private void Show(nint ptr)
+    {
+        if (ptr == shown) return;
+        shown = ptr;
+        Interop.SwapChainPanelNative.SetSwapChain(VideoPanel, ptr);
+        var on = ptr != 0;
+        VideoPanel.Visibility = VideoTaps.Visibility = on ? Visibility.Visible : Visibility.Collapsed;
+        Cover.Visibility = on ? Visibility.Collapsed : Visibility.Visible;
+        if (!on && full) App.Window?.SetVideoFullscreen(false);
+        Fit(ActualWidth);
+        FitVideo();
+    }
+
+    private void FitVideo()
+    {
+        if (hub == null || shown == 0 || VideoPanel.ActualWidth < 1 || VideoPanel.ActualHeight < 1) return;
+        hub.Engine.ResizeVideo((uint)VideoPanel.ActualWidth, (uint)VideoPanel.ActualHeight);
     }
 
     private void RenderNow()
@@ -67,20 +155,28 @@ public sealed partial class NowPlayingPage : Page
             Back.SetArt(null, null);
             OverArt(false);
             songKey = "";
+            ShowVideo(null);
+            VideoButton.Visibility = Visibility.Collapsed;
+            FullscreenButton.Visibility = Visibility.Collapsed;
             return;
         }
         SongTitle.Text = song.Title;
         Byline.Text = song.Byline;
-        // the GTK app's quality line (stage 1: lossless or compressed; bits and kHz come later)
-        Quality.Visibility = Visibility.Visible;
-        QualityText.Text = now.Lossless ? "Lossless · FLAC" : now.Kbps > 0 ? $"Compressed · Opus {now.Kbps} kbps" : "Compressed · Opus";
+        // the GTK app's quality line (core::quality's words, from the engine)
+        Quality.Visibility = full ? Visibility.Collapsed : Visibility.Visible;
+        QualityText.Text = now.Quality.Length > 0 ? now.Quality : now.Lossless ? "Lossless · FLAC" : "Compressed · Opus";
+        // a music video on the panel; the switch between the song and its video (either way)
+        ShowVideo(hub.Engine.VideoSwapchain());
+        // only where the other version was found: a video with no song (a cover, say) has nowhere to go
+        VideoButton.Visibility = now.HasCounterpart ? Visibility.Visible : Visibility.Collapsed;
+        VideoIcon.Glyph = now.Video ? "\uEC4F" : "\uE714";
+        ToolTipService.SetToolTip(VideoButton, now.Video ? "Back to the song" : "Watch the music video");
+        FullscreenButton.Visibility = shown != 0 ? Visibility.Visible : Visibility.Collapsed;
         if (song.Key != songKey)
         {
             songKey = song.Key;
-            follower.Reset();
             _ = LoadArt(song.Art);
         }
-        Light(now.Lit);
     }
 
     private async Task LoadArt(string source)
@@ -101,60 +197,5 @@ public sealed partial class NowPlayingPage : Page
     {
         Scrim.Visibility = on ? Visibility.Visible : Visibility.Collapsed;
         Root.RequestedTheme = on ? ElementTheme.Dark : ElementTheme.Default;
-    }
-
-    private void RenderLyrics()
-    {
-        if (hub == null) return;
-        var l = hub.Engine.Lyrics();
-        var key = songKey + "|" + l.Kind + "|" + l.Lines.Length + "|" + l.Plain.Length + "|" + hub.Engine.Online();
-        if (key == lyricsKey) return;
-        lyricsKey = key;
-        Lines.Children.Clear();
-        lines.Clear();
-        follower.Reset();
-        LyricsNote.Visibility = Visibility.Collapsed;
-        switch (l.Kind)
-        {
-            case LyricsKind.Looking:
-                Note("Looking for lyrics…");
-                break;
-            case LyricsKind.None:
-                Note(hub.Engine.Online() ? "No lyrics found for this song." : "You're offline: the lyrics come when you're back online.");
-                break;
-            case LyricsKind.Plain:
-                Lines.Children.Add(new TextBlock { Text = l.Plain, Style = (Style)Application.Current.Resources["LyricPlain"], Margin = new Thickness(0, 24, 0, 24) });
-                break;
-            case LyricsKind.Lines:
-                foreach (var line in l.Lines)
-                {
-                    var t = new TextBlock { Text = line.Text, Style = (Style)Application.Current.Resources["Lyric"] };
-                    t.OpacityTransition = new ScalarTransition { Duration = TimeSpan.FromMilliseconds(350) };
-                    lines.Add(t);
-                    Lines.Children.Add(t);
-                }
-                Light(hub.Engine.Now().Lit);
-                break;
-        }
-    }
-
-    private void Note(string text)
-    {
-        LyricsNote.Text = text;
-        LyricsNote.Visibility = Visibility.Visible;
-    }
-
-    /// <summary>The lines sung now lit; the first of them brought to the middle (once, as it changes).</summary>
-    private void Light(uint[] lit)
-    {
-        if (lines.Count == 0) return;
-        for (var i = 0; i < lines.Count; i++) lines[i].Opacity = lit.Contains((uint)i) ? 1.0 : 0.34;
-        if (follower.Next(lit) is int lead && lead < lines.Count && Right.Visibility == Visibility.Visible)
-        {
-            var line = lines[lead];
-            var at = line.TransformToVisual(Lines).TransformPoint(new Windows.Foundation.Point(0, 0));
-            var y = at.Y + line.ActualHeight / 2 - LyricsScroll.ViewportHeight / 2;
-            LyricsScroll.ChangeView(null, Math.Max(0, y), null, false);
-        }
     }
 }

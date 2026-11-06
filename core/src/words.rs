@@ -84,6 +84,68 @@ pub fn liked_matches(n: usize) -> String {
     format!("{n} of your liked songs {}", if n == 1 { "matches" } else { "match" })
 }
 
+/// Liking and saving: the toasts and the Fix missing button (both apps, as the Linux app says them).
+pub fn liked_toast(title: &str) -> String {
+    format!("Liked “{title}”")
+}
+
+pub fn saved_toast(title: &str) -> String {
+    format!("Saved “{title}”")
+}
+
+pub fn unliked_toast(title: &str, trashed: bool) -> String {
+    if trashed {
+        format!("Removed “{title}” from Liked; its saved copy is in the Trash")
+    } else {
+        format!("Removed “{title}” from Liked")
+    }
+}
+
+pub fn save_failed(title: &str) -> String {
+    format!("Couldn't save “{title}” right now. It tries again next time the app opens.")
+}
+
+/// The Fix missing button: `n` songs (or videos) missing, `fixing` while it works on them.
+pub fn fix_label(n: usize, fixing: bool) -> String {
+    if fixing { format!("Fixing… {n} left") } else { format!("Fix missing ({n})") }
+}
+
+pub fn fixing_toast(songs: usize, videos: usize) -> String {
+    match (songs, videos) {
+        (0, v) => format!("Saving {v} music videos in the background"),
+        (s, 0) => format!("Saving {s} songs in the background"),
+        (s, v) => format!("Saving {s} songs and {v} music videos in the background"),
+    }
+}
+
+/// Playlists (both apps, as the Linux app says them).
+pub const PLAYLIST_EMPTY: &str = "No songs in it yet. Add one from any song's menu: Add to Playlist.";
+pub const PLAYLIST_DELETE_BODY: &str = "The playlist goes; its songs stay in your library.";
+pub const PLAYLIST_DELETE_TIP: &str = "Delete the playlist";
+pub const PLAYLIST_NAME_HINT: &str = "Playlist name";
+
+pub fn added_to(playlist: &str) -> String {
+    format!("Added to “{playlist}”")
+}
+
+pub fn already_in(playlist: &str) -> String {
+    format!("Already in “{playlist}”")
+}
+
+pub fn delete_playlist_title(name: &str) -> String {
+    format!("Delete “{name}”?")
+}
+
+/// The sidebar's tooltip for a playlist.
+pub fn playlist_tip(name: &str, songs: usize) -> String {
+    format!("{name}: {}", crate::library::songs_count(songs))
+}
+
+/// A new playlist's suggested name, with `existing` playlists already.
+pub fn next_playlist_name(existing: usize) -> String {
+    format!("My Playlist {}", existing + 1)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

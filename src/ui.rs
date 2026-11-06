@@ -36,7 +36,9 @@ use crate::relay::Relay;
 use crate::settings::{self, Settings, Transition, FADE_RANGE};
 use crate::split::{self, Voice};
 use crate::track::{clock, file_key, letter_of, matches, Source, Track};
+use radiance_core::quality::{self, Heard};
 use radiance_core::queue::{self, Queue, Removed, Repeat, Step};
+use radiance_core::library::{self as shelf, GroupKind as LikedView, Saved, AZ, RECENT_ROWS};
 use radiance_core::sing;
 use radiance_core::trouble::{self, sound_device_gone, After};
 use radiance_core::words::{self, Kind};
@@ -51,7 +53,6 @@ const COVER: u32 = 720;
 /// The queue panel lists this many songs from the one playing.
 const QUEUE_ROWS: usize = 100;
 /// Songs played before, above the queue (to go back to one stuck in your head).
-const RECENT_ROWS: usize = 5;
 /// The side panel's tabs, in order (Lyrics only where Now Playing doesn't show them: sync_lyrics_tab).
 const SIDE_TABS: [(&str, &str); 3] = [("queue", "Queue"), ("lyrics", "Lyrics"), ("splits", "Splits")];
 
@@ -215,7 +216,6 @@ fn release_notes(changelog: &str, versions: usize) -> String {
 }
 
 /// The A to Z rail's letters, in the order songs are filed.
-const AZ: &str = "ABCDEFGHIJKLMNOPQRSTUVWXYZ#";
 
 /// Runs `work` on a worker thread, then `done` with its result on the main loop.
 fn bg<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'static, done: impl FnOnce(T) + 'static) {
@@ -316,14 +316,6 @@ fn offline_pill() -> gtk::Box {
     pill.append(&gtk::Image::from_icon_name("network-offline-symbolic"));
     pill.append(&gtk::Label::new(Some("Offline")));
     pill
-}
-
-fn khz(rate: i32) -> String {
-    if rate % 1000 == 0 {
-        format!("{} kHz", rate / 1000)
-    } else {
-        format!("{:.1} kHz", rate as f64 / 1000.0)
-    }
 }
 
 /// The song's page on the web, to share.
@@ -567,12 +559,7 @@ fn count_skip(t: &Track) {
 /// "Played 12 times · skipped 3 times" (or less, or nothing).
 fn counts_text(t: &Track) -> String {
     let (plays, skips) = counts_of(t);
-    let times = |n: usize| if n == 1 { "once".to_string() } else { format!("{n} times") };
-    match (plays, skips) {
-        (0, 0) => String::new(),
-        (p, 0) => format!("Played {}", times(p)),
-        (p, s) => format!("Played {} · skipped {}", times(p), times(s)),
-    }
+    shelf::counts_text(plays, skips)
 }
 
 thread_local! {
@@ -724,13 +711,6 @@ fn quality_badge(t: &Track) -> gtk::Widget {
     }
 }
 
-/// How liked songs are grouped (Albums, Artists, Genres pages and Home).
-#[derive(Clone, Copy, PartialEq)]
-enum LikedView {
-    Albums,
-    Artists,
-    Genres,
-}
 
 /// Where a song is shown: what its menu offers, and what clicking it plays.
 #[derive(Clone)]
@@ -1148,7 +1128,7 @@ impl Ui {
             queue_group: adw::PreferencesGroup::builder().title("Queue").build(),
             recent_group: adw::PreferencesGroup::builder()
                 .title("Played before")
-                .description("Go back to one: it plays now, then the queue carries on")
+                .description(shelf::PLAYED_BEFORE_NOTE)
                 .visible(false)
                 .build(),
             recent_rows: RefCell::default(),
@@ -4082,7 +4062,7 @@ impl Ui {
             let name2 = name.clone();
             add(&to, &name, &format!("pl-add-{id}"), Box::new(move |me| {
                 let added = crate::db::add_to_playlist(id, &t1);
-                me.toast(&if added { format!("Added to “{name2}”") } else { format!("Already in “{name2}”") });
+                me.toast(&if added { words::added_to(&name2) } else { words::already_in(&name2) });
                 me.render_playlist_nav();
             }));
         }
@@ -4135,19 +4115,10 @@ impl Ui {
         }
 
         let go = gio::Menu::new();
-        let artists = t.artists();
-        if artists.len() == 1 {
-            let q = artists[0].clone();
-            add(&go, "Go to Artist", "artist", Box::new(move |me| me.go_search(&q)));
-        } else {
-            for (i, a) in artists.iter().take(8).enumerate() {
-                let q = a.clone();
-                add(&go, &format!("Go to {a}"), &format!("artist{i}"), Box::new(move |me| me.go_search(&q)));
+        for (i, item) in radiance_core::menu::go_items(&t).into_iter().enumerate() {
+            if let radiance_core::menu::Action::GoToArtist(q) | radiance_core::menu::Action::GoToAlbum(q) = item.action {
+                add(&go, &item.label, &format!("go{i}"), Box::new(move |me| me.go_search(&q)));
             }
-        }
-        if !t.album.is_empty() {
-            let q = format!("{} {}", t.album, t.artist);
-            add(&go, "Go to Album", "album", Box::new(move |me| me.go_search(q.trim())));
         }
         menu.append_section(None, &go);
 
@@ -4364,17 +4335,8 @@ impl Ui {
         };
         let playing = self.current.borrow().is_some();
         let ahead = queue.len().saturating_sub(cur + usize::from(playing));
-        self.queue_group.set_description(Some(&if queue.is_empty() || (!playing && ahead == 0) {
-            "Nothing queued. Play a song, or right-click any song and pick Add to Queue.".to_string()
-        } else if ahead == 0 {
-            if self.settings.borrow().autoplay && self.queue.borrow().repeat() == Repeat::Off {
-                "Autoplay is adding songs like this one next.".to_string()
-            } else {
-                "Nothing after this song. Right-click any song and pick Add to Queue, or start a Song Radio (or turn on Autoplay in the menu).".to_string()
-            }
-        } else {
-            format!("{ahead} songs next")
-        }));
+        let adding = self.settings.borrow().autoplay && self.queue.borrow().repeat() == Repeat::Off;
+        self.queue_group.set_description(Some(&shelf::queue_note(queue.is_empty() || (!playing && ahead == 0), ahead, adding)));
         for (i, t) in queue.iter().enumerate().skip(cur).take(QUEUE_ROWS) {
             let row = self.track_row(t, Place::Queue(i));
             let now = i == cur && playing;
@@ -4640,26 +4602,20 @@ impl Ui {
     }
 
     fn toggle_like(self: &Rc<Self>, t: &Track) {
-        let key = t.key();
-        let found = self.liked.borrow().iter().position(|x| x.key() == key);
-        if let Some(i) = found {
-            let gone = self.liked.borrow_mut().remove(i);
-            library::store(&self.liked.borrow());
-            if gone.file.is_some() {
-                self.toast(&format!("Removed “{}” from Liked; its saved copy is in the Trash", gone.title));
-            } else {
-                self.toast(&format!("Removed “{}” from Liked", gone.title));
+        let like = crate::liking::toggle(&mut self.liked.borrow_mut(), t);
+        match like {
+            crate::liking::Like::Unliked { gone } => {
+                self.toast(&words::unliked_toast(&gone.title, gone.file.is_some()));
+                bg(move || library::unsave(&gone), |_| {});
             }
-            bg(move || library::unsave(&gone), |_| {});
-        } else {
-            let mut t = t.clone();
-            t.file = None;
-            self.liked.borrow_mut().insert(0, t.clone());
-            library::store(&self.liked.borrow());
-            if library::saves(&t) {
-                self.save_liked(t);
-            } else {
-                self.toast(&format!("Liked “{}”", t.title));
+            crate::liking::Like::Liked { save } => {
+                let mut t = t.clone();
+                t.file = None;
+                if save {
+                    self.save_liked(t);
+                } else {
+                    self.toast(&words::liked_toast(&t.title));
+                }
             }
         }
         self.refresh_hearts();
@@ -4688,7 +4644,7 @@ impl Ui {
                     };
                     if kept {
                         library::store(&me.liked.borrow());
-                        me.toast(&format!("Saved “{title}”"));
+                        me.toast(&words::saved_toast(&title));
                         let saved = me.liked.borrow().iter().find(|x| x.key() == key).cloned();
                         if let Some(t) = saved {
                             me.request_split(&t); // liked songs get split too
@@ -4701,7 +4657,7 @@ impl Ui {
                 }
                 Err(e) => {
                     debug(&format!("save {title}: {e}"));
-                    me.toast(&format!("Couldn't save “{title}” right now. It tries again next time the app opens."));
+                    me.toast(&words::save_failed(&title));
                 }
             }
             me.render_liked();
@@ -4781,15 +4737,8 @@ impl Ui {
 
     /// Liked songs not on this computer: (their song file, their music video).
     fn missing(&self) -> (usize, usize) {
-        let liked = self.liked.borrow();
-        let songs = liked.iter().filter(|t| library::saves(t) && t.file.as_ref().is_none_or(|f| !Path::new(f).exists())).count();
-        let videos = if cfg!(feature = "save-youtube") {
-            let have = crate::db::songs_with_video(); // a saved video, or known to have none
-            liked.iter().filter(|t| t.source == Source::YouTube && !t.video && !have.contains(&t.key())).count()
-        } else {
-            0
-        };
-        (songs, videos)
+        let (songs, videos) = crate::liking::missing(&self.liked.borrow());
+        (songs.len(), videos)
     }
 
     /// The "Fix missing" button: shown with how many are missing, while any are.
@@ -4798,23 +4747,19 @@ impl Ui {
         let n = songs.max(videos);
         self.fix_button.set_visible(n > 0 && std::env::var_os("RADIANCE_SHOT").is_none());
         let busy = !self.saving.borrow().is_empty() || self.extras_running.get();
-        self.fix_button.set_label(&if busy { format!("Fixing… {n} left") } else { format!("Fix missing ({n})") });
+        self.fix_button.set_label(&words::fix_label(n, busy));
         self.fix_button.set_sensitive(!busy);
     }
 
     /// Saves what's missing: the songs first (one at a time), then each one's
     /// music video, lyrics file and cover (the background saver, at once).
     fn fix_missing(self: &Rc<Self>) {
-        let (songs, videos) = self.missing();
-        let todo: Vec<Track> = self.liked.borrow().iter().filter(|t| library::saves(t) && t.file.as_ref().is_none_or(|f| !Path::new(f).exists())).cloned().collect();
+        let (todo, videos) = crate::liking::missing(&self.liked.borrow());
+        let songs = todo.len();
         todo.into_iter().for_each(|t| self.save_liked(t));
         self.save_extras(Duration::from_secs(1));
         crate::log::note(&format!("fix missing: {songs} songs, {videos} videos"));
-        self.toast(&match (songs, videos) {
-            (0, v) => format!("Saving {v} music videos in the background"),
-            (s, 0) => format!("Saving {s} songs in the background"),
-            (s, v) => format!("Saving {s} songs and {v} music videos in the background"),
-        });
+        self.toast(&words::fixing_toast(songs, videos));
         self.show_missing();
     }
 
@@ -4839,15 +4784,7 @@ impl Ui {
             }
         }
         let dir = library::music_dir();
-        self.liked_group.set_description(Some(&if shown.is_empty() {
-            "Like a song (the heart) and it's kept here. Lossless songs are saved with their lyrics and album art.".to_string()
-        } else if q.is_empty() {
-            format!("{} songs, saved in {}", shown.len(), dir.display())
-        } else if found == 0 {
-            format!("None of your {} liked songs match “{q}”. Search finds it online.", shown.len())
-        } else {
-            format!("{found} of your {} liked songs {} “{q}”", shown.len(), if found == 1 { "matches" } else { "match" })
-        }));
+        self.liked_group.set_description(Some(&shelf::liked_note(shown.len(), &dir.display().to_string(), &q, found)));
         // letters with no songs (listed) stay faint
         let mut child = self.az_rail.first_child();
         while let Some(c) = child {
@@ -4950,34 +4887,16 @@ impl Ui {
     fn liked_row(self: &Rc<Self>, t: &Track, list: Rc<Vec<Track>>, i: usize) -> adw::ActionRow {
         let row = self.track_row(t, Place::Liked(list, i));
         if self.saving.borrow().contains(&t.key()) {
-            row.set_subtitle("Saving…");
+            row.set_subtitle(&shelf::row_subtitle(&t.byline(), Saved::Saving));
         } else if t.file.is_none() {
-            row.set_subtitle(&if library::saves(t) { "Not saved yet".to_string() } else { format!("{} · streams", t.byline()) });
+            row.set_subtitle(&shelf::row_subtitle(&t.byline(), if library::saves(t) { Saved::NotSaved } else { Saved::Streams }));
         }
         row
     }
 
     /// The liked songs by album, by each credited artist, or by genre (A to Z).
     fn groups_by(&self, liked: &[Track], view: LikedView) -> Vec<(String, Vec<Track>)> {
-        let mut map: std::collections::BTreeMap<String, (String, Vec<Track>)> = Default::default();
-        let mut put = |name: &str, t: &Track| {
-            let e = map.entry(name.to_lowercase()).or_insert_with(|| (name.to_string(), vec![]));
-            if !e.1.iter().any(|x| x.key() == t.key()) {
-                e.1.push(t.clone());
-            }
-        };
-        for t in liked {
-            match view {
-                LikedView::Albums => put(if t.album.is_empty() { "Singles" } else { &t.album }, t),
-                LikedView::Artists => t.artists().iter().for_each(|a| put(a, t)),
-                LikedView::Genres => match &t.genres {
-                    Some(g) if !g.is_empty() => g.iter().for_each(|x| put(x, t)),
-                    Some(_) => put("Other", t),
-                    None => put("Finding the genre…", t),
-                },
-            }
-        }
-        map.into_values().collect()
+        shelf::groups(liked, view).into_iter().map(|g| (g.name, g.songs)).collect()
     }
 
     /// Looks up the genres of liked songs that don't have them yet, one at a
@@ -5410,7 +5329,7 @@ impl Ui {
     fn update_quality(&self) {
         let Some(t) = self.current.borrow().clone() else { return };
         if self.player.borrow().as_ref().is_some_and(|p| p.hears_parts()) {
-            self.set_quality(Some("Mixer · its four parts"), false);
+            self.set_quality(Some(&quality::text(Heard::Parts)), false);
             if let Some(d) = self.player.borrow().as_ref().and_then(|p| p.duration()) {
                 self.seek.set_range(0.0, d.max(1.0));
                 self.len.set_label(&clock(d));
@@ -5419,8 +5338,7 @@ impl Ui {
             return;
         }
         if self.player.borrow().as_ref().is_some_and(|p| p.is_video()) {
-            let h = self.video_height.get();
-            let text = if self.kbps.get() > 0 { format!("Video · {h}p · Opus {} kbps", self.kbps.get()) } else { format!("Video · {h}p") };
+            let text = quality::text(Heard::Video { height: self.video_height.get(), kbps: self.kbps.get() });
             self.set_quality(Some(&text), false);
             if let Some(d) = self.player.borrow().as_ref().and_then(|p| p.duration()) {
                 self.seek.set_range(0.0, d.max(1.0));
@@ -5431,17 +5349,15 @@ impl Ui {
         }
         let Some((rate, bits)) = self.player.borrow().as_ref().and_then(|p| p.output()) else { return };
         let flac = t.lossless() || t.file.as_deref().is_some_and(|f| f.ends_with(".flac"));
-        let text = if let Some(v) = self.on_half.get() {
-            format!("{} · split · {bits} · {}", v.label(), khz(rate))
+        let text = quality::text(if let Some(v) = self.on_half.get() {
+            Heard::Half { voice: v.label(), bits: &bits, rate }
         } else if flac {
-            if bits.is_empty() { "Lossless · FLAC".to_string() } else { format!("Lossless · FLAC · {bits} · {}", khz(rate)) }
+            Heard::Flac { bits: &bits, rate }
         } else if t.source == Source::Server && t.file.is_none() {
-            format!("Compressed · {}", t.format)
-        } else if self.kbps.get() > 0 {
-            format!("Compressed · Opus · {} kbps", self.kbps.get())
+            Heard::Server { format: &t.format }
         } else {
-            "Compressed · Opus".into()
-        };
+            Heard::Opus { kbps: self.kbps.get() }
+        });
         self.set_quality(Some(&text), flac);
         if let Some(d) = self.player.borrow().as_ref().and_then(|p| p.duration()) {
             self.seek.set_range(0.0, d.max(1.0));
@@ -5805,25 +5721,16 @@ impl Ui {
                 }
             }
             Some(Lyrics::Timed { lines, .. }) => {
-                let mut voice: Option<String> = None;
-                for mut line in lines {
-                    if line.text.trim().is_empty() {
-                        line.text = "♪".into(); // a break in the singing
-                        line.words.clear();
-                    }
+                // "♪" for a break in the singing, the singer where the voice changes (core::sing)
+                for prepared in sing::prepare(lines) {
+                    let line = prepared.line;
                     let make = |class: &[&str]| {
                         gtk::Label::builder().label(&line.text).wrap(true).wrap_mode(gtk::pango::WrapMode::WordChar).xalign(0.0).justify(gtk::Justification::Left).css_classes(class.to_vec()).build()
                     };
                     let (big, side) = (make(&["lyric"]), make(&["lyric", "side-lyric"]));
                     self.lyrics_list.append(&big);
                     self.side_lyrics_list.append(&side);
-                    let spans = sing::word_spans(&line.text, &line.words);
-                    // a new voice: its name above the line
-                    let head = line.singer.clone().filter(|s| voice.as_deref() != Some(s.as_str()));
-                    if line.singer.is_some() {
-                        voice = line.singer.clone();
-                    }
-                    let view = LyricView { spans, big, side, sung: Cell::new(None), head, line };
+                    let view = LyricView { spans: prepared.spans, big, side, sung: Cell::new(None), head: prepared.head, line };
                     if view.head.is_some() {
                         view.big.set_markup(&view.resting_markup());
                         view.side.set_markup(&view.resting_markup());
@@ -6036,7 +5943,7 @@ impl Ui {
         };
         for (id, name, n) in crate::db::playlists() {
             let r = row("view-list-symbolic", &name, &format!("playlist:{id}"));
-            r.set_tooltip_text(Some(&format!("{name}: {n} song{}", if n == 1 { "" } else { "s" })));
+            r.set_tooltip_text(Some(&words::playlist_tip(&name, n)));
             self.nav.append(&r);
         }
         self.nav.append(&row("list-add-symbolic", "New Playlist", "new-playlist"));
@@ -6059,7 +5966,7 @@ impl Ui {
         let play = gtk::Button::builder().label("Play").css_classes(["suggested-action", "pill-button"]).sensitive(n > 0).build();
         let shuffle = gtk::Button::builder().label("Shuffle").css_classes(["pill-button"]).sensitive(n > 0).build();
         let rename = gtk::Button::builder().icon_name("document-edit-symbolic").tooltip_text("Rename").css_classes(["circular"]).build();
-        let delete = gtk::Button::builder().icon_name("user-trash-symbolic").tooltip_text("Delete the playlist").css_classes(["circular"]).build();
+        let delete = gtk::Button::builder().icon_name("user-trash-symbolic").tooltip_text(words::PLAYLIST_DELETE_TIP).css_classes(["circular"]).build();
         let (me, l) = (Rc::downgrade(self), songs.clone());
         play.connect_clicked(move |_| {
             if let Some(me) = me.upgrade() {
@@ -6085,7 +5992,7 @@ impl Ui {
         let (me, gone) = (Rc::downgrade(self), name.clone());
         delete.connect_clicked(move |_| {
             let Some(me) = me.upgrade() else { return };
-            let ask = adw::AlertDialog::new(Some(&format!("Delete “{gone}”?")), Some("The playlist goes; its songs stay in your library."));
+            let ask = adw::AlertDialog::new(Some(&words::delete_playlist_title(&gone)), Some(words::PLAYLIST_DELETE_BODY));
             ask.add_response("cancel", "Cancel");
             ask.add_response("delete", "Delete");
             ask.set_response_appearance("delete", adw::ResponseAppearance::Destructive);
@@ -6112,7 +6019,7 @@ impl Ui {
         self.playlist_box.append(&head);
         let group = adw::PreferencesGroup::new();
         if songs.is_empty() {
-            group.set_description(Some("No songs in it yet. Add one from any song's menu: Add to Playlist."));
+            group.set_description(Some(words::PLAYLIST_EMPTY));
         }
         for (i, t) in songs.iter().enumerate() {
             group.add(&self.track_row(t, Place::Playlist(id, songs.clone(), i)));
@@ -6124,7 +6031,7 @@ impl Ui {
     /// Asks for a name (a new playlist, a rename); `done` gets it, trimmed.
     fn name_dialog(self: &Rc<Self>, heading: &str, action: &str, start: &str, done: impl Fn(&Rc<Self>, &str) + 'static) {
         let ask = adw::AlertDialog::new(Some(heading), None);
-        let entry = gtk::Entry::builder().text(start).activates_default(true).placeholder_text("Playlist name").build();
+        let entry = gtk::Entry::builder().text(start).activates_default(true).placeholder_text(words::PLAYLIST_NAME_HINT).build();
         ask.set_extra_child(Some(&entry));
         ask.add_response("cancel", "Cancel");
         ask.add_response("ok", action);
@@ -6147,13 +6054,13 @@ impl Ui {
 
     /// A new playlist (with `first` in it, from a song's menu).
     pub(crate) fn new_playlist(self: &Rc<Self>, first: Option<Track>) {
-        let n = crate::db::playlists().len() + 1;
-        self.name_dialog("New Playlist", "Create", &format!("My Playlist {n}"), move |me, name| {
+        let suggested = words::next_playlist_name(crate::db::playlists().len());
+        self.name_dialog("New Playlist", "Create", &suggested, move |me, name| {
             let Some(id) = crate::db::create_playlist(name) else { return };
             match &first {
                 Some(t) => {
                     crate::db::add_to_playlist(id, t);
-                    me.toast(&format!("Added to “{name}”"));
+                    me.toast(&words::added_to(name));
                 }
                 None => me.open_playlist(id),
             }

@@ -8,18 +8,22 @@
 //! engine of its own on that thread (a new one never takes an old one's late answers).
 
 use std::cell::{Cell, RefCell};
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
+use radiance_core::library::{self as shelf, GroupKind, Saved};
+use radiance_core::menu::{self, Action, Item, Place};
+use radiance_core::quality::{self, Heard};
 use radiance_core::queue::{self, Queue, Repeat, Step};
 use radiance_core::search;
 use radiance_core::trouble::{self, After};
 use radiance_core::words::{self, Kind};
 
+use crate::liking::{self, Like};
 use crate::lyrics::{Line, Lyrics};
 use crate::player::{Event, Player};
 use crate::playing::{self, Streams};
@@ -39,6 +43,77 @@ pub enum Change {
     Lyrics,
     Online,
     Problem,
+    /// Liked Songs: a song liked, taken out, or saved (and the bar's heart).
+    Liked,
+    /// A short note to show (read it with toast()).
+    Toast,
+    /// Albums, Artists, Genres (the liked songs grouped; genres as they're found).
+    Library,
+    /// A song played (History).
+    History,
+    /// A playlist made, renamed, deleted, or a song added or taken out.
+    Playlists,
+}
+
+/// Liked Songs as a page: the songs shown (A to Z, the search applied), the words under it,
+/// the A to Z rail's letters (each with its first row; None: faint), and Fix missing's label
+/// (None: nothing missing) while `fixing`.
+#[derive(Clone, Debug)]
+pub struct LikedPage {
+    pub songs: Vec<(Track, Saved)>,
+    pub note: String,
+    pub letters: Vec<(char, Option<usize>)>,
+    pub fix: Option<String>,
+    pub fixing: bool,
+}
+
+/// An album's, an artist's or a genre's tile: its name, the line under it, the art of its
+/// first song, round for an artist.
+#[derive(Clone, Debug)]
+pub struct Tile {
+    pub name: String,
+    pub sub: String,
+    pub art: String,
+    pub round: bool,
+}
+
+/// An album's, artist's or genre's page.
+#[derive(Clone, Debug)]
+pub struct GroupPage {
+    pub title: String,
+    pub sub: String,
+    pub art: String,
+    pub round: bool,
+    pub songs: Vec<Track>,
+}
+
+/// The queue panel: Played before (at most five, oldest first), the queue from the song playing
+/// (`start`: that song's place in the queue; `now`: a song is playing or picked, so it's the first
+/// row), at most a hundred rows, and the words under it.
+#[derive(Clone, Debug, Default)]
+pub struct QueuePanel {
+    pub before: Vec<Track>,
+    pub rows: Vec<Track>,
+    pub start: usize,
+    pub now: bool,
+    pub note: String,
+}
+
+/// A playlist's page: its name, "N songs", its songs, and the words when it's empty.
+#[derive(Clone, Debug)]
+pub struct PlaylistPage {
+    pub name: String,
+    pub count: String,
+    pub songs: Vec<Track>,
+    pub empty: Option<String>,
+}
+
+/// Liked songs as Liked Songs shows them: A to Z by title, those matching `q`.
+fn shown_liked(liked: &[(Track, Saved)], q: &str) -> Vec<(Track, Saved)> {
+    let q = q.trim();
+    let mut v: Vec<(Track, Saved)> = liked.iter().filter(|(t, _)| q.is_empty() || crate::track::matches(t, q)).cloned().collect();
+    v.sort_by_cached_key(|(t, _)| crate::track::file_key(&t.title));
+    v
 }
 
 /// Told when something changed: on the engine's thread, so it must hand it on quickly.
@@ -47,7 +122,7 @@ pub trait Listener: Send + Sync + 'static {
 }
 
 /// A list on screen that a song is played from.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ListRef {
     /// Search: your liked songs that match.
     Mine,
@@ -63,6 +138,14 @@ pub enum ListRef {
     Liked,
     /// The queue.
     Queue,
+    /// Liked Songs as shown: A to Z, its last search (liked_page).
+    LikedShown,
+    /// An album's, an artist's or a genre's liked songs.
+    Group(GroupKind, String),
+    /// History's plays, newest first.
+    History,
+    /// A playlist's songs.
+    Playlist(i64),
 }
 
 /// Search's lists for `query` (None: still being searched).
@@ -96,6 +179,22 @@ pub struct NowState {
     pub kbps: u32,
     /// The lyric lines lit now (core's sing::lit_lines).
     pub lit: Vec<usize>,
+    /// The song is liked (the bar's heart).
+    pub liked: bool,
+    /// When `at` was read, on clock_ms()'s clock (the app counts on from there while playing).
+    pub since: u64,
+    /// A music video is playing (its picture: video_swapchain()).
+    pub video: bool,
+    /// The song's other version is known (the video button: its music video, or back to the song).
+    pub has_counterpart: bool,
+    /// What's really playing, in the Linux app's words ("Lossless · FLAC · 24-bit · 96 kHz").
+    pub quality: String,
+}
+
+/// Milliseconds on the engine's monotonic clock (NowState::since's).
+pub fn clock_ms() -> u64 {
+    static START: OnceLock<Instant> = OnceLock::new();
+    START.get_or_init(Instant::now).elapsed().as_millis() as u64
 }
 
 /// The song's lyrics.
@@ -106,7 +205,8 @@ pub enum LyricsState {
     Looking,
     None,
     Plain(String),
-    Lines(Vec<Line>),
+    /// Timed lines as shown: "♪" for a break, the singer where the voice changes, each word's place.
+    Lines(Vec<radiance_core::sing::SungLine>),
 }
 
 /// What went wrong, in plain words; `retry`: it stopped (Try Again starts the song over; a note
@@ -138,6 +238,19 @@ struct View {
     now: NowState,
     queue: (Vec<Track>, usize),
     lyrics: LyricsState,
+    /// Liked Songs (newest first), each as it's kept here.
+    liked: Vec<(Track, Saved)>,
+    /// Notes to show, oldest first.
+    toasts: VecDeque<String>,
+    /// History's plays, newest first (with when, unix seconds).
+    history: Vec<(Track, i64)>,
+    panel: QueuePanel,
+    /// Each song's (plays, skips), by key.
+    counts: HashMap<String, (usize, usize)>,
+    /// The music video's swapchain, while one plays (Windows).
+    /// The music video's swapchain while one plays, held (review I5): no one hands out a pointer
+    /// the sink may have let go of.
+    video: Option<crate::comref::ComRef>,
 }
 
 /// Between the app's threads and the engine's.
@@ -146,6 +259,8 @@ pub(crate) struct Shared {
     pub(crate) sources: Arc<dyn Sources>,
     quitting: AtomicBool,
     view: Mutex<View>,
+    /// Liked Songs' search as last shown (what LikedShown plays).
+    liked_q: Mutex<String>,
 }
 
 impl Shared {
@@ -227,7 +342,14 @@ impl Controller {
                 now: NowState::default(),
                 queue: (Vec::new(), 0),
                 lyrics: LyricsState::None,
+                liked: Vec::new(),
+                toasts: VecDeque::new(),
+                history: Vec::new(),
+                panel: QueuePanel::default(),
+                counts: HashMap::new(),
+                video: None,
             }),
+            liked_q: Mutex::new(String::new()),
         });
         let epoch = EPOCH.fetch_add(1, Ordering::SeqCst) + 1;
         let (ready_tx, ready_rx) = std::sync::mpsc::channel::<()>();
@@ -316,6 +438,252 @@ impl Controller {
     /// To `at` seconds into the song.
     pub fn seek(&self, at: f64) {
         self.post(move |e| e.seek(at));
+    }
+
+    /// The song's other version, from where it is: its music video (`want_video`) or the song.
+    pub fn switch_version(&self, want_video: bool) {
+        self.post(move |e| e.switch_version(want_video));
+    }
+
+    /// The music video's picture while one plays: its DXGI swapchain (Windows), for a
+    /// SwapChainPanel, with a reference of the caller's own (AddRef'd under the view's lock while
+    /// the engine holds one): the caller Releases it once its panel holds the swapchain. None: no
+    /// video, or no swapchain (not Windows).
+    pub fn video_swapchain(&self) -> Option<u64> {
+        self.shared.view(|v| v.video.as_ref().map(|r| r.give()))
+    }
+
+    /// The video's panel is `w`×`h` pixels now (the swapchain follows).
+    pub fn resize_video(&self, w: u32, h: u32) {
+        self.post(move |e| e.resize_video(w, h));
+    }
+
+    /// The heart: likes the song (it's saved, where it's saved) or takes it out of Liked.
+    pub fn toggle_like(&self, key: &str) {
+        let key = key.to_string();
+        self.post(move |e| e.toggle_like(&key));
+    }
+
+    /// Saves every liked song whose file isn't on this computer (in the background).
+    pub fn fix_missing(&self) {
+        self.post(|e| e.fix_missing());
+    }
+
+    /// Liked Songs, newest first, each as it's kept here.
+    pub fn liked(&self) -> Vec<(Track, Saved)> {
+        self.shared.view(|v| v.liked.clone())
+    }
+
+    /// The oldest note not shown yet (each is given once).
+    pub fn toast(&self) -> Option<String> {
+        self.shared.view(|v| v.toasts.pop_front())
+    }
+
+    /// Liked Songs as a page, searched for `q` (remembered: LikedShown plays what it shows).
+    pub fn liked_page(&self, q: &str) -> LikedPage {
+        *self.shared.liked_q.lock().unwrap_or_else(|e| e.into_inner()) = q.trim().to_string();
+        let liked = self.shared.view(|v| v.liked.clone());
+        let songs = shown_liked(&liked, q);
+        let shown: Vec<Track> = songs.iter().map(|(t, _)| t.clone()).collect();
+        let tracks: Vec<Track> = liked.iter().map(|(t, _)| t.clone()).collect();
+        let (missing, videos) = liking::missing(&tracks);
+        let n = missing.len().max(videos);
+        let fixing = liked.iter().any(|(_, s)| *s == Saved::Saving);
+        LikedPage {
+            note: shelf::liked_note(liked.len(), &crate::library::music_dir().display().to_string(), q.trim(), songs.len()),
+            letters: shelf::letters(&shown),
+            fix: (n > 0).then(|| words::fix_label(n, fixing)),
+            fixing,
+            songs,
+        }
+    }
+
+    /// The Albums, Artists or Genres page's tiles (A to Z).
+    pub fn library(&self, kind: GroupKind) -> Vec<Tile> {
+        let liked: Vec<Track> = self.shared.view(|v| v.liked.iter().map(|(t, _)| t.clone()).collect());
+        shelf::groups(&liked, kind)
+            .into_iter()
+            .map(|g| {
+                let round = kind == GroupKind::Artists;
+                Tile {
+                    sub: if kind == GroupKind::Albums { g.songs[0].credit() } else { shelf::songs_count(g.songs.len()) },
+                    art: crate::art::source_of(&g.songs[0]),
+                    round,
+                    name: g.name,
+                }
+            })
+            .collect()
+    }
+
+    /// An album's, artist's or genre's page.
+    pub fn group(&self, kind: GroupKind, name: &str) -> Option<GroupPage> {
+        let liked: Vec<Track> = self.shared.view(|v| v.liked.iter().map(|(t, _)| t.clone()).collect());
+        let g = shelf::groups(&liked, kind).into_iter().find(|g| g.name == name)?;
+        let n = shelf::songs_count(g.songs.len());
+        Some(GroupPage {
+            title: g.name,
+            sub: if kind == GroupKind::Albums { format!("{} · {n}", g.songs[0].credit()) } else { n },
+            art: crate::art::source_of(&g.songs[0]),
+            round: kind == GroupKind::Artists,
+            songs: g.songs,
+        })
+    }
+
+    /// The playlists: (id, name, how many songs).
+    pub fn playlists(&self) -> Vec<(i64, String, usize)> {
+        crate::db::playlists()
+    }
+
+    /// A playlist's page (None: there's no such playlist).
+    pub fn playlist(&self, id: i64) -> Option<PlaylistPage> {
+        let name = crate::db::playlists().into_iter().find(|(i, _, _)| *i == id)?.1;
+        let songs = crate::db::playlist_songs(id);
+        Some(PlaylistPage { name, count: shelf::songs_count(songs.len()), empty: songs.is_empty().then(|| words::PLAYLIST_EMPTY.to_string()), songs })
+    }
+
+    /// A new playlist's suggested name ("My Playlist N").
+    pub fn next_playlist_name(&self) -> String {
+        words::next_playlist_name(crate::db::playlists().len())
+    }
+
+    /// Makes a playlist (with `first` in it, from a song's menu); its id.
+    pub fn create_playlist(&self, name: &str, first: Option<&str>) -> Option<i64> {
+        let id = crate::db::create_playlist(name)?;
+        self.shared.tell(Change::Playlists);
+        if let Some(key) = first {
+            self.add_to_playlist(id, key);
+        }
+        Some(id)
+    }
+
+    pub fn rename_playlist(&self, id: i64, name: &str) {
+        crate::db::rename_playlist(id, name);
+        self.shared.tell(Change::Playlists);
+    }
+
+    pub fn delete_playlist(&self, id: i64) {
+        crate::db::delete_playlist(id);
+        self.shared.tell(Change::Playlists);
+    }
+
+    /// Adds the song to the playlist (said: "Added to …" or "Already in …").
+    pub fn add_to_playlist(&self, id: i64, key: &str) {
+        let key = key.to_string();
+        self.post(move |e| e.add_to_playlist(id, &key));
+    }
+
+    pub fn remove_from_playlist(&self, id: i64, key: &str) {
+        crate::db::remove_from_playlist(id, key);
+        self.shared.tell(Change::Playlists);
+    }
+
+    /// Each song's (plays, skips), by key (a row's "N×" and its words).
+    pub fn counts(&self) -> HashMap<String, (usize, usize)> {
+        self.shared.view(|v| v.counts.clone())
+    }
+
+    /// The lyric lines lit at `at` (seconds), each with how many characters are sung: what the
+    /// beta lights between the engine's readings (read here, not on the engine's thread).
+    pub fn sung(&self, at: f64) -> Vec<(usize, usize)> {
+        self.shared.view(|v| match &v.lyrics {
+            LyricsState::Lines(lines) => radiance_core::sing::sung(lines, at),
+            _ => Vec::new(),
+        })
+    }
+
+    /// The queue panel.
+    pub fn queue_panel(&self) -> QueuePanel {
+        self.shared.view(|v| v.panel.clone())
+    }
+
+    /// Plays a song again now (from Played before): the queue carries on after it; no skip counted.
+    pub fn play_again(&self, key: &str) {
+        let key = key.to_string();
+        self.post(move |e| e.play_again(&key));
+    }
+
+    /// The song plays next (said).
+    pub fn play_next(&self, key: &str) {
+        let key = key.to_string();
+        self.post(move |e| e.play_next(&key));
+    }
+
+    /// The song goes at the end of the queue (said).
+    pub fn enqueue(&self, key: &str) {
+        let key = key.to_string();
+        self.post(move |e| e.enqueue(&key));
+    }
+
+    /// Takes the queue's song at `index` out, if it's still the song `key`.
+    pub fn unqueue(&self, index: usize, key: &str) {
+        let key = key.to_string();
+        self.post(move |e| e.unqueue(index, &key));
+    }
+
+    /// Moves the queue's song at `from` (if it's still `key`) to `to`; never above the song playing.
+    pub fn move_in_queue(&self, from: usize, to: usize, key: &str) {
+        let key = key.to_string();
+        self.post(move |e| e.move_in_queue(from, to, &key));
+    }
+
+    /// The song's radio: it, then songs like it (said).
+    pub fn start_radio(&self, key: &str) {
+        let key = key.to_string();
+        self.post(move |e| e.start_radio(&key));
+    }
+
+    /// The song's menu where it was opened.
+    pub fn song_menu(&self, key: &str, place: Place) -> Vec<Vec<Item>> {
+        let (t, liked) = self.shared.view(|v| {
+            let liked = v.liked.iter().any(|(t, _)| t.key() == key);
+            let hit = |l: &[Track]| l.iter().find(|t| t.key() == key).cloned();
+            let t = v.liked.iter().map(|(t, _)| t).find(|t| t.key() == key).cloned()
+                .or_else(|| hit(&v.queue.0))
+                .or_else(|| hit(&v.results.mine))
+                .or_else(|| v.results.lossless.as_deref().and_then(hit))
+                .or_else(|| v.results.songs.as_deref().and_then(hit))
+                .or_else(|| hit(&v.home.mix))
+                .or_else(|| hit(&v.home.recent))
+                .or_else(|| v.history.iter().map(|(t, _)| t).find(|t| t.key() == key).cloned())
+                .or_else(|| v.now.song.clone().filter(|t| t.key() == key));
+            (t, liked)
+        });
+        // a playlist's song found nowhere else: the playlist's own copy (read outside the view's lock)
+        let t = t.or_else(|| match place {
+            Place::Playlist(id) => crate::db::playlist_songs(id).into_iter().find(|t| t.key() == key),
+            _ => None,
+        });
+        let Some(t) = t else { return Vec::new() };
+        let saved = t.file.as_ref().is_some_and(|f| std::path::Path::new(f).exists());
+        let lists: Vec<(i64, String)> = crate::db::playlists().into_iter().map(|(id, name, _)| (id, name)).collect();
+        menu::song_menu(&t, place, liked, saved, &lists)
+    }
+
+    /// A menu item for the song `key` (`index`: its place in the queue, for Remove from Queue).
+    /// Play and New Playlist… are the app's (it knows the list, and asks for the name).
+    pub fn do_menu(&self, key: &str, index: usize, action: Action) {
+        match action {
+            Action::Play | Action::NewPlaylistWith => {}
+            Action::PlayNext => self.play_next(key),
+            Action::AddToQueue => self.enqueue(key),
+            Action::RemoveFromQueue => self.unqueue(index, key),
+            Action::RemoveFromPlaylist(id) => self.remove_from_playlist(id, key),
+            Action::AddToPlaylist(id) => self.add_to_playlist(id, key),
+            Action::Like | Action::Unlike => self.toggle_like(key),
+            Action::Radio => self.start_radio(key),
+            Action::GoToArtist(q) | Action::GoToAlbum(q) => self.search(&q),
+            Action::ShowInFiles => {
+                let key = key.to_string();
+                self.post(move |e| e.show_in_files(&key));
+            }
+        }
+    }
+
+    /// History by day.
+    pub fn history(&self) -> Vec<crate::history::Day> {
+        let plays = self.shared.view(|v| v.history.clone());
+        let now = glib::DateTime::now_local().map(|d| d.to_unix()).unwrap_or_default();
+        crate::history::days(&plays, now)
     }
 
     /// 0 to 1 (kept in the settings).
@@ -415,6 +783,10 @@ struct Engine {
     /// What the search found, as found: (lossless, YouTube Music).
     found: RefCell<(Option<Vec<Track>>, Option<Vec<Track>>)>,
     liked: RefCell<Vec<Track>>,
+    /// Liked songs being saved now.
+    saving: RefCell<HashSet<String>>,
+    /// Liked songs' genres are being looked up.
+    genres_busy: Cell<bool>,
     history: RefCell<Vec<(Track, i64)>>,
     mix: RefCell<Vec<Track>>,
     mix_gen: Cell<u64>,
@@ -446,10 +818,42 @@ struct Engine {
     /// The song's timed lines (the lit ones go in NowState).
     lines: RefCell<Vec<Line>>,
     last_save: Cell<Option<Instant>>,
+
+    // music videos
+    /// The playing song's other version: (the key it belongs to, that version).
+    counterpart: RefCell<Option<(String, Track)>>,
+    /// A video's streams found last: (its id, picture, sound, height, sound's kbps, when).
+    found_video: RefCell<Option<FoundVideo>>,
+    /// A switch to a music video under way: the song to go back to, where it was, the video's
+    /// key (cleared once the video plays).
+    switching: RefCell<Option<(Track, f64, String)>>,
+    /// The video's picture height (the quality line's "720p").
+    video_height: Cell<u32>,
+    /// The video's swapchain (0: none).
+    swapchain: Cell<u64>,
+    /// What's really playing, in words (NowState::quality).
+    quality: RefCell<String>,
 }
+
+/// A music video's streams, as found (through the relay).
+#[derive(Clone)]
+struct FoundVideo {
+    id: String,
+    picture: String,
+    sound: String,
+    height: u32,
+    kbps: u32,
+    when: Instant,
+}
+
+/// How long a found video's streams are used again (YouTube's addresses last about 6 hours).
+const VIDEO_FRESH: Duration = Duration::from_secs(3600);
 
 impl Engine {
     fn new(shared: Arc<Shared>, epoch: u64) -> Engine {
+        let settings = settings::load();
+        // liked songs go to the folder picked in Storage (as the GTK app's start)
+        crate::library::set_music_dir(settings.music_dir.clone().map(std::path::PathBuf::from));
         Engine {
             shared,
             epoch,
@@ -457,6 +861,8 @@ impl Engine {
             query: RefCell::default(),
             found: RefCell::new((Some(Vec::new()), Some(Vec::new()))),
             liked: RefCell::default(),
+            saving: RefCell::default(),
+            genres_busy: Cell::new(false),
             history: RefCell::default(),
             mix: RefCell::default(),
             mix_gen: Cell::new(0),
@@ -475,10 +881,16 @@ impl Engine {
             ran_out: Cell::new(false),
             autoplay_for: RefCell::default(),
             counts: RefCell::default(),
-            settings: RefCell::new(settings::load()),
+            settings: RefCell::new(settings),
             muted: Cell::new(false),
             lines: RefCell::default(),
             last_save: Cell::new(None),
+            counterpart: RefCell::default(),
+            found_video: RefCell::default(),
+            switching: RefCell::default(),
+            video_height: Cell::new(0),
+            swapchain: Cell::new(0),
+            quality: RefCell::default(),
         }
     }
 
@@ -511,7 +923,14 @@ impl Engine {
         }
         self.restore_session();
         self.publish_home();
+        self.publish_liked();
+        self.publish_history();
+        self.publish_counts();
+        self.fill_genres();
         self.refresh_mix();
+        // likes that weren't saved yet (offline, or the app closed while saving)
+        let unsaved: Vec<Track> = self.liked.borrow().iter().filter(|t| t.file.is_none() && crate::library::saves(t)).cloned().collect();
+        unsaved.into_iter().for_each(|t| self.save_liked(t));
         // five times a second: where the song is, the lines lit, and (every 5 s) where you are
         let me = Rc::downgrade(self);
         glib::timeout_add_local(Duration::from_millis(200), move || {
@@ -523,6 +942,7 @@ impl Engine {
 
     fn shut_down(&self) {
         self.save_session();
+        self.let_go_of_video();
         if let Some(p) = self.player.borrow().as_ref() {
             p.stop();
         }
@@ -561,7 +981,11 @@ impl Engine {
     }
 
     /// The songs of a list on screen.
-    fn list(&self, list: ListRef) -> Vec<Track> {
+    fn list(&self, list: &ListRef) -> Vec<Track> {
+        let q = self.shared.liked_q.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        if let ListRef::Playlist(id) = list {
+            return crate::db::playlist_songs(*id);
+        }
         self.shared.view(|v| match list {
             ListRef::Mine => v.results.mine.clone(),
             ListRef::Lossless => v.results.lossless.clone().unwrap_or_default(),
@@ -570,11 +994,18 @@ impl Engine {
             ListRef::Recent => v.home.recent.clone(),
             ListRef::Liked => v.home.liked.clone(),
             ListRef::Queue => v.queue.0.clone(),
+            ListRef::LikedShown => shown_liked(&v.liked, &q).into_iter().map(|(t, _)| t).collect(),
+            ListRef::Group(kind, name) => {
+                let liked: Vec<Track> = v.liked.iter().map(|(t, _)| t.clone()).collect();
+                shelf::groups(&liked, *kind).into_iter().find(|g| &g.name == name).map(|g| g.songs).unwrap_or_default()
+            }
+            ListRef::History => v.history.iter().map(|(t, _)| t.clone()).collect(),
+            ListRef::Playlist(_) => Vec::new(),
         })
     }
 
     fn play_from(self: &Rc<Self>, list: ListRef, i: usize, key: &str) {
-        let tracks = self.list(list);
+        let tracks = self.list(&list);
         // the song clicked: at its place, or (the list moved since) wherever it is now; gone: nothing
         let Some(i) = tracks.get(i).filter(|t| t.key() == key).map(|_| i).or_else(|| tracks.iter().position(|t| t.key() == key)) else { return };
         if list == ListRef::Queue {
@@ -584,7 +1015,43 @@ impl Engine {
             self.play_current();
             return;
         }
+        if matches!(list, ListRef::Songs | ListRef::Lossless | ListRef::Mine) {
+            self.play_with_radio(tracks[i].clone());
+            return;
+        }
         self.play_list(tracks, i);
+    }
+
+    /// A song picked from Search: it plays now, and its radio fills Up next (#47, as YouTube
+    /// Music does: the other results aren't songs like it), quietly. A radio that answers after
+    /// another song was picked is dropped; songs added to the queue meanwhile stay before it.
+    fn play_with_radio(self: &Rc<Self>, seed: Track) {
+        *self.autoplay_for.borrow_mut() = Some(seed.key()); // its radio is coming: Autoplay needn't
+        self.play_list(vec![seed.clone()], 0);
+        let sources = self.shared.sources.clone();
+        let s = seed.clone();
+        self.bg(move || sources.radio(&s), move |e, list| {
+            if !e.current.borrow().as_ref().is_some_and(|c| c.key() == seed.key()) {
+                return;
+            }
+            let more: Vec<Track> = {
+                let q = e.queue.borrow();
+                list.into_iter()
+                    .filter(|x| x.key() != seed.key() && !x.same_song(&seed) && !e.often_skipped(x) && !q.iter().any(|t| t.key() == x.key()))
+                    .collect()
+            };
+            if more.is_empty() {
+                return;
+            }
+            e.queue.borrow_mut().extend(more);
+            e.publish_queue();
+            e.publish_now();
+            if e.ran_out.replace(false) {
+                e.skip(1); // the song ended while they were on their way: on to them
+            } else {
+                e.prefetch_next();
+            }
+        });
     }
 
     fn retry(self: &Rc<Self>) {
@@ -602,7 +1069,7 @@ impl Engine {
     }
 
     fn shuffle_from(self: &Rc<Self>, list: ListRef) {
-        let tracks = self.list(list);
+        let tracks = self.list(&list);
         if !tracks.is_empty() {
             let order = self.shuffled(tracks);
             self.play_list(order, 0);
@@ -640,6 +1107,7 @@ impl Engine {
     /// The queue's song at its index, from its saved copy, a stream, or the Archive. (Stage 1
     /// of the Windows app: no parts, voices or videos yet; a video plays its sound.)
     fn play_current(self: &Rc<Self>) {
+        self.let_go_of_video(); // before the old video's pipeline goes (review I5)
         let Some(t) = self.queue.borrow().at_index().cloned() else { return };
         let t = playing::saved_copy(&self.liked.borrow(), &t);
         let gen = self.play_gen.get() + 1;
@@ -647,15 +1115,28 @@ impl Engine {
         self.kbps.set(0);
         self.position.set(self.restore_at.get().unwrap_or(0.0));
         *self.current.borrow_mut() = Some(t.clone());
+        if self.switching.borrow().as_ref().is_some_and(|(_, _, key)| *key != t.key()) {
+            self.switching.replace(None); // another song picked since the switch
+        }
         self.load_lyrics(&t, gen);
         self.note_played(&t);
-        let lookup = t.source == Source::YouTube && t.file.is_none() && self.streams.borrow().fresh(&t.id).is_none();
+        self.find_counterpart(&t);
+        self.video_height.set(0);
+        let video = t.video && t.file.is_none();
+        let lookup = if video {
+            self.video_at_hand(&t.id).is_none()
+        } else {
+            t.source == Source::YouTube && t.file.is_none() && self.streams.borrow().fresh(&t.id).is_none()
+        };
         if lookup {
             if let Some(p) = self.player.borrow().as_ref() {
                 p.stop(); // not the last song under this one's name while it's found
             }
         }
-        if let Some(f) = &t.file {
+        self.update_quality();
+        if video {
+            self.play_video(&t, gen);
+        } else if let Some(f) = &t.file {
             use gio::prelude::*;
             self.start(&gio::File::for_path(f).uri(), gen);
         } else {
@@ -806,12 +1287,21 @@ impl Engine {
                         p.seek(at);
                     }
                 }
+                if let Some(p) = self.player.borrow().as_ref().filter(|p| p.is_video()) {
+                    self.switching.replace(None); // the video plays: no way back needed
+                    self.swapchain.set(p.video_swapchain()); // (the sink may make it only once it plays)
+                }
+                self.update_quality();
                 self.publish_now();
             }
             Event::Ended if self.queue.borrow().repeat() == Repeat::One => self.play_current(),
             Event::Ended => self.skip(1),
             Event::Error(e) if trouble::sound_device_gone(&e) && self.sound_tries.get() < 3 => self.carry_on(),
-            Event::Error(e) => self.unavailable(&song, &e),
+            Event::Error(e) => {
+                if !self.back_from_video(&e) {
+                    self.unavailable(&song, &e);
+                }
+            }
         }
     }
 
@@ -822,6 +1312,7 @@ impl Engine {
         self.sound_tries.set(tries);
         let at = self.player.borrow().as_ref().and_then(|p| p.position()).unwrap_or(0.0);
         crate::log::note(&format!("the sound device went away (try {tries}): carries on at {at:.0} s"));
+        self.let_go_of_video();
         if let Some(p) = self.player.borrow().as_ref() {
             p.stop(); // lets go of the speaker it was on
         }
@@ -852,11 +1343,500 @@ impl Engine {
             self.skip(1);
             return;
         }
+        self.let_go_of_video();
         if let Some(p) = self.player.borrow().as_ref() {
             p.stop();
         }
         self.say(trouble::cant_play_text(title, reason, fails, every_song), true);
         self.publish_now();
+    }
+
+    /// A note for the app to show.
+    fn toast(&self, text: String) {
+        self.shared.view(|v| v.toasts.push_back(text));
+        self.shared.tell(Change::Toast);
+    }
+
+    /// A song the app shows, by its key: playing, in the queue, liked, found, in the mix or the history.
+    fn find_track(&self, key: &str) -> Option<Track> {
+        let hit = |v: &[Track]| v.iter().find(|t| t.key() == key).cloned();
+        if let Some(t) = self.current.borrow().as_ref().filter(|t| t.key() == key) {
+            return Some(t.clone());
+        }
+        let found = self.found.borrow();
+        hit(self.queue.borrow().tracks())
+            .or_else(|| hit(&self.liked.borrow()))
+            .or_else(|| found.0.as_deref().and_then(hit))
+            .or_else(|| found.1.as_deref().and_then(hit))
+            .or_else(|| hit(&self.mix.borrow()))
+            .or_else(|| self.history.borrow().iter().map(|(t, _)| t).find(|t| t.key() == key).cloned())
+            // a playlist's song found nowhere else (its page's menu, heart, Play Next)
+            .or_else(|| crate::db::playlists().into_iter().find_map(|(id, _, _)| crate::db::playlist_songs(id).into_iter().find(|t| t.key() == key)))
+    }
+
+    fn saved_state(&self, t: &Track) -> Saved {
+        if self.saving.borrow().contains(&t.key()) {
+            Saved::Saving
+        } else if t.file.is_some() {
+            Saved::Saved
+        } else if crate::library::saves(t) {
+            Saved::NotSaved
+        } else {
+            Saved::Streams
+        }
+    }
+
+    fn publish_liked(&self) {
+        let list: Vec<(Track, Saved)> = self.liked.borrow().iter().map(|t| (t.clone(), self.saved_state(t))).collect();
+        self.shared.view(|v| v.liked = list);
+        self.shared.tell(Change::Liked);
+        self.shared.tell(Change::Library);
+    }
+
+    fn publish_counts(&self) {
+        let counts = self.counts.borrow().clone();
+        self.shared.view(|v| v.counts = counts);
+    }
+
+    fn publish_history(&self) {
+        let plays = self.history.borrow().clone();
+        self.shared.view(|v| v.history = plays);
+        self.shared.tell(Change::History);
+    }
+
+    /// Liked songs without genres get them looked up, gently (250 ms apart, in the background),
+    /// as the Linux app does; then stored, and the library drawn again.
+    fn fill_genres(self: &Rc<Self>) {
+        if self.genres_busy.get() {
+            return;
+        }
+        let todo: Vec<Track> = self.liked.borrow().iter().filter(|t| t.genres.is_none()).cloned().collect();
+        if todo.is_empty() {
+            return;
+        }
+        self.genres_busy.set(true);
+        let sources = self.shared.sources.clone();
+        self.bg(
+            move || {
+                todo.iter()
+                    .map(|t| {
+                        std::thread::sleep(Duration::from_millis(250)); // gently
+                        (t.key(), sources.genres(t))
+                    })
+                    .collect::<Vec<_>>()
+            },
+            |e, found| {
+                e.genres_busy.set(false);
+                {
+                    let mut liked = e.liked.borrow_mut();
+                    for (key, g) in found {
+                        if let Some(t) = liked.iter_mut().find(|t| t.key() == key) {
+                            t.genres = Some(g);
+                        }
+                    }
+                }
+                crate::library::store(&e.liked.borrow());
+                e.publish_liked();
+                e.publish_home();
+            },
+        );
+    }
+
+    /// Liked Songs changed: it, the bar's heart, Home's row and Search's own matches.
+    fn liked_changed(self: &Rc<Self>) {
+        self.fill_genres();
+        self.publish_liked();
+        self.publish_now();
+        self.publish_home();
+        self.publish_results();
+    }
+
+    /// The other version (song <-> its official music video), from the same spot. A video's
+    /// streams are found first, the song playing on meanwhile: if they can't be, it says why
+    /// and the song goes on.
+    fn switch_version(self: &Rc<Self>, want_video: bool) {
+        let Some(cur) = self.current.borrow().clone() else { return };
+        if cur.video == want_video {
+            return;
+        }
+        let Some((key, other)) = self.counterpart.borrow().clone() else { return };
+        if key != cur.key() {
+            return;
+        }
+        if other.video && other.file.is_none() && self.video_at_hand(&other.id).is_none() {
+            let gen = self.play_gen.get();
+            let title = other.title.clone();
+            self.find_video(&other, move |e, found| {
+                if e.play_gen.get() != gen {
+                    return; // another song since
+                }
+                match found {
+                    Ok(()) => e.switch_version(want_video),
+                    Err(why) => {
+                        crate::log::note(&format!("“{title}” won't play: {why}"));
+                        let (reason, _) = trouble::why_not(&why, e.shared.view(|v| v.online));
+                        e.say(trouble::cant_play_text(&title, reason, 1, false), false);
+                    }
+                }
+            });
+            return;
+        }
+        let at = self.player.borrow().as_ref().and_then(|p| p.position()).unwrap_or(self.position.get());
+        {
+            let mut q = self.queue.borrow_mut();
+            let i = q.index();
+            q.set_at(i, other.clone());
+        }
+        // the way back is known already
+        self.counterpart.replace(Some((other.key(), cur.clone())));
+        self.switching.replace(other.video.then(|| (cur, at, other.key())));
+        self.restored.set(false);
+        self.restore_at.set((at > 1.0).then_some(at));
+        self.play_current();
+    }
+
+    /// A video switched to didn't play: back to the song, from where it was, saying why.
+    /// False: no switch was under way (an ordinary song that won't play).
+    /// The video's swapchain no longer handed out, and the engine's reference to it gone: before
+    /// its pipeline is stopped or replaced, so no one is given a swapchain the sink let go of.
+    fn let_go_of_video(&self) {
+        self.swapchain.set(0);
+        self.shared.view(|v| v.video = None);
+    }
+
+    fn back_from_video(self: &Rc<Self>, why: &str) -> bool {
+        self.let_go_of_video();
+        let Some((song, at, key)) = self.switching.take() else { return false };
+        let Some(video) = self.current.borrow().clone().filter(|c| c.key() == key) else { return false };
+        crate::log::note(&format!("“{}” won't play: {why}", video.title));
+        let (reason, _) = trouble::why_not(why, self.shared.view(|v| v.online));
+        {
+            let mut q = self.queue.borrow_mut();
+            let i = q.index();
+            q.set_at(i, song.clone());
+        }
+        self.counterpart.replace(Some((song.key(), video.clone())));
+        self.restore_at.set((at > 1.0).then_some(at));
+        self.play_current();
+        self.say(trouble::cant_play_text(&video.title, reason, 1, false), false);
+        true
+    }
+
+    /// Looks for the playing song's other version (its music video, or the song of a video).
+    fn find_counterpart(self: &Rc<Self>, t: &Track) {
+        let known = self.counterpart.borrow().as_ref().is_some_and(|(k, _)| *k == t.key());
+        if known || t.source != Source::YouTube {
+            return;
+        }
+        let sources = self.shared.sources.clone();
+        let (song, key) = (t.clone(), t.key());
+        self.bg(
+            move || sources.counterpart(&song),
+            move |e, found| {
+                if e.current.borrow().as_ref().map(|c| c.key()) != Some(key.clone()) {
+                    return; // another song since
+                }
+                if let Some(other) = found {
+                    e.counterpart.replace(Some((key, other)));
+                    e.publish_now();
+                }
+            },
+        );
+    }
+
+    /// A video's picture and sound, when they're at hand: its saved file (both), or the streams
+    /// found lately. (picture, sound, height, kbps)
+    fn video_at_hand(&self, id: &str) -> Option<(String, String, u32, u32)> {
+        if let Some(file) = crate::db::video_file(id) {
+            use gio::prelude::*;
+            let uri = gio::File::for_path(file).uri().to_string();
+            return Some((uri.clone(), uri, 720, 0)); // saved: from the file, offline
+        }
+        let found = self.found_video.borrow();
+        found.as_ref().filter(|f| f.id == id && f.when.elapsed() < VIDEO_FRESH).map(|f| (f.picture.clone(), f.sound.clone(), f.height, f.kbps))
+    }
+
+    /// Finds a video's streams (YouTube, through the relay); `done` with how it went.
+    fn find_video(self: &Rc<Self>, t: &Track, done: impl FnOnce(&Rc<Engine>, Result<(), String>) + Send + 'static) {
+        let Some(relay) = self.relay.clone() else {
+            done(self, Err("the local relay didn't start".into()));
+            return;
+        };
+        let sources = self.shared.sources.clone();
+        let id = t.id.clone();
+        self.bg(
+            {
+                let id = id.clone();
+                move || {
+                    let found = sources.video_streams(&id);
+                    match &found {
+                        Ok((v, a)) => crate::log::note(&format!("music video {id}: {} {}p ({} bytes) + {} ({} bytes)", v.mime, v.kbps, v.size, a.mime, a.size)),
+                        Err(e) => crate::log::note(&format!("music video {id}: {e}")),
+                    }
+                    found.map(|(v, a)| (relay.add(v.url, v.size, v.mime), v.kbps, relay.add(a.url, a.size, a.mime), a.kbps))
+                }
+            },
+            move |e, found| match found {
+                Ok((picture, height, sound, kbps)) => {
+                    e.found_video.replace(Some(FoundVideo { id, picture, sound, height, kbps, when: Instant::now() }));
+                    done(e, Ok(()));
+                }
+                Err(why) => done(e, Err(why)),
+            },
+        );
+    }
+
+    /// A music video: its picture where the cover goes, its sound as a song's.
+    fn play_video(self: &Rc<Self>, t: &Track, gen: u64) {
+        if let Some((picture, sound, height, kbps)) = self.video_at_hand(&t.id) {
+            self.start_video(&t.title, &picture, &sound, height, kbps, gen);
+            return;
+        }
+        let title = t.title.clone();
+        self.find_video(t, move |e, found| {
+            if e.play_gen.get() != gen {
+                return; // another song since
+            }
+            let at_hand = e.current.borrow().as_ref().and_then(|c| e.video_at_hand(&c.id));
+            match (found, at_hand) {
+                (Ok(()), Some((picture, sound, height, kbps))) => e.start_video(&title, &picture, &sound, height, kbps, gen),
+                (Ok(()), None) => e.unavailable(&title, "YouTube didn't give this video"),
+                (Err(why), _) => e.unavailable(&title, &why),
+            }
+        });
+    }
+
+    fn start_video(self: &Rc<Self>, title: &str, picture: &str, sound: &str, height: u32, kbps: u32, gen: u64) {
+        if gen != self.play_gen.get() {
+            return; // another song was picked meanwhile
+        }
+        self.video_height.set(height);
+        self.kbps.set(kbps);
+        let out = self.player.borrow().as_ref().map(|p| p.load_video_out(picture, sound));
+        match out {
+            Some(Ok(v)) => {
+                self.swapchain.set(v.swapchain);
+                self.update_quality();
+                self.publish_now();
+            }
+            Some(Err(why)) => {
+                if !self.back_from_video(&why) {
+                    self.unavailable(title, &why);
+                }
+            }
+            None => {}
+        }
+    }
+
+    fn resize_video(&self, w: u32, h: u32) {
+        if let Some(p) = self.player.borrow().as_ref() {
+            p.resize_video(w, h);
+        }
+    }
+
+    /// What's really playing, in the Linux app's words (core's quality): the video's, or the
+    /// song's as decoded once its sound flows (before that, what it is).
+    fn update_quality(&self) {
+        let Some(t) = self.current.borrow().clone() else {
+            self.quality.borrow_mut().clear();
+            return;
+        };
+        let player = self.player.borrow();
+        let text = if player.as_ref().is_some_and(|p| p.is_video()) || (t.video && t.file.is_none()) {
+            quality::text(Heard::Video { height: self.video_height.get(), kbps: self.kbps.get() })
+        } else {
+            let flac = t.lossless() || t.file.as_deref().is_some_and(|f| f.ends_with(".flac"));
+            match player.as_ref().and_then(|p| p.output()) {
+                Some((rate, bits)) if flac => quality::text(Heard::Flac { bits: &bits, rate }),
+                None if flac => quality::text(Heard::Flac { bits: "", rate: 0 }),
+                _ if t.source == Source::Server && t.file.is_none() => quality::text(Heard::Server { format: &t.format }),
+                _ => quality::text(Heard::Opus { kbps: self.kbps.get() }),
+            }
+        };
+        *self.quality.borrow_mut() = text;
+    }
+
+    fn toggle_like(self: &Rc<Self>, key: &str) {
+        let Some(t) = self.find_track(key) else { return };
+        let like = liking::toggle(&mut self.liked.borrow_mut(), &t);
+        match like {
+            Like::Liked { save: true } => self.save_liked(t),
+            Like::Liked { save: false } => self.toast(words::liked_toast(&t.title)),
+            Like::Unliked { gone } => {
+                self.toast(words::unliked_toast(&gone.title, gone.file.is_some()));
+                self.bg(move || crate::library::unsave(&gone), |_, _| {});
+            }
+        }
+        self.liked_changed();
+    }
+
+    /// A liked song saved in the background (one save per song at a time). Taken out of Liked
+    /// while it was saving: what was saved goes again, and nothing is said.
+    fn save_liked(self: &Rc<Self>, t: Track) {
+        let key = t.key();
+        if !self.saving.borrow_mut().insert(key.clone()) {
+            return;
+        }
+        self.publish_liked();
+        let sources = self.shared.sources.clone();
+        self.bg(
+            move || {
+                let saved = liking::save(&t, sources.as_ref());
+                (t, saved)
+            },
+            move |e, (mut t, saved)| {
+                e.saving.borrow_mut().remove(&key);
+                match saved {
+                    Ok(path) => {
+                        let kept = e.liked.borrow_mut().iter_mut().find(|x| x.key() == key).map(|x| x.file = Some(path.clone())).is_some();
+                        if kept {
+                            crate::library::store(&e.liked.borrow());
+                            e.toast(words::saved_toast(&t.title));
+                        } else {
+                            t.file = Some(path);
+                            crate::library::unsave(&t);
+                        }
+                    }
+                    Err(err) => {
+                        crate::log::note(&format!("save {}: {err}", t.title));
+                        e.toast(words::save_failed(&t.title));
+                    }
+                }
+                e.liked_changed();
+            },
+        );
+    }
+
+    fn play_again(self: &Rc<Self>, key: &str) {
+        let Some(t) = self.find_track(key) else { return };
+        if self.current.borrow().is_none() {
+            self.play_list(vec![t], 0);
+            return;
+        }
+        self.restored.set(false);
+        self.restore_at.set(None);
+        let at = self.queue.borrow_mut().insert_next(t);
+        self.queue.borrow_mut().set_index(at);
+        self.play_current();
+        self.publish_queue();
+        self.save_session();
+    }
+
+    fn play_next(self: &Rc<Self>, key: &str) {
+        let Some(t) = self.find_track(key) else { return };
+        if self.current.borrow().is_none() {
+            self.play_list(vec![t], 0);
+            return;
+        }
+        self.queue.borrow_mut().insert_next(t.clone());
+        self.publish_queue();
+        self.prefetch_next();
+        self.toast(format!("“{}” plays next", t.title));
+    }
+
+    fn enqueue(self: &Rc<Self>, key: &str) {
+        let Some(t) = self.find_track(key) else { return };
+        if self.current.borrow().is_none() {
+            self.play_list(vec![t], 0);
+            return;
+        }
+        self.queue.borrow_mut().push(t.clone());
+        self.publish_queue();
+        self.prefetch_next();
+        self.toast(format!("Added “{}” to the queue", t.title));
+    }
+
+    fn unqueue(self: &Rc<Self>, i: usize, key: &str) {
+        if self.queue.borrow().get(i).is_none_or(|t| t.key() != key) {
+            return; // the queue moved since: not that song any more
+        }
+        let removed = self.queue.borrow_mut().remove(i);
+        match removed {
+            None => return,
+            // the song playing: on to the next one (now at the same place)
+            Some(queue::Removed::Current { play: true }) => {
+                self.restored.set(false);
+                self.restore_at.set(None);
+                self.play_current();
+            }
+            Some(queue::Removed::Current { play: false }) => {
+                self.restored.set(false);
+                self.restore_at.set(None);
+                self.let_go_of_video();
+                if let Some(p) = self.player.borrow().as_ref() {
+                    p.stop();
+                }
+                *self.current.borrow_mut() = None;
+                self.publish_now();
+            }
+            Some(queue::Removed::Before | queue::Removed::After) => {}
+        }
+        self.publish_queue();
+    }
+
+    fn move_in_queue(self: &Rc<Self>, from: usize, to: usize, key: &str) {
+        if self.queue.borrow().get(from).is_none_or(|t| t.key() != key) {
+            return;
+        }
+        let playing = self.current.borrow().is_some();
+        // (never above the song playing; not moved: where it was)
+        if self.queue.borrow_mut().move_item(from, to, playing) {
+            self.publish_queue();
+            self.prefetch_next();
+        }
+    }
+
+    fn start_radio(self: &Rc<Self>, key: &str) {
+        let Some(seed) = self.find_track(key) else { return };
+        self.toast(format!("Starting “{}” radio…", seed.title));
+        let sources = self.shared.sources.clone();
+        let s = seed.clone();
+        self.bg(move || sources.radio(&s), move |e, list| {
+            if list.is_empty() {
+                e.toast(format!("YouTube Music has no radio for “{}”", seed.title));
+                return;
+            }
+            let mut queue = vec![seed.clone()];
+            queue.extend(list.into_iter().filter(|x| x.key() != seed.key() && !x.same_song(&seed) && !e.often_skipped(x)));
+            let n = queue.len() - 1;
+            if e.current.borrow().as_ref().is_some_and(|c| c.key() == seed.key()) {
+                e.queue.borrow_mut().set_tracks(queue, 0); // it's playing already: just what comes after
+                e.publish_queue();
+                e.prefetch_next();
+            } else {
+                e.play_list(queue, 0);
+            }
+            e.toast(format!("“{}” radio: {n} songs like it", seed.title));
+        });
+    }
+
+    /// The song's saved file shown in the file manager (Windows: Explorer, the file selected).
+    fn show_in_files(&self, key: &str) {
+        let Some(file) = self.find_track(key).and_then(|t| t.file).filter(|f| std::path::Path::new(f).exists()) else { return };
+        #[cfg(windows)]
+        let _ = {
+            use std::os::windows::process::CommandExt;
+            std::process::Command::new("explorer").raw_arg(explorer_select(&file)).spawn()
+        };
+        #[cfg(not(windows))]
+        if let Some(dir) = std::path::Path::new(&file).parent() {
+            let _ = gio::AppInfo::launch_default_for_uri(&gio::prelude::FileExt::uri(&gio::File::for_path(dir)), gio::AppLaunchContext::NONE);
+        }
+    }
+
+    fn add_to_playlist(&self, id: i64, key: &str) {
+        let Some(t) = self.find_track(key) else { return };
+        let Some(name) = crate::db::playlists().into_iter().find(|(i, _, _)| *i == id).map(|p| p.1) else { return };
+        let added = crate::db::add_to_playlist(id, &t);
+        self.toast(if added { words::added_to(&name) } else { words::already_in(&name) });
+        self.shared.tell(Change::Playlists);
+    }
+
+    fn fix_missing(self: &Rc<Self>) {
+        let (songs, videos) = liking::missing(&self.liked.borrow());
+        let n = songs.len();
+        songs.into_iter().for_each(|t| self.save_liked(t));
+        self.toast(words::fixing_toast(n, videos));
     }
 
     fn say(&self, text: String, retry: bool) {
@@ -891,6 +1871,7 @@ impl Engine {
             if queue::is_early_skip(at, len) {
                 crate::db::add_skip(&t.key());
                 self.counts.borrow_mut().entry(t.key()).or_default().1 += 1;
+                self.publish_counts();
             }
         }
     }
@@ -971,6 +1952,9 @@ impl Engine {
         crate::session::played(&mut self.history.borrow_mut(), t);
         self.save_session();
         self.publish_home();
+        self.publish_history();
+        self.publish_counts();
+        self.publish_queue(); // Played before
     }
 
     /// The song's lyrics: looked for (its file, its server, LRCLIB…), then shown.
@@ -989,7 +1973,7 @@ impl Engine {
                 let state = match l {
                     Lyrics::Timed { lines, .. } => {
                         *e.lines.borrow_mut() = lines.clone();
-                        LyricsState::Lines(lines)
+                        LyricsState::Lines(radiance_core::sing::prepare(lines))
                     }
                     Lyrics::Plain(text) => LyricsState::Plain(text),
                     Lyrics::None => LyricsState::None,
@@ -1015,6 +1999,7 @@ impl Engine {
         let lit = radiance_core::sing::lit_lines(self.lines.borrow().iter(), at);
         self.shared.view(|v| {
             v.now.at = at;
+            v.now.since = clock_ms(); // the reading's own time: the beta counts on from it
             v.now.playing = true;
             v.now.lit = lit;
             if let Some(l) = length {
@@ -1037,6 +2022,7 @@ impl Engine {
             }
         };
         let length = length.or_else(|| song.as_ref().map(|t| t.seconds as f64)).unwrap_or(0.0);
+        let video = self.player.borrow().as_ref().is_some_and(|p| p.is_video());
         let lit = radiance_core::sing::lit_lines(self.lines.borrow().iter(), at);
         let q = self.queue.borrow();
         let now = NowState {
@@ -1052,18 +2038,46 @@ impl Engine {
             lossless: song.as_ref().is_some_and(|t| t.lossless()),
             kbps: self.kbps.get(),
             lit,
+            liked: song.as_ref().is_some_and(|t| self.liked.borrow().iter().any(|x| x.key() == t.key())),
+            since: clock_ms(),
+            video,
+            has_counterpart: song.as_ref().is_some_and(|t| self.counterpart.borrow().as_ref().is_some_and(|(k, _)| *k == t.key())),
+            quality: self.quality.borrow().clone(),
             song,
         };
         drop(q);
-        self.shared.view(|v| v.now = now);
+        let swapchain = if video { self.swapchain.get() } else { 0 };
+        self.shared.view(|v| {
+            v.now = now;
+            // held while it's shown (the sink is alive: this engine thread is the one that stops it)
+            if v.video.as_ref().map_or(0, |r| r.ptr()) != swapchain {
+                v.video = (swapchain != 0).then(|| unsafe { crate::comref::ComRef::take(swapchain) });
+            }
+        });
         self.shared.tell(Change::Now);
     }
 
     fn publish_queue(&self) {
         let q = self.queue.borrow();
         let queue = (q.tracks().to_vec(), q.index());
+        let current = self.current.borrow().as_ref().map(|t| t.key());
+        let playing = current.is_some();
+        let ahead = q.len().saturating_sub(q.index() + usize::from(playing));
+        let adding = self.settings.borrow().autoplay && q.repeat() == Repeat::Off;
+        let mut before: Vec<Track> = crate::session::recent(&self.history.borrow()).into_iter().filter(|t| Some(t.key()) != current).take(shelf::RECENT_ROWS).collect();
+        before.reverse();
+        let panel = QueuePanel {
+            before,
+            rows: q.tracks().iter().skip(q.index()).take(100).cloned().collect(),
+            start: q.index(),
+            now: playing,
+            note: shelf::queue_note(q.is_empty() || (!playing && ahead == 0), ahead, adding),
+        };
         drop(q);
-        self.shared.view(|v| v.queue = queue);
+        self.shared.view(|v| {
+            v.queue = queue;
+            v.panel = panel;
+        });
         self.shared.tell(Change::Queue);
     }
 
@@ -1182,4 +2196,21 @@ fn save_png(px: crate::art::Pixels, path: &std::path::Path) -> Option<PathBuf> {
     img.save_with_format(&part, image::ImageFormat::Png).ok()?;
     std::fs::rename(&part, path).ok()?;
     Some(path.to_path_buf())
+}
+
+/// Explorer's argument selecting `file`: the path in its own quotes (Rust's would wrap the whole
+/// argument, which Explorer doesn't read: a path with spaces opened Documents instead).
+#[cfg_attr(not(windows), allow(dead_code))]
+fn explorer_select(file: &str) -> String {
+    format!("/select,\"{file}\"")
+}
+
+#[cfg(test)]
+mod tests {
+    /// Explorer's /select takes the path in its own quotes: a path with spaces (most songs')
+    /// selects that file (review I8).
+    #[test]
+    fn explorer_selects_a_path_with_spaces() {
+        assert_eq!(super::explorer_select(r"C:\Music\Radiance Music\A B - Song.flac"), r#"/select,"C:\Music\Radiance Music\A B - Song.flac""#);
+    }
 }

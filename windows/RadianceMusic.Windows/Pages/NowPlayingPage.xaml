@@ -24,9 +24,25 @@
                 <ColumnDefinition Width="*" />
             </Grid.ColumnDefinitions>
             <StackPanel x:Name="Left" VerticalAlignment="Center" Spacing="8" Width="340">
-                <Border x:Name="Cover" Width="340" Height="340" CornerRadius="8" Margin="0,0,0,8"
-                        Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
-                        BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1" />
+                <!-- the cover, or the music video on the compositor (a SwapChainPanel the engine's
+                     d3d12swapchainsink draws into), with its buttons on top -->
+                <Grid x:Name="Art" Width="340" Height="340" Margin="0,0,0,8">
+                    <Border x:Name="Cover" CornerRadius="8"
+                            Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1" />
+                    <SwapChainPanel x:Name="VideoPanel" Visibility="Collapsed" />
+                    <Border x:Name="VideoTaps" Background="Transparent" Visibility="Collapsed" DoubleTapped="OnVideoDoubleTapped" />
+                    <StackPanel Orientation="Horizontal" Spacing="6" HorizontalAlignment="Right" VerticalAlignment="Top" Margin="10">
+                        <Button x:Name="FullscreenButton" Visibility="Collapsed" Click="OnFullscreen" Padding="9" CornerRadius="18"
+                                Background="#99000000" Foreground="White" BorderThickness="0">
+                            <FontIcon x:Name="FullscreenIcon" Glyph="&#xE740;" FontSize="14" />
+                        </Button>
+                        <Button x:Name="VideoButton" Visibility="Collapsed" Click="OnVideo" Padding="9" CornerRadius="18"
+                                Background="#99000000" Foreground="White" BorderThickness="0">
+                            <FontIcon x:Name="VideoIcon" Glyph="&#xE714;" FontSize="14" />
+                        </Button>
+                    </StackPanel>
+                </Grid>
                 <TextBlock x:Name="SongTitle" Style="{StaticResource TitleTextBlockStyle}" Text="Nothing playing"
                            TextWrapping="WrapWholeWords" MaxLines="2" TextTrimming="CharacterEllipsis" />
                 <TextBlock x:Name="Byline" Style="{StaticResource BodyTextBlockStyle}" Foreground="{ThemeResource TextFillColorSecondaryBrush}"

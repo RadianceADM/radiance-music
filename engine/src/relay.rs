@@ -180,7 +180,10 @@ impl Relay {
             } else {
                 net::agent().get(&url).header("Range", &format!("bytes={pos}-{last}"))
             };
-            let mut resp = req.call().map_err(|e| std::io::Error::other(e.to_string()))?;
+            let mut resp = req.call().map_err(|e| {
+                crate::log::note(&format!("relay: {pos}-{last} of {size} ({mime}) refused: {e}"));
+                std::io::Error::other(e.to_string())
+            })?;
             if std::env::var_os("RADIANCE_DEBUG").is_some() {
                 eprintln!("[relay] {pos}-{last}: answered in {:.2}s", asked.elapsed().as_secs_f64());
             }

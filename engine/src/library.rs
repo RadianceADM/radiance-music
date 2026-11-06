@@ -48,6 +48,11 @@ pub fn saves(t: &Track) -> bool {
 /// stays FLAC), its lyrics and its album art. Returns the audio file's path.
 /// A server's song comes with everything the server has for it (servers::save).
 pub fn save(t: &Track) -> Result<String, String> {
+    save_with(t, &download, &lyrics::find)
+}
+
+/// As [save], with the download and the lyrics lookup given (the engine's sources: tests give theirs).
+pub fn save_with(t: &Track, download: &dyn Fn(&str, &Path) -> Result<(), String>, lyrics_of: &dyn Fn(&Track) -> lyrics::Lyrics) -> Result<String, String> {
     let dir = music_dir();
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     if t.source == Source::Server {
@@ -66,7 +71,7 @@ pub fn save(t: &Track) -> Result<String, String> {
             path.display().to_string()
         }
     };
-    if let Some((ext, text)) = lyrics::to_file(&lyrics::find(t), Some(t), &[]) {
+    if let Some((ext, text)) = lyrics::to_file(&lyrics_of(t), Some(t), &[]) {
         let _ = fs::write(beside(&path, ext), text);
     }
     if let Some(bytes) = net::get_bytes(&t.art) {
@@ -88,7 +93,7 @@ pub fn beside(song: &str, ext: &str) -> PathBuf {
     right
 }
 
-fn download(url: &str, to: &Path) -> Result<(), String> {
+pub fn download(url: &str, to: &Path) -> Result<(), String> {
     let part = to.with_extension("part");
     let mut resp = net::agent().get(url).call().map_err(|e| e.to_string())?;
     let mut body = resp.body_mut().as_reader();

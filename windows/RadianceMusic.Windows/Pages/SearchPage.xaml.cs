@@ -26,7 +26,7 @@ public sealed partial class SearchPage : Page
         debounce = new Debounce(Debounce.SearchWait, q => hub.Engine.Search(q), new UiDelay());
         hub.Change += kind =>
         {
-            if (kind is ChangeKind.Results or ChangeKind.Online) Render();
+            if (kind is ChangeKind.Results or ChangeKind.Online or ChangeKind.Liked) Render();
         };
         Tiles.ItemsSource = Ffi.BrowseTiles().Select(Tile).ToList();
         Render();
@@ -86,7 +86,9 @@ public sealed partial class SearchPage : Page
         SongsNote.Text = r.SongsNote;
         LosslessSpin.IsActive = r.Lossless == null;
         SongsSpin.IsActive = r.Songs == null;
-        var key = r.Query + "|" + r.Mine.Length + "|" + (r.Lossless?.Length ?? -1) + "|" + (r.Songs?.Length ?? -1);
+        // (the hearts too: a like from here, or from anywhere, fills or empties its row's)
+        var liked = string.Concat(r.Mine.Concat(r.Lossless ?? Array.Empty<SongView>()).Concat(r.Songs ?? Array.Empty<SongView>()).Select(s => s.Liked ? '1' : '0'));
+        var key = r.Query + "|" + r.Mine.Length + "|" + (r.Lossless?.Length ?? -1) + "|" + (r.Songs?.Length ?? -1) + "|" + liked;
         if (key == shown) return;
         shown = key;
         Fill(MineList, r.Mine);

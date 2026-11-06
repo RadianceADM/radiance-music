@@ -90,3 +90,137 @@ public class TrayTextTests
         Assert.Equal("Radiance Music", TrayText.Tooltip("", ""));
     }
 }
+
+public class AzLightTests
+{
+    [Fact]
+    public void TheLastLetterAtTheTopLights()
+    {
+        Assert.Equal(2, AzLight.Pick(new double[] { -300, -10, 30, 400 }));
+    }
+
+    [Fact]
+    public void NoneAtTheTopLightsTheFirst()
+    {
+        Assert.Equal(0, AzLight.Pick(new double[] { 120, 400 }));
+        Assert.Null(AzLight.Pick(Array.Empty<double>()));
+    }
+}
+
+public class QueueDropTests
+{
+    [Fact]
+    public void ARowMovedDownGoesBeforeTheOneAfterItsNewPlace()
+    {
+        // the song playing at 4: the list shows 5, 6, 7, …
+        Assert.Equal(((uint)5, (uint)8), QueueDrop.Map(5, 0, 2));
+    }
+
+    [Fact]
+    public void ARowMovedUpGoesBeforeItsNewPlace()
+    {
+        Assert.Equal(((uint)8, (uint)6), QueueDrop.Map(5, 3, 1));
+        Assert.Null(QueueDrop.Map(5, 1, 1));
+    }
+}
+
+public class LyricClockTests
+{
+    [Fact]
+    public void ItCountsOnWhilePlaying()
+    {
+        Assert.Equal(12.4, LyricClock.At(12.0, 1000, 1400, true), 6);
+        Assert.Equal(12.0, LyricClock.At(12.0, 1000, 1400, false));
+        Assert.Equal(13.0, LyricClock.At(12.0, 1000, 4000, true), 6);
+    }
+}
+
+public class LensScaleTests
+{
+    [Fact]
+    public void TheMiddleIsWholeAndTheEdgesSmaller()
+    {
+        Assert.Equal(1.0, LensScale.Scale(0), 6);
+        Assert.Equal(0.58, LensScale.Scale(-1), 6);
+        Assert.Equal(0.7, LensScale.Scale(1), 6);
+        Assert.Equal(0.7, LensScale.Scale(3), 6);
+        Assert.Contains("0.58", LensScale.Expression);
+        Assert.Contains("0.7", LensScale.Expression);
+    }
+}
+
+/// <summary>The side panel's Lyrics tab only where Now Playing doesn't show the lyrics itself (the GTK app's sync_lyrics_tab).</summary>
+public class SideTabsTests
+{
+    [Fact]
+    public void NowPlayingWithItsLyricsColumnLeavesThePanelNoLyricsTab()
+    {
+        Assert.False(SideTabs.HasLyrics(onNowPlaying: true, pageShowsLyrics: true));
+        Assert.True(SideTabs.HasLyrics(onNowPlaying: true, pageShowsLyrics: false)); // a narrow window: no column, the tab stays
+        Assert.True(SideTabs.HasLyrics(onNowPlaying: false, pageShowsLyrics: false));
+    }
+
+    [Fact]
+    public void APanelOnLyricsGoesToTheQueueWhenTheTabGoes()
+    {
+        Assert.Equal("queue", SideTabs.Tab("lyrics", hasLyrics: false));
+        Assert.Equal("lyrics", SideTabs.Tab("lyrics", hasLyrics: true));
+        Assert.Equal("queue", SideTabs.Tab("queue", hasLyrics: false));
+    }
+}
+
+/// <summary>The player bar's end (heart, mute, volume, Lyrics, Queue): the volume slider shrinks, then goes, so the heart stays.</summary>
+public class BarFitTests
+{
+    // the bar's inner width: the window's less its padding (32) and column gaps (32)
+    [Fact]
+    public void AWideBarKeepsTheWholeSlider() => Assert.Equal(120, BarFit.Volume(1336)); // a 1400 px window
+
+    [Fact]
+    public void AMidSizeBarShrinksItSoTheHeartStays()
+    {
+        var slider = BarFit.Volume(936); // a 1000 px window: its end column is 234 px
+        Assert.InRange(slider, BarFit.MinSlider, 119);
+        Assert.True(BarFit.EndWithoutSlider + slider <= BarFit.Side(936));
+    }
+
+    [Fact]
+    public void ANarrowBarLetsItGo() => Assert.Equal(0, BarFit.Volume(796)); // an 860 px window
+}
+
+/// <summary>Now Playing's art: the square cover, or a video wider (16:9, as the GTK app's) within the room it has.</summary>
+public class ArtFitTests
+{
+    [Fact]
+    public void ACoverStaysSquare() => Assert.Equal((340.0, 340.0), ArtFit.Of(340, 900, video: false));
+
+    [Fact]
+    public void AVideoIsWiderAsFarAsTheRoomGoes()
+    {
+        var (w, h) = ArtFit.Of(340, 2000, video: true);
+        Assert.Equal(340 * 16 / 9.0, w, 3);
+        Assert.Equal(340, h, 3);
+        Assert.Equal((500.0, 281.25), ArtFit.Of(340, 500, video: true));
+    }
+
+    [Fact]
+    public void AVideoNeverGetsNarrowerThanTheCover() => Assert.Equal((340.0, 191.25), ArtFit.Of(340, 200, video: true));
+}
+
+/// <summary>Once a second, as the GTK app's check_lyrics_shown: the line lit now, out of sight
+/// twice, is brought back; with nothing lit (a break, the outro) the column is left alone (review I4).</summary>
+public class LeadCheckTests
+{
+    [Fact]
+    public void NothingLitNeverScrolls() => Assert.Equal((0, false), LeadCheck.Step(lit: null, inSight: false, misses: 1));
+
+    [Fact]
+    public void ALitLineOutOfSightTwiceComesBack()
+    {
+        Assert.Equal((1, false), LeadCheck.Step(lit: 3, inSight: false, misses: 0));
+        Assert.Equal((0, true), LeadCheck.Step(lit: 3, inSight: false, misses: 1));
+    }
+
+    [Fact]
+    public void InSightStartsTheCountAgain() => Assert.Equal((0, false), LeadCheck.Step(lit: 3, inSight: true, misses: 1));
+}

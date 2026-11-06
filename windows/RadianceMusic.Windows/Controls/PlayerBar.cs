@@ -10,18 +10,20 @@ namespace RadianceMusic.Controls;
 /// <summary>
 /// The player bar, as the GTK app's (ui.rs layout): the song (cover, title, names) at the start;
 /// Shuffle, Previous, Play, Next, Repeat with the times and the seek bar in the middle; mute and the
-/// volume at the end. The heart and the quality badge come with liking (stage 2). Under 860 px the
-/// volume slider makes room; under 600 the bar keeps only the song and Previous/Play/Next.
+/// volume at the end, with the heart, Lyrics and Queue. Where the end can't hold it all the volume
+/// slider shrinks, then goes (BarFit: the heart stays); under 600 the bar keeps only the song and
+/// Previous/Play/Next.
 /// </summary>
 internal sealed class PlayerBar : Grid
 {
-    private const double Narrow = 860, Phone = 600;
+    private const double Phone = 600;
     private readonly EngineHub hub;
     private readonly SeekModel seek = new();
     private readonly Border art = new() { Width = 56, Height = 56, CornerRadius = new CornerRadius(4) };
     private readonly TextBlock title = new() { Text = "Nothing playing", Style = (Style)Application.Current.Resources["BodyStrongTextBlockStyle"], TextTrimming = TextTrimming.CharacterEllipsis, TextWrapping = TextWrapping.NoWrap };
     private readonly TextBlock byline = new() { Style = (Style)Application.Current.Resources["CaptionTextBlockStyle"], Foreground = (Brush)Application.Current.Resources["TextFillColorSecondaryBrush"], TextTrimming = TextTrimming.CharacterEllipsis, TextWrapping = TextWrapping.NoWrap };
-    private readonly Button shuffle, previous, play, next, repeat, mute;
+    private readonly Button shuffle, previous, play, next, repeat, mute, heart;
+    private readonly FontIcon heartIcon = new() { Glyph = "\uEB51", FontSize = 15 };
     private readonly FontIcon playIcon = new() { Glyph = "\uE768", FontSize = 18 };
     private readonly FontIcon repeatIcon = new() { Glyph = "\uE8EE", FontSize = 15 };
     private readonly FontIcon muteIcon = new() { Glyph = "\uE767", FontSize = 15 };
@@ -91,11 +93,20 @@ internal sealed class PlayerBar : Grid
             at.Text = SeekModel.Clock(e.NewValue);
         };
 
-        // the volume
+        // the heart and the volume
+        heart = Round(heartIcon, "Like: saves the song", () =>
+        {
+            if (hub.Engine.Now().Song is { } s) hub.Engine.ToggleLike(s.Key);
+        });
         mute = Round(muteIcon, "Mute", ToggleMute);
+        var lyricsButton = Round(new FontIcon { Glyph = "\uE8D2", FontSize = 15 }, "Lyrics", () => App.Window?.ToggleSide("lyrics"));
+        var queueButton = Round(new FontIcon { Glyph = "\uE8FD", FontSize = 15 }, "Queue: what plays next", () => App.Window?.ToggleSide("queue"));
         var end = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Center };
+        end.Children.Add(heart);
         end.Children.Add(mute);
         end.Children.Add(volume);
+        end.Children.Add(lyricsButton);
+        end.Children.Add(queueButton);
         SetColumn(end, 2);
         Children.Add(end);
         volume.ValueChanged += (_, e) =>
@@ -133,7 +144,9 @@ internal sealed class PlayerBar : Grid
 
     private void Fit(double width)
     {
-        volume.Visibility = width < Narrow ? Visibility.Collapsed : Visibility.Visible;
+        var slider = BarFit.Volume(width - Padding.Left - Padding.Right - 2 * ColumnSpacing);
+        volume.Width = Math.Max(slider, BarFit.MinSlider);
+        volume.Visibility = slider > 0 ? Visibility.Visible : Visibility.Collapsed;
         var phone = width < Phone ? Visibility.Collapsed : Visibility.Visible;
         foreach (var e in new UIElement[] { shuffle, repeat, mute, byline, at, length }) e.Visibility = phone;
     }
@@ -147,7 +160,10 @@ internal sealed class PlayerBar : Grid
         var song = now.Song;
         title.Text = song?.Title ?? "Nothing playing";
         byline.Text = song?.Byline ?? "";
-        foreach (var c in new Control[] { play, previous, bar }) c.IsEnabled = song != null;
+        foreach (var c in new Control[] { play, previous, bar, heart }) c.IsEnabled = song != null;
+        heartIcon.Glyph = now.Liked ? "\uEB52" : "\uEB51";
+        heartIcon.Foreground = now.Liked ? (Brush)Application.Current.Resources["SystemFillColorCriticalBrush"] : (Brush)Application.Current.Resources["TextFillColorPrimaryBrush"];
+        ToolTipService.SetToolTip(heart, now.Liked ? "Liked. Click to remove from Liked" : "Like: saves the song");
         previous.IsEnabled = now.CanPrevious;
         next.IsEnabled = now.CanNext;
         playIcon.Glyph = now.Playing ? "\uE769" : "\uE768";
