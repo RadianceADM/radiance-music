@@ -3,15 +3,19 @@
 //!
 //! SPDX-License-Identifier: GPL-3.0-or-later
 
+pub mod guide;
 pub mod library;
 pub mod lyrics;
 pub mod menu;
 pub mod mix;
 pub mod quality;
+pub mod release_notes;
 pub mod queue;
 pub mod search;
 pub mod sing;
+pub mod suggest;
 pub mod split_queue;
 pub mod track;
 pub mod trouble;
+pub mod update_words;
 pub mod words;

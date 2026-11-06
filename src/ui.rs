@@ -171,54 +171,6 @@ fn apply_look(look: &str) {
     LOOK.with(|l| l.load_from_string(css));
 }
 
-/// What's New, from CHANGELOG.md (built in): the latest `versions` entries as
-/// the markup the About window takes (paragraphs and lists; **bold** as <em>).
-fn release_notes(changelog: &str, versions: usize) -> String {
-    let esc = |t: &str| t.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;");
-    let inline = |t: &str| {
-        let mut out = String::new();
-        for (i, part) in esc(t).split("**").enumerate() {
-            if i % 2 == 1 {
-                out += &format!("<em>{part}</em>");
-            } else {
-                out += part;
-            }
-        }
-        out
-    };
-    let mut html = String::new();
-    let mut items: Vec<String> = vec![];
-    let mut shown = 0;
-    let flush = |html: &mut String, items: &mut Vec<String>| {
-        if !items.is_empty() {
-            *html += "<ul>";
-            for i in items.drain(..) {
-                *html += &format!("<li>{}</li>", inline(&i));
-            }
-            *html += "</ul>";
-        }
-    };
-    for line in changelog.lines() {
-        if let Some(head) = line.strip_prefix("## ") {
-            flush(&mut html, &mut items);
-            shown += 1;
-            if shown > versions {
-                break;
-            }
-            html += &format!("<p>{}</p>", esc(head.trim()));
-        } else if shown == 0 {
-            continue;
-        } else if let Some(item) = line.strip_prefix("- ") {
-            items.push(item.trim().to_string());
-        } else if line.starts_with("  ") && !items.is_empty() {
-            let last = items.last_mut().unwrap();
-            last.push(' ');
-            last.push_str(line.trim());
-        }
-    }
-    flush(&mut html, &mut items);
-    html
-}
 
 /// The A to Z rail's letters, in the order songs are filed.
 
@@ -3497,7 +3449,7 @@ impl Ui {
                  album art, and shape the sound with your EQ.",
             )
             .developers(vec!["Bassi https://github.com/RadianceADM"])
-            .release_notes(release_notes(include_str!("../CHANGELOG.md"), 3))
+            .release_notes(radiance_core::release_notes::html(include_str!("../CHANGELOG.md"), 3))
             .release_notes_version(env!("CARGO_PKG_VERSION"))
             .build();
         about.add_credit_section(
@@ -5668,58 +5620,30 @@ impl Ui {
         }
         let gen = self.suggest_gen.get() + 1;
         self.suggest_gen.set(gen);
-        let q = self.search.text().trim().to_lowercase();
-        let liked = self.liked.borrow().clone();
-        let mut shown: Vec<String> = vec![];
-        let mut pill = |me: &Rc<Self>, text: &str, mine: bool| {
-            if shown.iter().any(|s| s.eq_ignore_ascii_case(text)) || text.eq_ignore_ascii_case(&q) {
-                return;
-            }
-            shown.push(text.to_string());
-            let b = gtk::Button::builder().label(text).css_classes(if mine { vec!["suggest", "liked-suggest"] } else { vec!["suggest"] }).build();
-            if mine {
-                b.set_tooltip_text(Some("From your liked songs"));
-            }
-            let (weak, query) = (Rc::downgrade(me), text.to_string());
+        // core's suggestions (the beta's too): your artists, or your matches for what's typed
+        let typed = self.search.text().trim().to_string();
+        let mine = radiance_core::suggest::mine(&self.liked.borrow(), &typed);
+        for chip in &mine {
+            let b = gtk::Button::builder().label(&chip.text).css_classes(vec!["suggest", "liked-suggest"]).build();
+            b.set_tooltip_text(Some(radiance_core::suggest::MINE_TIP));
+            let (weak, query) = (Rc::downgrade(self), chip.text.clone());
             b.connect_clicked(move |_| {
                 if let Some(me) = weak.upgrade() {
                     me.go_search(&query);
                 }
             });
-            me.suggest_flow.insert(&b, -1);
-        };
-        if q.is_empty() {
-            // your artists, the most liked first
-            let mut count: HashMap<String, (String, usize)> = HashMap::new();
-            for t in &liked {
-                for a in t.artists() {
-                    count.entry(a.to_lowercase()).or_insert_with(|| (a.clone(), 0)).1 += 1;
-                }
-            }
-            let mut top: Vec<(String, usize)> = count.into_values().collect();
-            top.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
-            for (name, _) in top.into_iter().take(10) {
-                pill(self, &name, true);
-            }
+            self.suggest_flow.insert(&b, -1);
+        }
+        if typed.is_empty() {
             return;
         }
-        for a in liked.iter().flat_map(|t| t.artists()).filter(|a| a.to_lowercase().contains(&q)).take(3) {
-            pill(self, &a, true);
-        }
-        for t in liked.iter().filter(|t| t.title.to_lowercase().contains(&q)).take(3) {
-            pill(self, &format!("{} {}", t.title, t.artists().first().cloned().unwrap_or_default()), true);
-        }
         let me = Rc::downgrade(self);
-        let typed = self.search.text().trim().to_string();
         bg(move || youtube::suggestions(&typed), move |found| {
             let Some(me) = me.upgrade() else { return };
             if me.suggest_gen.get() != gen {
                 return; // typed on
             }
-            let have: Vec<String> = std::iter::successors(me.suggest_flow.first_child(), |c| c.next_sibling())
-                .filter_map(|c| c.first_child().and_then(|b| b.downcast::<gtk::Button>().ok()).and_then(|b| b.label()).map(|l| l.to_lowercase()))
-                .collect();
-            for s in found.into_iter().filter(|s| !have.contains(&s.to_lowercase())).take(6) {
+            for s in radiance_core::suggest::add_youtube(&mine, &found).into_iter().map(|c| c.text) {
                 let b = gtk::Button::builder().label(&s).css_classes(["suggest"]).build();
                 let (weak, query) = (Rc::downgrade(&me), s.clone());
                 b.connect_clicked(move |_| {
@@ -6708,14 +6632,3 @@ mod tests {
     }
 }
 
-#[cfg(test)]
-mod notes_tests {
-    use super::release_notes;
-
-    #[test]
-    fn whats_new_comes_from_the_changelog() {
-        let log = "# Changelog\n\n## v0.2.0 — today\n\n- **Bold** & new: one\n  two\n- three\n\n## v0.1.0 — before\n\n- old\n";
-        assert_eq!(release_notes(log, 1), "<p>v0.2.0 — today</p><ul><li><em>Bold</em> &amp; new: one two</li><li>three</li></ul>");
-        assert!(release_notes(log, 2).contains("<p>v0.1.0 — before</p><ul><li>old</li></ul>"));
-    }
-}

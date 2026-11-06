@@ -68,15 +68,6 @@ fn updater() -> Rc<Updater> {
     UPDATER.with(Rc::clone)
 }
 
-fn mb(bytes: u64) -> String {
-    if bytes == 0 {
-        String::new()
-    } else if bytes >= 1 << 30 {
-        format!("{:.1} GB", bytes as f64 / 1e9)
-    } else {
-        format!("{} MB", (bytes + 500_000) / 1_000_000)
-    }
-}
 
 impl Ui {
     /// Looks for a newer version: at the start (`asked` false: a little after it,
@@ -250,24 +241,20 @@ impl Ui {
         };
         match &step {
             Step::Out(r) => {
-                head(&body, "software-update-available-symbolic", &format!("Radiance Music {} is out", r.version), "The newest open beta.");
+                head(&body, "software-update-available-symbolic", &radiance_core::update_words::out_title(&r.version), radiance_core::update_words::OUT_NOTE);
                 bullets(&body, r);
-                let (label, icon) = match &u.install {
-                    Install::Other => ("Open the Download Page".to_string(), "web-browser-symbolic"),
-                    Install::Flatpak => ("Update Now".to_string(), "software-update-available-symbolic"),
-                    _ if r.size > 0 => (format!("Update Now ({})", mb(r.size)), "software-update-available-symbolic"),
-                    _ => ("Update Now".to_string(), "software-update-available-symbolic"),
-                };
+                let label = radiance_core::update_words::update_now_label(r.size, u.install == Install::Other, u.install == Install::Flatpak);
+                let icon = if u.install == Install::Other { "web-browser-symbolic" } else { "software-update-available-symbolic" };
                 body.append(&gap(8));
                 body.append(&button(icon, &label, Kind::Main, act(Ui::update_now)));
                 if u.install != Install::Other {
-                    body.append(&note("Music goes on playing while it downloads."));
+                    body.append(&note(radiance_core::update_words::KEEPS_PLAYING));
                 }
                 body.append(&button("alarm-symbolic", "Remind Me Later", Kind::Second, act(|me, _| me.update_later())));
                 body.append(&button("notifications-disabled-symbolic", "Skip This Version", Kind::Quiet, act(|me, s| me.update_skip(s))));
             }
             Step::Downloading(r, done) => {
-                head(&body, "folder-download-symbolic", &format!("Downloading {}…", r.version), "Music goes on playing. You can hide this: it goes on downloading.");
+                head(&body, "folder-download-symbolic", &radiance_core::update_words::downloading_title(&r.version), radiance_core::update_words::DOWNLOADING_NOTE);
                 let bar = gtk::ProgressBar::builder().fraction(*done).margin_top(8).build();
                 let words = gtk::Label::builder().label(downloading_words(r, *done, &u.install)).xalign(0.0).css_classes(["dim-label", "caption"]).build();
                 body.append(&bar);
@@ -280,23 +267,19 @@ impl Ui {
                 }
             }
             Step::Ready(r) => {
-                let how = match &u.install {
-                    Install::Windows(_) => "the installer puts it on and opens Radiance Music again by itself",
-                    _ => "it opens again on the new version",
-                };
-                let stops = if playing { " and stops the music" } else { "" };
-                head(&body, "view-refresh-symbolic", &format!("Radiance Music {} is ready", r.version), &format!("Downloaded and checked. Restarting closes the app for a moment{stops}; {how}."));
+                let installer = matches!(&u.install, Install::Windows(_));
+                head(&body, "view-refresh-symbolic", &radiance_core::update_words::ready_title(&r.version), &radiance_core::update_words::ready_text(playing, installer));
                 body.append(&gap(8));
                 body.append(&button("view-refresh-symbolic", "Restart to Update", Kind::Main, act(Ui::update_restart)));
                 body.append(&button("alarm-symbolic", "Remind Me Later", Kind::Second, act(|me, _| me.update_later())));
                 body.append(&button("notifications-disabled-symbolic", "Skip This Version", Kind::Quiet, act(|me, s| me.update_skip(s))));
             }
             Step::Restarting(r) => {
-                head(&body, "view-refresh-symbolic", &format!("Updating to {}…", r.version), "Radiance Music closes now and opens again on the new version.");
+                head(&body, "view-refresh-symbolic", &radiance_core::update_words::restarting_title(&r.version), radiance_core::update_words::RESTARTING_NOTE);
                 body.append(&gtk::Spinner::builder().spinning(true).width_request(32).height_request(32).halign(gtk::Align::Center).margin_top(8).build());
             }
             Step::Failed(r, why) => {
-                head(&body, "dialog-warning-symbolic", why, &format!("Nothing changed: you're still on {}.", update::current()));
+                head(&body, "dialog-warning-symbolic", why, &radiance_core::update_words::failed_text(&update::current()));
                 body.append(&gap(8));
                 body.append(&button("view-refresh-symbolic", "Try Again", Kind::Main, act(Ui::update_now)));
                 body.append(&button("alarm-symbolic", "Remind Me Later", Kind::Second, act(|me, _| me.update_later())));
@@ -452,11 +435,7 @@ impl Ui {
 }
 
 fn downloading_words(r: &Release, done: f64, install: &Install) -> String {
-    if *install == Install::Flatpak || r.size == 0 {
-        format!("{}%", (done * 100.0).round() as u32)
-    } else {
-        format!("{} of {}", mb((r.size as f64 * done) as u64).trim(), mb(r.size))
-    }
+    radiance_core::update_words::downloading_words(r.size, done, *install == Install::Flatpak)
 }
 
 /// The step's icon in a soft orange circle, its title and what it means.

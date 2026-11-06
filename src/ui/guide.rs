@@ -5,14 +5,7 @@
 
 use super::*;
 
-/// The cards: an icon, a title, a few words.
-const CARDS: [(&str, &str, &str); 5] = [
-    ("system-search-symbolic", "Search Any Song", "Type a song or an artist at the top. Lossless plays first when there is one; YouTube Music has the rest."),
-    ("heart-filled-symbolic", "Like It, It's Yours", "Click the heart: the song, its cover, its lyrics and its music video are saved in your Music folder and play with no internet."),
-    ("edit-cut-symbolic", "Split It, Mix It", "Split a liked song into drums, bass, other and vocals right on this computer, then turn each one up or down in the Mixer. No vocals makes it karaoke."),
-    ("format-justify-center-symbolic", "Sing Along", "In Now Playing the lyrics light up word by word as they're sung, big in the middle, with the background moving to the beat."),
-    ("phone-symbolic", "On Your Phone Too", "Get Radiance Music for Android at music.radianceph.com, then Share Songs with a Phone (main menu) sends it your songs, with their parts and lyrics."),
-];
+use radiance_core::guide::CARDS;
 
 impl Ui {
     /// The guide, over the window; closing it any way counts as seen.
