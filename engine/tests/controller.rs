@@ -1005,8 +1005,10 @@ fn a_search_pick_plays_its_radio_not_the_other_results() {
     let (c, fake, rx) = with_songs("radio pick", vec![wav("radio-pick", 3.0), wav("other-result", 3.0), wav("another-result", 3.0)]);
     fake.radios.lock().unwrap().insert("file-radio-pick".into(), (Duration::ZERO, vec![wav("like-it-one", 3.0), wav("like-it-two", 3.0)]));
     c.play_from(ListRef::Songs, 0, "yt:file-radio-pick");
+    // (its own queue: the one picked up from the last test's session could have 3 songs too)
+    let mine = |q: &[Track]| q.len() == 3 && q[0].id == "file-radio-pick";
     let end = Instant::now() + Duration::from_secs(5);
-    while c.queue().0.len() != 3 && Instant::now() < end {
+    while !mine(&c.queue().0) && Instant::now() < end {
         wait_for(&rx, Change::Queue, 0.5);
     }
     let ids: Vec<String> = c.queue().0.iter().map(|t| t.id.clone()).collect();
