@@ -30,6 +30,8 @@ pub enum ChangeKind {
     Library,
     History,
     Playlists,
+    /// The split queue (stage 3).
+    Splits,
 }
 
 impl From<Change> for ChangeKind {
@@ -48,6 +50,7 @@ impl From<Change> for ChangeKind {
             Change::Library => ChangeKind::Library,
             Change::History => ChangeKind::History,
             Change::Playlists => ChangeKind::Playlists,
+            Change::Splits => ChangeKind::Splits,
         }
     }
 }
