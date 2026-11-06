@@ -161,12 +161,13 @@ mod tests {
         let desc = format!(
             "videotestsrc num-buffers={} ! video/x-raw,format=I420,width=64,height=36,framerate=10/1 ! queue ! mux. \
              audiotestsrc num-buffers={} samplesperbuffer=4410 volume=0.05 ! audio/x-raw,format=S16LE,rate=44100,channels=1 ! queue ! mux. \
-             matroskamux name=mux ! filesink location=\"{}\"",
+             matroskamux name=mux ! filesink name=out",
             secs * 10,
-            secs * 10,
-            path.display()
+            secs * 10
         );
         let p = gst::parse::launch(&desc).unwrap();
+        // (the path set here, not in the text: there, Windows' backslashes would be escapes)
+        p.downcast_ref::<gst::Bin>().unwrap().by_name("out").unwrap().set_property("location", path.to_str().unwrap());
         p.set_state(gst::State::Playing).unwrap();
         let done = p.bus().unwrap().timed_pop_filtered(gst::ClockTime::from_seconds(60), &[gst::MessageType::Eos, gst::MessageType::Error]);
         p.set_state(gst::State::Null).unwrap();
