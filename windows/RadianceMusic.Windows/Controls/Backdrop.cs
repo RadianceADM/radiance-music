@@ -111,6 +111,9 @@ public sealed class Backdrop : Grid
         flow.PlaybackRate = (float)Math.Min(follower.Speed, AnimationController.MaxPlaybackRate);
     }
 
+    /// <summary>The beat moves it now (its 30-a-second count runs).</summary>
+    public bool Following => tick.IsRunning;
+
     /// <summary>The art's scale now (the screenshots' check that it swells with the beat).</summary>
     internal (double Swell, double Speed) BeatNow => (follower.Swell, follower.Speed);
 

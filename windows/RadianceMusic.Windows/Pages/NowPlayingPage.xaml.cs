@@ -19,7 +19,7 @@ public sealed partial class NowPlayingPage : Page
     /// <summary>The playing moment as last read (the beat's clock counts on from it, as the lyrics').</summary>
     private double engineAt;
     private ulong since;
-    private bool playing;
+    private bool playing, following;
 
     /// <summary>A tap on lyric line `i` (DevActs: the screenshots).</summary>
     internal bool TapLyric(int i) => Right.Children.Count > 0 && Right.Children[0] is Controls.LyricsColumn c && c.TapLine(i);
@@ -80,7 +80,9 @@ public sealed partial class NowPlayingPage : Page
     {
         if (hub == null) return;
         var p = hub.Engine.Pulse();
-        Back.SetPulse(p != null && p.Key == songKey ? p : null);
+        var ours = p != null && p.Key == songKey ? p : null;
+        App.Trace(ours != null ? $"beat: the pulse came ({ours.Level.Length} frames at {ours.Fps:0} a second)" : $"beat: no pulse yet{(p != null ? " (the last song's)" : "")}");
+        Back.SetPulse(ours);
         FollowBeat();
     }
 
@@ -89,6 +91,11 @@ public sealed partial class NowPlayingPage : Page
         var on = IsLoaded && playing && App.Window?.Seen != false;
         Func<double?>? moment = on ? () => playing ? LyricClock.At(engineAt, since, Native.Native.ClockMs(), true) : (double?)null : null;
         Back.Follow(moment);
+        if (Back.Following != following)
+        {
+            following = Back.Following;
+            App.Trace($"beat: {(following ? "followed" : "not followed")} (shown {IsLoaded}, playing {playing}, seen {App.Window?.Seen})");
+        }
     }
 
     private void Fit(double width)
