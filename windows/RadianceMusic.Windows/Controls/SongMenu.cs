@@ -66,10 +66,10 @@ internal static class SongMenu
                 _ = Dialogs.NameDialog.NewPlaylist(hub, row.XamlRoot, key);
                 break;
             case MenuAction.GoToArtist g:
-                App.Window?.SearchFor(g.q);
+                App.Window?.SearchFor(g.Q);
                 break;
             case MenuAction.GoToAlbum g:
-                App.Window?.SearchFor(g.q);
+                App.Window?.SearchFor(g.Q);
                 break;
             default:
                 hub.Engine.DoMenu(key, index, action);
