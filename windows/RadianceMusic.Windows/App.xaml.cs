@@ -107,6 +107,7 @@ public partial class App : Application
         {
             if (kind is ChangeKind.Update or ChangeKind.Rating) PopUps();
         };
+        PopUps(); // (one found while the app was starting up told before it listened)
         // --offline: no internet as far as the app knows (screenshots of the Offline sign)
         if (Program.Dev.Offline) Hub.Engine.NetworkChanged(false);
         // How to Use It, the first time (once the sunrise has gone; never in a developer run)
