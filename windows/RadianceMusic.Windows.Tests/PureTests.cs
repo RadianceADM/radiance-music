@@ -323,3 +323,39 @@ public class SplashTimelineTests
         Assert.Equal(0, line.Play, 3); // at rest
     }
 }
+
+/// <summary>The Mixer's effects as the Linux app shows them (ui.rs fx_values / fx_tooltips): each slider off
+/// at its left, Low cut and High cut on a log scale in Hz, Reverb in %.</summary>
+public class EffectTextTests
+{
+    [Fact]
+    public void TheSlidersRunTheLinuxAppsRanges()
+    {
+        Assert.Equal(20, EffectText.LowCut(0));
+        Assert.Equal(500, EffectText.LowCut(1));
+        Assert.Equal(20000, EffectText.HighCut(0));
+        Assert.Equal(1500, EffectText.HighCut(1));
+        Assert.Equal(42, EffectText.Reverb(0.42));
+        Assert.Equal(0.5, EffectText.LowPos(EffectText.LowCut(0.5)), 2);
+        Assert.Equal(0.25, EffectText.HighPos(EffectText.HighCut(0.25)), 2);
+    }
+
+    [Fact]
+    public void HertzAsTheLinuxAppSaysThem()
+    {
+        Assert.Equal("500 Hz", EffectText.Hz(500));
+        Assert.Equal("1.5 kHz", EffectText.Hz(1500));
+        Assert.Equal("20.0 kHz", EffectText.Hz(20000));
+    }
+
+    [Fact]
+    public void EachEffectSaysWhatItDoesNow()
+    {
+        Assert.Equal("Low cut: off. For every song, on every speaker.", EffectText.LowTip(20));
+        Assert.Equal("Low cut: takes out the bass below 120 Hz. For every song, on every speaker.", EffectText.LowTip(120));
+        Assert.Equal("High cut: off. For every song, on every speaker.", EffectText.HighTip(20000));
+        Assert.Equal("High cut: takes out the sounds above 8.0 kHz. For every song, on every speaker.", EffectText.HighTip(8000));
+        Assert.Equal("Reverb: off. For every song, on every speaker.", EffectText.ReverbTip(0));
+        Assert.Equal("Reverb: 42 %, a room around the music. For every song, on every speaker.", EffectText.ReverbTip(42));
+    }
+}

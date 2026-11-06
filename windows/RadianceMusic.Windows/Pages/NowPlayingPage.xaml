@@ -51,6 +51,8 @@
                         Background="{ThemeResource ControlFillColorSecondaryBrush}">
                     <TextBlock x:Name="QualityText" Style="{StaticResource CaptionTextBlockStyle}" />
                 </Border>
+                <!-- the Mixer (stage 3), as the Linux app's: under the song, closed until opened -->
+                <ContentControl x:Name="MixerHost" HorizontalContentAlignment="Stretch" />
             </StackPanel>
             <Grid x:Name="Right" Grid.Column="1">
                 <ScrollViewer x:Name="LyricsScroll" VerticalScrollBarVisibility="Hidden" HorizontalScrollMode="Disabled">

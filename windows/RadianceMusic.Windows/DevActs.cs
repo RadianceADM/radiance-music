@@ -17,7 +17,8 @@ namespace RadianceMusic;
 ///   wait:N        N seconds more before the next step (Shot)
 ///   liked-search:TEXT  typed into Liked Songs' own search; queue-move:FROM:TO  the queue's drop
 ///   (rows of its list); queue-menu:N  that queue row's menu; lyric-tap:N  a tap on lyric line N;
-///   next          the next song (the bar's Next)
+///   next          the next song (the bar's Next); mixer-open  Now Playing's Mixer opened;
+///   part:NAME:GAIN  a Mixer slider (0..1)
 /// </summary>
 internal static class DevActs
 {
@@ -38,6 +39,8 @@ internal static class DevActs
             "lyric-tap" => window.Page is Pages.NowPlayingPage np && int.TryParse(arg, out var line) && np.TapLyric(line),
             "fullscreen" => Fullscreen(window),
             "next" => Do(() => App.Hub.Engine.Skip(1)),
+            "mixer-open" => window.Page is Pages.NowPlayingPage mp && mp.OpenMixer(),
+            "part" => arg.Split(':') is [var name, var g] && double.TryParse(g, System.Globalization.CultureInfo.InvariantCulture, out var gain) && Do(() => App.Hub.Engine.SetPart(name, gain)),
             _ => false,
         };
         Crash.Note($"act: {act}: {(done ? "done" : "not found")}");
