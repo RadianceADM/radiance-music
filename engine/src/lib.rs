@@ -13,6 +13,7 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub mod align;
 pub mod archive;
 pub mod art;
+pub mod comref;
 pub mod audio_io;
 pub mod beat;
 pub mod check;

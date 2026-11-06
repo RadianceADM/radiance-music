@@ -25,9 +25,17 @@ public sealed partial class HistoryPage : Page
         Content = new ScrollViewer { Content = body };
     }
 
+    /// <summary>On screen now: a kept page (NavigationCacheMode) that isn't is drawn when it comes back.</summary>
+    private bool onScreen, stale;
+
     protected override void OnNavigatedTo(NavigationEventArgs e)
     {
-        if (hub != null) return;
+        onScreen = true;
+        if (hub != null)
+        {
+            if (stale) Render();
+            return;
+        }
         hub = e.Parameter switch { EngineHub h => h, PageArgs a => a.Hub, _ => null };
         if (hub == null) return;
         hub.Change += kind =>
@@ -37,11 +45,15 @@ public sealed partial class HistoryPage : Page
         Render();
     }
 
+    protected override void OnNavigatedFrom(NavigationEventArgs e) => onScreen = false;
+
     private void Render()
     {
         if (hub == null) return;
+        stale = !onScreen;
+        if (stale) return; // (every song played changes Today: drawn when shown, not 400 rows in the background)
         var days = hub.Engine.History();
-        var key = string.Join("|", days.Select(d => d.Label + d.Plays.Length + (d.Plays.FirstOrDefault()?.Time ?? "")));
+        var key = string.Join("|", days.Select(d => d.Label + d.Plays.Length + (d.Plays.FirstOrDefault()?.Time ?? "") + string.Concat(d.Plays.Select(p => p.Song.Liked ? '1' : '0'))));
         if (key == shown) return;
         shown = key;
         body.Children.Clear();

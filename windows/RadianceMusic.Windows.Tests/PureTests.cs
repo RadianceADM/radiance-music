@@ -206,3 +206,21 @@ public class ArtFitTests
     [Fact]
     public void AVideoNeverGetsNarrowerThanTheCover() => Assert.Equal((340.0, 191.25), ArtFit.Of(340, 200, video: true));
 }
+
+/// <summary>Once a second, as the GTK app's check_lyrics_shown: the line lit now, out of sight
+/// twice, is brought back; with nothing lit (a break, the outro) the column is left alone (review I4).</summary>
+public class LeadCheckTests
+{
+    [Fact]
+    public void NothingLitNeverScrolls() => Assert.Equal((0, false), LeadCheck.Step(lit: null, inSight: false, misses: 1));
+
+    [Fact]
+    public void ALitLineOutOfSightTwiceComesBack()
+    {
+        Assert.Equal((1, false), LeadCheck.Step(lit: 3, inSight: false, misses: 0));
+        Assert.Equal((0, true), LeadCheck.Step(lit: 3, inSight: false, misses: 1));
+    }
+
+    [Fact]
+    public void InSightStartsTheCountAgain() => Assert.Equal((0, false), LeadCheck.Step(lit: 3, inSight: true, misses: 1));
+}

@@ -111,6 +111,19 @@ public sealed partial class NowPlayingPage : Page
     private void ShowVideo(ulong? swapchain)
     {
         var ptr = (nint)(long)(swapchain ?? 0);
+        try
+        {
+            Show(ptr);
+        }
+        finally
+        {
+            // the engine gave us a reference of our own (video_swapchain): the panel holds its own now
+            if (ptr != 0) System.Runtime.InteropServices.Marshal.Release(ptr);
+        }
+    }
+
+    private void Show(nint ptr)
+    {
         if (ptr == shown) return;
         shown = ptr;
         Interop.SwapChainPanelNative.SetSwapChain(VideoPanel, ptr);

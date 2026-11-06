@@ -69,9 +69,19 @@ public sealed partial class LikedPage : Page
         };
     }
 
+    /// <summary>On screen now: a kept page (NavigationCacheMode) that isn't is drawn when it comes back.</summary>
+    private bool onScreen, stale;
+
+    protected override void OnNavigatedFrom(NavigationEventArgs e) => onScreen = false;
+
     protected override void OnNavigatedTo(NavigationEventArgs e)
     {
-        if (hub != null) return;
+        onScreen = true;
+        if (hub != null)
+        {
+            if (stale) Render();
+            return;
+        }
         hub = e.Parameter switch { EngineHub h => h, PageArgs a => a.Hub, _ => null };
         if (hub == null) return;
         debounce = new Debounce(Debounce.SearchWait, _ => Render(), new UiDelay());
@@ -85,6 +95,8 @@ public sealed partial class LikedPage : Page
     private void Render()
     {
         if (hub == null) return;
+        stale = !onScreen;
+        if (stale) return; // (a save starting or ending while elsewhere: drawn when shown)
         page = hub.Engine.LikedPage(box.Text);
         note.Text = page.Note;
         play.IsEnabled = page.Songs.Length > 0;

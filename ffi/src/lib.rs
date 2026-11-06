@@ -137,8 +137,18 @@ impl From<&Track> for SongView {
     }
 }
 
-fn views(v: &[Track]) -> Vec<SongView> {
-    v.iter().map(SongView::from).collect()
+/// Search's results, each row saying whether its song is liked (its heart) and saved, as Liked's.
+fn results_view(r: controller::Results, off: bool, rows: &Rows) -> ResultsView {
+    use radiance_core::words::{self, Kind};
+    ResultsView {
+        mine_note: words::liked_matches(r.mine.len()),
+        lossless_note: words::search_note(Kind::Lossless, r.lossless.as_ref().map(Vec::len), off, &r.query),
+        songs_note: words::search_note(Kind::Songs, r.songs.as_ref().map(Vec::len), off, &r.query),
+        mine: rows.songs(&r.mine),
+        lossless: r.lossless.as_deref().map(|v| rows.songs(v)),
+        songs: r.songs.as_deref().map(|v| rows.songs(v)),
+        query: r.query,
+    }
 }
 
 /// The song playing and the player bar.
@@ -369,28 +379,18 @@ impl MusicEngine {
     }
 
     pub fn results(&self) -> ResultsView {
-        use radiance_core::words::{self, Kind};
-        let r = self.inner.results();
-        let off = !self.inner.online();
-        ResultsView {
-            mine_note: words::liked_matches(r.mine.len()),
-            lossless_note: words::search_note(Kind::Lossless, r.lossless.as_ref().map(Vec::len), off, &r.query),
-            songs_note: words::search_note(Kind::Songs, r.songs.as_ref().map(Vec::len), off, &r.query),
-            mine: views(&r.mine),
-            lossless: r.lossless.as_deref().map(views),
-            songs: r.songs.as_deref().map(views),
-            query: r.query,
-        }
+        results_view(self.inner.results(), !self.inner.online(), &Rows::of(&self.inner))
     }
 
     pub fn home(&self) -> HomeView {
         let h = self.inner.home();
-        HomeView { greeting: h.greeting, mix_note: h.mix_note, mix: views(&h.mix), recent: views(&h.recent), liked: views(&h.liked) }
+        let rows = Rows::of(&self.inner);
+        HomeView { greeting: h.greeting, mix_note: h.mix_note, mix: rows.songs(&h.mix), recent: rows.songs(&h.recent), liked: rows.songs(&h.liked) }
     }
 
     pub fn queue(&self) -> QueueView {
         let (songs, index) = self.inner.queue();
-        QueueView { songs: views(&songs), index: index as u32 }
+        QueueView { songs: Rows::of(&self.inner).songs(&songs), index: index as u32 }
     }
 
     pub fn lyrics(&self) -> LyricsView {
@@ -692,7 +692,8 @@ impl MusicEngine {
         self.inner.switch_version(want_video);
     }
     /// The playing video's DXGI swapchain (an IDXGISwapChain1*, for ISwapChainPanelNative::
-    /// SetSwapChain); None: no video playing.
+    /// SetSwapChain), with a reference of the caller's own: Release it (Marshal.Release) once the
+    /// panel holds the swapchain, whatever happens. None: no video playing.
     pub fn video_swapchain(&self) -> Option<u64> {
         self.inner.video_swapchain()
     }
@@ -945,6 +946,20 @@ mod tests {
         assert_eq!(Action::from(MenuAction::AddToPlaylist { id: 7 }), Action::AddToPlaylist(7));
         assert_eq!(MenuAction::from(Action::GoToAlbum("Blue Ann".into())), MenuAction::GoToAlbum { q: "Blue Ann".into() });
         assert_eq!(radiance_core::menu::Place::from(MenuPlace::Playlist { id: 3 }), radiance_core::menu::Place::Playlist(3));
+    }
+
+    /// Search's rows (and Home's, the queue's) say which songs are liked, as Liked Songs' do: a
+    /// liked song's heart filled, so a click doesn't unlike it and trash its file by mistake.
+    #[test]
+    fn search_rows_say_which_songs_are_liked() {
+        use radiance_engine::track::Source;
+        let t = Track { source: Source::YouTube, id: "y1".into(), title: "Halo".into(), artist: "Ann".into(), album: String::new(), seconds: 200, art: String::new(), format: String::new(), file: None, video: false, genres: None };
+        let mut rows = Rows::default();
+        rows.liked.insert(t.key(), radiance_core::library::Saved::Streams);
+        let r = controller::Results { query: "halo".into(), mine: vec![t.clone()], lossless: None, songs: Some(vec![t]) };
+        let v = results_view(r, false, &rows);
+        assert!(v.mine[0].liked, "a liked song found in Search");
+        assert!(v.songs.unwrap()[0].liked);
     }
 
     #[test]

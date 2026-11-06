@@ -72,6 +72,8 @@ internal sealed class LyricsColumn : Grid
     private CompositionPropertySet? view;
     private string key = "";
     private int? lead;
+    /// <summary>The first line lit at the last reading (null: none, a break or the outro).</summary>
+    private int? litNow;
     private int misses;
 
     private double Size => big ? 28 : 19.6;
@@ -247,6 +249,7 @@ internal sealed class LyricsColumn : Grid
                 }
             }
         }
+        litNow = sung.Any() ? sung.Min(s => (int)s.Line) : null;
         if (follower.Next(sung.Select(s => s.Line).ToArray()) is int next && next < lines.Count) Lead(next);
     }
 
@@ -305,23 +308,21 @@ internal sealed class LyricsColumn : Grid
         scroll.ChangeView(null, Math.Max(0, y - scroll.ActualHeight / 2), null, false);
     }
 
-    /// <summary>Once a second: the sung line out of sight twice (scrolled away, a resize): back to it.</summary>
+    /// <summary>Once a second (Now Playing's column only, as the GTK app's): the line lit now, out of
+    /// sight twice, is brought back; nothing lit, the column stays where it was put (LeadCheck).</summary>
     private void KeepLeadShown()
     {
-        if (lead is not int i || i >= lines.Count || Visibility != Visibility.Visible) return;
-        var box = lines[i].Box;
-        var y = box.TransformToVisual(scroll).TransformPoint(new Windows.Foundation.Point(0, 0)).Y;
-        if (y + box.ActualHeight < 0 || y > scroll.ActualHeight)
+        if (!big || Visibility != Visibility.Visible) return;
+        var lit = litNow is int l && l < lines.Count ? litNow : null;
+        var inSight = true;
+        if (lit is int i)
         {
-            if (++misses >= 2)
-            {
-                misses = 0;
-                ToMiddle(i);
-            }
+            var box = lines[i].Box;
+            var y = box.TransformToVisual(scroll).TransformPoint(new Windows.Foundation.Point(0, 0)).Y;
+            inSight = y + box.ActualHeight >= 0 && y <= scroll.ActualHeight;
         }
-        else
-        {
-            misses = 0;
-        }
+        var (now, back) = LeadCheck.Step(lit, inSight, misses);
+        misses = now;
+        if (back && lit is int line) ToMiddle(line);
     }
 }

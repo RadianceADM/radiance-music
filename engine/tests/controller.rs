@@ -1034,3 +1034,37 @@ fn a_late_radio_never_takes_over() {
     assert!(!c.queue().0.iter().any(|t| t.id == "file-late-like-it"), "{:?}", c.queue().0.iter().map(|t| t.id.clone()).collect::<Vec<_>>());
     c.quit();
 }
+
+/// The beta counts its lyrics on from the engine's last reading (at, since): `since` stays fresh
+/// while a song plays (5 readings a second), or the words light up to a second early (review C1).
+#[test]
+fn the_clock_reading_stays_fresh_while_playing() {
+    let _l = setup();
+    let (c, _f, _rx, list) = with_list("fresh clock", vec![wav("fresh-clock", 6.0)]);
+    c.play_from(list.clone(), 0, "yt:file-fresh-clock");
+    assert!(until(5.0, || c.now().playing && c.now().at > 0.2));
+    std::thread::sleep(Duration::from_millis(1600));
+    let age = radiance_engine::controller::clock_ms().saturating_sub(c.now().since);
+    assert!(age < 400, "the reading is {age} ms old");
+    c.quit();
+}
+
+/// A playlist's song found nowhere else (not in Search, Liked, the queue or History) keeps its
+/// menu and its commands: Remove from This Playlist, Play Next (review I3).
+#[test]
+fn a_playlist_song_found_nowhere_else_keeps_its_menu() {
+    use radiance_core::menu::{Action, Place};
+    let _l = setup();
+    let (c, _f, _rx, list) = with_list("menu only here", vec![wav("only-here", 3.0), wav("only-here-two", 3.0)]);
+    let ListRef::Playlist(id) = list else { unreachable!() };
+    c.search("something else entirely");
+    assert!(until(5.0, || c.results().query == "something else entirely" && c.results().songs.is_some()));
+    let key = "yt:file-only-here-two";
+    let words: Vec<String> = c.song_menu(key, Place::Playlist(id)).into_iter().flatten().map(|i| i.label).collect();
+    assert!(words.iter().any(|w| w == "Remove from This Playlist"), "{words:?}");
+    c.do_menu(key, 0, Action::PlayNext);
+    assert!(until(3.0, || c.queue().0.iter().any(|t| t.key() == key)), "Play Next found the song");
+    c.do_menu(key, 0, Action::RemoveFromPlaylist(id));
+    assert!(until(3.0, || c.playlist(id).is_some_and(|p| p.songs.len() == 1)));
+    c.quit();
+}

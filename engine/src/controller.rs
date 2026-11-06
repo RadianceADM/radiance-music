@@ -248,7 +248,9 @@ struct View {
     /// Each song's (plays, skips), by key.
     counts: HashMap<String, (usize, usize)>,
     /// The music video's swapchain, while one plays (Windows).
-    video: Option<u64>,
+    /// The music video's swapchain while one plays, held (review I5): no one hands out a pointer
+    /// the sink may have let go of.
+    video: Option<crate::comref::ComRef>,
 }
 
 /// Between the app's threads and the engine's.
@@ -444,9 +446,11 @@ impl Controller {
     }
 
     /// The music video's picture while one plays: its DXGI swapchain (Windows), for a
-    /// SwapChainPanel. None: no video, or no swapchain (not Windows).
+    /// SwapChainPanel, with a reference of the caller's own (AddRef'd under the view's lock while
+    /// the engine holds one): the caller Releases it once its panel holds the swapchain. None: no
+    /// video, or no swapchain (not Windows).
     pub fn video_swapchain(&self) -> Option<u64> {
-        self.shared.view(|v| v.video)
+        self.shared.view(|v| v.video.as_ref().map(|r| r.give()))
     }
 
     /// The video's panel is `w`×`h` pixels now (the swapchain follows).
@@ -643,6 +647,11 @@ impl Controller {
                 .or_else(|| v.history.iter().map(|(t, _)| t).find(|t| t.key() == key).cloned())
                 .or_else(|| v.now.song.clone().filter(|t| t.key() == key));
             (t, liked)
+        });
+        // a playlist's song found nowhere else: the playlist's own copy (read outside the view's lock)
+        let t = t.or_else(|| match place {
+            Place::Playlist(id) => crate::db::playlist_songs(id).into_iter().find(|t| t.key() == key),
+            _ => None,
         });
         let Some(t) = t else { return Vec::new() };
         let saved = t.file.as_ref().is_some_and(|f| std::path::Path::new(f).exists());
@@ -933,6 +942,7 @@ impl Engine {
 
     fn shut_down(&self) {
         self.save_session();
+        self.let_go_of_video();
         if let Some(p) = self.player.borrow().as_ref() {
             p.stop();
         }
@@ -1097,6 +1107,7 @@ impl Engine {
     /// The queue's song at its index, from its saved copy, a stream, or the Archive. (Stage 1
     /// of the Windows app: no parts, voices or videos yet; a video plays its sound.)
     fn play_current(self: &Rc<Self>) {
+        self.let_go_of_video(); // before the old video's pipeline goes (review I5)
         let Some(t) = self.queue.borrow().at_index().cloned() else { return };
         let t = playing::saved_copy(&self.liked.borrow(), &t);
         let gen = self.play_gen.get() + 1;
@@ -1301,6 +1312,7 @@ impl Engine {
         self.sound_tries.set(tries);
         let at = self.player.borrow().as_ref().and_then(|p| p.position()).unwrap_or(0.0);
         crate::log::note(&format!("the sound device went away (try {tries}): carries on at {at:.0} s"));
+        self.let_go_of_video();
         if let Some(p) = self.player.borrow().as_ref() {
             p.stop(); // lets go of the speaker it was on
         }
@@ -1331,6 +1343,7 @@ impl Engine {
             self.skip(1);
             return;
         }
+        self.let_go_of_video();
         if let Some(p) = self.player.borrow().as_ref() {
             p.stop();
         }
@@ -1357,6 +1370,8 @@ impl Engine {
             .or_else(|| found.1.as_deref().and_then(hit))
             .or_else(|| hit(&self.mix.borrow()))
             .or_else(|| self.history.borrow().iter().map(|(t, _)| t).find(|t| t.key() == key).cloned())
+            // a playlist's song found nowhere else (its page's menu, heart, Play Next)
+            .or_else(|| crate::db::playlists().into_iter().find_map(|(id, _, _)| crate::db::playlist_songs(id).into_iter().find(|t| t.key() == key)))
     }
 
     fn saved_state(&self, t: &Track) -> Saved {
@@ -1482,7 +1497,15 @@ impl Engine {
 
     /// A video switched to didn't play: back to the song, from where it was, saying why.
     /// False: no switch was under way (an ordinary song that won't play).
+    /// The video's swapchain no longer handed out, and the engine's reference to it gone: before
+    /// its pipeline is stopped or replaced, so no one is given a swapchain the sink let go of.
+    fn let_go_of_video(&self) {
+        self.swapchain.set(0);
+        self.shared.view(|v| v.video = None);
+    }
+
     fn back_from_video(self: &Rc<Self>, why: &str) -> bool {
+        self.let_go_of_video();
         let Some((song, at, key)) = self.switching.take() else { return false };
         let Some(video) = self.current.borrow().clone().filter(|c| c.key() == key) else { return false };
         crate::log::note(&format!("“{}” won't play: {why}", video.title));
@@ -1739,6 +1762,7 @@ impl Engine {
             Some(queue::Removed::Current { play: false }) => {
                 self.restored.set(false);
                 self.restore_at.set(None);
+                self.let_go_of_video();
                 if let Some(p) = self.player.borrow().as_ref() {
                     p.stop();
                 }
@@ -1790,7 +1814,10 @@ impl Engine {
     fn show_in_files(&self, key: &str) {
         let Some(file) = self.find_track(key).and_then(|t| t.file).filter(|f| std::path::Path::new(f).exists()) else { return };
         #[cfg(windows)]
-        let _ = std::process::Command::new("explorer").arg(format!("/select,{file}")).spawn();
+        let _ = {
+            use std::os::windows::process::CommandExt;
+            std::process::Command::new("explorer").raw_arg(explorer_select(&file)).spawn()
+        };
         #[cfg(not(windows))]
         if let Some(dir) = std::path::Path::new(&file).parent() {
             let _ = gio::AppInfo::launch_default_for_uri(&gio::prelude::FileExt::uri(&gio::File::for_path(dir)), gio::AppLaunchContext::NONE);
@@ -1972,6 +1999,7 @@ impl Engine {
         let lit = radiance_core::sing::lit_lines(self.lines.borrow().iter(), at);
         self.shared.view(|v| {
             v.now.at = at;
+            v.now.since = clock_ms(); // the reading's own time: the beta counts on from it
             v.now.playing = true;
             v.now.lit = lit;
             if let Some(l) = length {
@@ -2018,10 +2046,13 @@ impl Engine {
             song,
         };
         drop(q);
-        let swapchain = (video && self.swapchain.get() != 0).then_some(self.swapchain.get());
+        let swapchain = if video { self.swapchain.get() } else { 0 };
         self.shared.view(|v| {
             v.now = now;
-            v.video = swapchain;
+            // held while it's shown (the sink is alive: this engine thread is the one that stops it)
+            if v.video.as_ref().map_or(0, |r| r.ptr()) != swapchain {
+                v.video = (swapchain != 0).then(|| unsafe { crate::comref::ComRef::take(swapchain) });
+            }
         });
         self.shared.tell(Change::Now);
     }
@@ -2165,4 +2196,21 @@ fn save_png(px: crate::art::Pixels, path: &std::path::Path) -> Option<PathBuf> {
     img.save_with_format(&part, image::ImageFormat::Png).ok()?;
     std::fs::rename(&part, path).ok()?;
     Some(path.to_path_buf())
+}
+
+/// Explorer's argument selecting `file`: the path in its own quotes (Rust's would wrap the whole
+/// argument, which Explorer doesn't read: a path with spaces opened Documents instead).
+#[cfg_attr(not(windows), allow(dead_code))]
+fn explorer_select(file: &str) -> String {
+    format!("/select,\"{file}\"")
+}
+
+#[cfg(test)]
+mod tests {
+    /// Explorer's /select takes the path in its own quotes: a path with spaces (most songs')
+    /// selects that file (review I8).
+    #[test]
+    fn explorer_selects_a_path_with_spaces() {
+        assert_eq!(super::explorer_select(r"C:\Music\Radiance Music\A B - Song.flac"), r#"/select,"C:\Music\Radiance Music\A B - Song.flac""#);
+    }
 }
