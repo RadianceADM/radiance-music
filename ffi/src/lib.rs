@@ -34,6 +34,8 @@ pub enum ChangeKind {
     Splits,
     /// Getting splitting ready at the first start (stage 3).
     Setup,
+    /// The song's beat for Now Playing's background (#56).
+    Pulse,
 }
 
 impl From<Change> for ChangeKind {
@@ -54,6 +56,7 @@ impl From<Change> for ChangeKind {
             Change::Playlists => ChangeKind::Playlists,
             Change::Splits => ChangeKind::Splits,
             Change::Setup => ChangeKind::Setup,
+            Change::Pulse => ChangeKind::Pulse,
         }
     }
 }

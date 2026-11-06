@@ -62,6 +62,8 @@ pub enum Change {
     Splits,
     /// Getting splitting ready at the first start (the sunrise holds for it).
     Setup,
+    /// The song's beat for Now Playing's background, worked out (or cleared for a new song) (#56).
+    Pulse,
 }
 
 /// Liked Songs as a page: the songs shown (A to Z, the search applied), the words under it,
@@ -322,6 +324,8 @@ struct View {
     video: Option<crate::comref::ComRef>,
     splits: SplitsState,
     setup: SetupState,
+    /// The playing song's beat (its key with it), for Now Playing's background (#56).
+    pulse: Option<(String, Arc<crate::beat::Pulse>)>,
     /// Songs split while the app runs, and how (their rows' marks; the files tell the rest).
     split_done: HashMap<String, SplitMark>,
 }
@@ -423,6 +427,7 @@ impl Controller {
                 video: None,
                 splits: SplitsState::default(),
                 setup: SetupState::default(),
+                pulse: None,
                 split_done: HashMap::new(),
             }),
             liked_q: Mutex::new(String::new()),
@@ -850,6 +855,11 @@ impl Controller {
         rx.recv_timeout(Duration::from_millis(500)).unwrap_or_default()
     }
 
+    /// The playing song's beat (its key with it) for Now Playing's background (#56); none yet, or none found.
+    pub fn pulse(&self) -> Option<(String, Arc<crate::beat::Pulse>)> {
+        self.shared.view(|v| v.pulse.clone())
+    }
+
     /// Find Lyrics Again (the song's menu).
     pub fn find_lyrics_again(&self, key: &str) {
         let key = key.to_string();
@@ -1037,6 +1047,10 @@ struct Engine {
     voice: Cell<Voice>,
     /// The song's lyrics couldn't be looked up offline: looked up again once online (the GTK app's).
     lyrics_offline: Cell<bool>,
+    /// The address the song plays from (its file, its stream through the relay), and the song its
+    /// beat was worked out for.
+    current_uri: RefCell<String>,
+    pulse_for: RefCell<String>,
 }
 
 /// A music video's streams, as found (through the relay).
@@ -1103,6 +1117,8 @@ impl Engine {
             part_gains: RefCell::default(),
             voice: Cell::new(Voice::Song),
             lyrics_offline: Cell::new(false),
+            current_uri: RefCell::default(),
+            pulse_for: RefCell::default(),
         }
     }
 
@@ -1351,6 +1367,12 @@ impl Engine {
                 p.stop(); // not the last song under this one's name while it's found
             }
         }
+        // a new song: its beat comes once it's a few seconds in
+        self.current_uri.replace(String::new());
+        if !self.pulse_for.replace(String::new()).is_empty() {
+            self.shared.view(|v| v.pulse = None);
+            self.shared.tell(Change::Pulse);
+        }
         // "Loading…" until its sound flows (the Ready event), as the Linux app's bar says it
         self.loading.set(true);
         *self.quality.borrow_mut() = quality::text(Heard::Loading);
@@ -1393,6 +1415,7 @@ impl Engine {
         if let Some(p) = self.player.borrow().as_ref() {
             p.load(uri);
         }
+        self.current_uri.replace(uri.to_string());
         self.publish_now();
     }
 
@@ -1884,6 +1907,7 @@ impl Engine {
         match self.player.borrow().as_ref().map(|p| p.load_parts(whole.as_deref(), &parts, at, &gains, rate, switch)) {
             Some(Ok(())) => {
                 crate::log::note(&format!("“{}” plays with its parts at hand{}", t.title, if switch { " (switched over, fading)" } else { "" }));
+                self.current_uri.replace(whole.clone().unwrap_or_else(|| parts[0].1.clone()));
                 true
             }
             Some(Err(e)) => {
@@ -2722,6 +2746,26 @@ impl Engine {
         );
     }
 
+    /// The background's beat for the song playing (#56): worked out once per song, a few seconds in (so a
+    /// stream's start isn't slowed by it), as the GTK app's load_pulse.
+    fn load_pulse(&self) {
+        let Some(t) = self.current.borrow().clone() else { return };
+        let (key, uri) = (t.key(), self.current_uri.borrow().clone());
+        if t.video || uri.is_empty() || *self.pulse_for.borrow() == key {
+            return;
+        }
+        self.pulse_for.replace(key.clone());
+        self.bg(
+            move || crate::beat::pulse(&uri),
+            move |e, p| {
+                if *e.pulse_for.borrow() == key {
+                    e.shared.view(|v| v.pulse = p.map(|p| (key, Arc::new(p))));
+                    e.shared.tell(Change::Pulse);
+                }
+            },
+        );
+    }
+
     /// Five times a second while a song plays.
     fn tick(&self) {
         let (playing, at, length) = {
@@ -2734,6 +2778,9 @@ impl Engine {
         }
         let Some(at) = at else { return };
         self.position.set(at);
+        if at >= 3.0 {
+            self.load_pulse();
+        }
         let lit = radiance_core::sing::lit_lines(self.lines.borrow().iter(), at);
         self.shared.view(|v| {
             v.now.at = at;

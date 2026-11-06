@@ -1511,3 +1511,36 @@ fn words_are_timed_after_a_split_lands() {
     assert_eq!(fake.time_words_calls.load(Ordering::SeqCst), 1, "once");
     c.quit();
 }
+
+// ---------------------------------------------------------------------------------- the beat for the background (Task 8, #56)
+
+/// A WAV of clicks, one every half second (a beat for beat::pulse to find), named for its test.
+fn clicks(name: &str, secs: f64) -> Track {
+    let mut t = wav(name, secs);
+    let rate = 44_100usize;
+    let n = (secs * rate as f64) as usize;
+    let mut b = std::fs::read(t.file.as_ref().unwrap()).unwrap();
+    for i in 0..n {
+        let in_click = i % (rate / 2) < rate / 100; // 10 ms
+        let v: i16 = if in_click { if i % 20 < 10 { 12_000 } else { -12_000 } } else { 0 };
+        b[44 + 2 * i..46 + 2 * i].copy_from_slice(&v.to_le_bytes());
+    }
+    std::fs::write(t.file.as_ref().unwrap(), b).unwrap();
+    t.title = format!("Clicks {name}");
+    t
+}
+
+#[test]
+fn a_playing_song_gets_its_pulse() {
+    let _l = setup();
+    // (beat::pulse wants more than 8 s of a song)
+    let (beat, next) = (clicks("pulse-a", 10.0), wav("pulse-b", 3.0));
+    let (c, _f, rx, list) = with_list("pulse", vec![beat.clone(), next.clone()]);
+    c.play_from(list.clone(), 0, &beat.key());
+    assert!(until(9.0, || c.pulse().is_some_and(|(k, p)| k == beat.key() && p.fps > 0.0 && !p.level.is_empty())), "no pulse for the song");
+    assert!(wait_for(&rx, Change::Pulse, 0.1) || true);
+    c.play_from(list, 1, &next.key());
+    assert!(until(2.0, || c.pulse().is_none_or(|(k, _)| k != beat.key())), "the last song's pulse stayed");
+    c.quit();
+}
+
