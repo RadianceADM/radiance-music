@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex, Once};
 use std::time::{Duration, Instant};
 
 use radiance_core::library::GroupKind;
-use radiance_engine::controller::{Change, Controller, ListRef, Listener, SplitMark};
+use radiance_engine::controller::{Change, Controller, ListRef, Listener, SetupState, SplitMark};
 use radiance_engine::lyrics::Lyrics;
 use radiance_engine::sources::Sources;
 use radiance_engine::track::{Source, Track};
@@ -128,6 +128,23 @@ impl Sources for Fake {
     }
     fn can_split_two(&self) -> bool {
         true
+    }
+    fn install_splitter(&self, threads: u32, say: &(dyn Fn(&str, f64) + Send + Sync)) -> Result<radiance_engine::settings::LocalSplitter, String> {
+        if self.offline.load(Ordering::SeqCst) {
+            return Err("Temporary failure in name resolution".into());
+        }
+        say("Downloading Demucs…", 0.3);
+        std::thread::sleep(Duration::from_millis(300));
+        say("Checking it works…", 0.9);
+        std::thread::sleep(Duration::from_millis(300));
+        // (settings keep a splitter only when its files are there)
+        let dir = std::env::temp_dir().join(format!("radiance-fake-splitter-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let (python, script) = (dir.join("python"), dir.join("split.py"));
+        for f in [&python, &script] {
+            std::fs::write(f, b"").map_err(|e| e.to_string())?;
+        }
+        Ok(radiance_engine::settings::LocalSplitter { python: python.display().to_string(), script: script.display().to_string(), threads })
     }
     fn split(&self, t: &Track, two: bool, _uri: &str, report: std::sync::Arc<dyn Fn(radiance_engine::splitting::Phase) + Send + Sync>) -> Result<(), String> {
         self.splits_started.lock().unwrap().push((t.id.clone(), two));
@@ -1209,4 +1226,70 @@ fn the_fast_split_takes_its_own_lane() {
     assert_eq!(started(&fake)[1], ("f2".to_string(), true));
     assert_eq!(c.splits().two_waiting.len(), 0);
     c.quit();
+}
+
+// ---------------------------------------------------------------------------------- the first start's setup (Task 5)
+
+fn no_local_splitter() {
+    let mut st = radiance_engine::settings::load();
+    st.local_split = None;
+    radiance_engine::settings::save(&st);
+}
+
+/// A controller at its very first start (no splitter yet): RADIANCE_SETUP_TEST makes it set one up here.
+fn first_start(fake: Arc<Fake>) -> Controller {
+    no_local_splitter();
+    std::env::set_var("RADIANCE_SETUP_TEST", "1");
+    let (heard, _rx) = listener();
+    let c = Controller::start(heard, fake).unwrap();
+    std::env::remove_var("RADIANCE_SETUP_TEST");
+    c
+}
+
+#[test]
+fn the_first_start_gets_splitting_ready_with_progress() {
+    let _l = setup();
+    let c = first_start(Arc::new(Fake::default()));
+    let mut steps: Vec<String> = vec![];
+    let end = Instant::now() + Duration::from_secs(4);
+    while Instant::now() < end && c.setup() != SetupState::Ready {
+        if let SetupState::Getting { step, .. } = c.setup() {
+            if !step.is_empty() && steps.last() != Some(&step) {
+                steps.push(step);
+            }
+        }
+        std::thread::sleep(Duration::from_millis(15));
+    }
+    assert_eq!(c.setup(), SetupState::Ready);
+    assert_eq!(steps, ["Downloading Demucs…", "Checking it works…"]);
+    assert!(radiance_engine::settings::load().local_split.is_some(), "kept for the next start");
+    c.quit();
+    no_local_splitter();
+}
+
+#[test]
+fn offline_first_start_lets_you_in_and_gets_ready_later() {
+    let _l = setup();
+    let fake = Arc::new(Fake::default());
+    fake.offline.store(true, Ordering::SeqCst);
+    let c = first_start(fake.clone());
+    assert!(until(2.0, || c.setup() == SetupState::Offline), "{:?}", c.setup());
+    fake.offline.store(false, Ordering::SeqCst);
+    c.search("back online");
+    assert!(until(4.0, || c.setup() == SetupState::Ready), "it didn't get ready once online: {:?}", c.setup());
+    c.quit();
+    no_local_splitter();
+}
+
+#[test]
+fn cores_are_kept_for_the_next_split() {
+    let _l = setup();
+    let c = first_start(Arc::new(Fake::default()));
+    assert!(until(4.0, || c.setup() == SetupState::Ready));
+    c.set_split_cores(3);
+    assert!(until(1.0, || radiance_engine::settings::load().local_split.is_some_and(|l| l.threads == 3)));
+    assert_eq!(c.split_cores().0, 3);
+    assert!(c.split_cores().1 >= 1);
+    c.quit();
+    no_local_splitter();
 }

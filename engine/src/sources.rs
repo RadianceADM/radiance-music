@@ -36,6 +36,11 @@ pub trait Sources: Send + Sync + 'static {
     fn can_split_two(&self) -> bool {
         crate::two_part::ready().is_some()
     }
+    /// Splitting set up on this computer at its first start (worker thread; minutes: the Windows pack's
+    /// download), saying each step and how far along (0..1).
+    fn install_splitter(&self, threads: u32, say: &(dyn Fn(&str, f64) + Send + Sync)) -> Result<crate::settings::LocalSplitter, String> {
+        crate::setup::install(threads, say)
+    }
     /// A song split (worker thread; minutes): in two, the fast split; else in four with the settings'
     /// splitter, then its words timed (engine::splitting). `uri`: its file, or its stream through the relay.
     fn split(&self, t: &Track, two: bool, uri: &str, report: std::sync::Arc<dyn Fn(crate::splitting::Phase) + Send + Sync>) -> Result<(), String> {

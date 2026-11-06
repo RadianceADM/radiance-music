@@ -58,6 +58,8 @@ pub enum Change {
     Playlists,
     /// The split queue: a song being split (and how far), waiting, done, paused (stage 3).
     Splits,
+    /// Getting splitting ready at the first start (the sunrise holds for it).
+    Setup,
 }
 
 /// Liked Songs as a page: the songs shown (A to Z, the search applied), the words under it,
@@ -260,6 +262,19 @@ pub struct SplitsState {
     pub can_split_two: bool,
 }
 
+/// Splitting set up at the first start (stage 3; the GTK app's get_splitter_ready): not needed (set up
+/// already, or not on this computer), getting ready (the step, how far), offline (it starts once the
+/// internet's back), failed (tried again in a while), or ready.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub enum SetupState {
+    #[default]
+    NotNeeded,
+    Getting { step: String, done: f64 },
+    Offline,
+    Failed { why: String },
+    Ready,
+}
+
 static RUNNING: AtomicBool = AtomicBool::new(false);
 
 /// What an app reads (written on the engine's thread).
@@ -285,6 +300,7 @@ struct View {
     /// the sink may have let go of.
     video: Option<crate::comref::ComRef>,
     splits: SplitsState,
+    setup: SetupState,
     /// Songs split while the app runs, and how (their rows' marks; the files tell the rest).
     split_done: HashMap<String, SplitMark>,
 }
@@ -385,6 +401,7 @@ impl Controller {
                 counts: HashMap::new(),
                 video: None,
                 splits: SplitsState::default(),
+                setup: SetupState::default(),
                 split_done: HashMap::new(),
             }),
             liked_q: Mutex::new(String::new()),
@@ -795,6 +812,27 @@ impl Controller {
         self.post(move |e| e.set_split_paused(on));
     }
 
+    /// Getting splitting ready at the first start (the beta's sunrise holds while it's Getting).
+    pub fn setup(&self) -> SetupState {
+        self.shared.view(|v| v.setup.clone())
+    }
+
+    /// Try Again (getting splitting ready failed, or it waits for the internet).
+    pub fn retry_setup(&self) {
+        self.post(|e| e.retry_setup());
+    }
+
+    /// "Cores it may use" for this computer's splitter, from the next split.
+    pub fn set_split_cores(&self, n: u32) {
+        self.post(move |e| e.set_split_cores(n));
+    }
+
+    /// The cores the splitter may use now, and this computer's.
+    pub fn split_cores(&self) -> (u32, u32) {
+        let now = settings::load().local_split.map(|l| l.threads).unwrap_or_else(crate::setup::half_the_cores);
+        (now, crate::setup::cores() as u32)
+    }
+
     pub fn splits(&self) -> SplitsState {
         self.shared.view(|v| v.splits.clone())
     }
@@ -1013,6 +1051,7 @@ impl Engine {
         // liked songs split by themselves, one after another, a while after the start (the GTK app's)
         let after = std::env::var("RADIANCE_AUTO_SPLIT_S").ok().and_then(|s| s.parse().ok()).unwrap_or(split_queue::AUTO_AFTER_S);
         self.bg(move || std::thread::sleep(Duration::from_secs(after)), |e, ()| e.auto_split_liked());
+        self.get_splitter_ready();
         self.publish_splits();
         // five times a second: where the song is, the lines lit, and (every 5 s) where you are
         let me = Rc::downgrade(self);
@@ -1904,6 +1943,89 @@ impl Engine {
         );
     }
 
+    // ------------------------------------------------------------------ the first start's setup (stage 3)
+
+    /// Splitting set up at the first start, as the GTK app's get_splitter_ready: nothing to do when it's
+    /// set up already (or its files are here: kept), and only Windows downloads its pack here.
+    fn get_splitter_ready(self: &Rc<Self>) {
+        if self.settings.borrow().local_split.is_some() {
+            return;
+        }
+        if std::env::var_os("RADIANCE_SETUP_TEST").is_none() {
+            if let Some(local) = crate::setup::installed(crate::setup::half_the_cores()) {
+                self.settings.borrow_mut().local_split = Some(local);
+                settings::save(&self.settings.borrow());
+                return;
+            }
+            if !cfg!(windows) {
+                return;
+            }
+        }
+        self.set_splitter_up();
+    }
+
+    fn set_setup(&self, s: SetupState) {
+        self.shared.view(|v| v.setup = s);
+        self.shared.tell(Change::Setup);
+    }
+
+    /// The download and install (worker thread), each step said as it comes; offline, it waits for the
+    /// internet; another failure tries again in 30 s.
+    fn set_splitter_up(self: &Rc<Self>) {
+        crate::log::note("getting splitting ready on this computer (its first start)");
+        self.set_setup(SetupState::Getting { step: String::new(), done: 0.0 });
+        let (sources, shared) = (self.shared.sources.clone(), self.shared.clone());
+        let threads = crate::setup::half_the_cores();
+        self.bg(
+            move || {
+                let say = move |step: &str, done: f64| {
+                    shared.view(|v| v.setup = SetupState::Getting { step: step.to_string(), done });
+                    shared.tell(Change::Setup);
+                };
+                sources.install_splitter(threads, &say)
+            },
+            |e, result| match result {
+                Ok(local) => {
+                    crate::log::note("splitting is set up on this computer");
+                    e.settings.borrow_mut().local_split = Some(local);
+                    settings::save(&e.settings.borrow());
+                    e.set_setup(SetupState::Ready);
+                    e.publish_splits();
+                    e.run_splits();
+                }
+                Err(why) => {
+                    crate::log::note(&format!("getting splitting ready stopped: {why}"));
+                    let online = e.shared.view(|v| v.online);
+                    if trouble::why_not(&why, online).0 == "you're offline" {
+                        e.set_setup(SetupState::Offline);
+                        e.set_online(false); // (back online, it starts again)
+                    } else {
+                        e.set_setup(SetupState::Failed { why });
+                        e.bg(|| std::thread::sleep(Duration::from_secs(30)), |e, ()| {
+                            if matches!(e.shared.view(|v| v.setup.clone()), SetupState::Failed { .. }) {
+                                e.set_splitter_up();
+                            }
+                        });
+                    }
+                }
+            },
+        );
+    }
+
+    fn retry_setup(self: &Rc<Self>) {
+        if matches!(self.shared.view(|v| v.setup.clone()), SetupState::Failed { .. } | SetupState::Offline) {
+            self.set_splitter_up();
+        }
+    }
+
+    fn set_split_cores(&self, n: u32) {
+        let cores = crate::setup::cores() as u32;
+        if let Some(local) = self.settings.borrow_mut().local_split.as_mut() {
+            local.threads = n.clamp(1, cores.max(1));
+        }
+        settings::save(&self.settings.borrow());
+    }
+
     /// A song's split is done: its mark (the playing song switches to its parts: Task 6).
     fn split_landed(self: &Rc<Self>, t: &Track, mark: SplitMark) {
         crate::log::note(&format!("“{}” split ({})", t.title, if mark == SplitMark::Two { "in two" } else { "in four" }));
@@ -2446,10 +2568,14 @@ impl Engine {
         self.shared.tell(Change::Results);
     }
 
-    fn set_online(&self, on: bool) {
+    fn set_online(self: &Rc<Self>, on: bool) {
         let changed = self.shared.view(|v| std::mem::replace(&mut v.online, on) != on);
         if changed {
             self.shared.tell(Change::Online);
+        }
+        // back online: splitting's first-start download starts now (it waited for the internet)
+        if changed && on && self.shared.view(|v| v.setup == SetupState::Offline) {
+            self.set_splitter_up();
         }
     }
 

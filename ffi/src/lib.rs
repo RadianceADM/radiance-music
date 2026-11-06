@@ -32,6 +32,8 @@ pub enum ChangeKind {
     Playlists,
     /// The split queue (stage 3).
     Splits,
+    /// Getting splitting ready at the first start (stage 3).
+    Setup,
 }
 
 impl From<Change> for ChangeKind {
@@ -51,6 +53,7 @@ impl From<Change> for ChangeKind {
             Change::History => ChangeKind::History,
             Change::Playlists => ChangeKind::Playlists,
             Change::Splits => ChangeKind::Splits,
+            Change::Setup => ChangeKind::Setup,
         }
     }
 }
