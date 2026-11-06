@@ -23,7 +23,11 @@ internal sealed class LyricsColumn : Grid
 {
     private sealed class Shown
     {
+        /// <summary>The line's fade (a XAML OpacityTransition).</summary>
         public required StackPanel Box;
+        /// <summary>Around Box: the lens scales this one (WinUI won't hand out the visual of an
+        /// element with an OpacityTransition: "Access is denied", and the app goes down).</summary>
+        public required Grid Frame;
         public required TextBlock Text;
         public required Run Lit;
         public required Run Rest;
@@ -147,8 +151,10 @@ internal sealed class LyricsColumn : Grid
         box.Children.Add(text);
         var start = v.Start;
         box.Tapped += (_, _) => hub.Engine.Seek(start); // a click on a line goes there
-        panel.Children.Add(box);
-        lines.Add(new Shown { Box = box, Text = text, Lit = lit, Rest = rest, Words = v.Text });
+        var frame = new Grid();
+        frame.Children.Add(box);
+        panel.Children.Add(frame);
+        lines.Add(new Shown { Box = box, Frame = frame, Text = text, Lit = lit, Rest = rest, Words = v.Text });
         if (view != null) Lens(lines[^1]);
     }
 
@@ -162,7 +168,7 @@ internal sealed class LyricsColumn : Grid
         e.SetReferenceParameter("s", s);
         e.SetReferenceParameter("v", view!);
         e.SetReferenceParameter("p", line.Props);
-        ElementCompositionPreview.GetElementVisual(line.Box).StartAnimation("Scale", e);
+        ElementCompositionPreview.GetElementVisual(line.Frame).StartAnimation("Scale", e);
     }
 
     /// <summary>Each line's middle (in the column's content) for its lens, and its pivot (its left edge).</summary>
@@ -171,10 +177,10 @@ internal sealed class LyricsColumn : Grid
         foreach (var line in lines)
         {
             if (line.Props == null && view != null) Lens(line);
-            if (line.Props == null || line.Box.ActualHeight <= 0) continue;
-            var y = line.Box.TransformToVisual(panel).TransformPoint(new Windows.Foundation.Point(0, 0)).Y;
-            line.Props.InsertScalar("Mid", (float)(y + line.Box.ActualHeight / 2));
-            ElementCompositionPreview.GetElementVisual(line.Box).CenterPoint = new Vector3(0, (float)(line.Box.ActualHeight / 2), 0);
+            if (line.Props == null || line.Frame.ActualHeight <= 0) continue;
+            var y = line.Frame.TransformToVisual(panel).TransformPoint(new Windows.Foundation.Point(0, 0)).Y;
+            line.Props.InsertScalar("Mid", (float)(y + line.Frame.ActualHeight / 2));
+            ElementCompositionPreview.GetElementVisual(line.Frame).CenterPoint = new Vector3(0, (float)(line.Frame.ActualHeight / 2), 0);
         }
     }
 
