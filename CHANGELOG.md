@@ -7,6 +7,18 @@
 - **Sharing with the phone carries its two-part split:** a song the phone split in two (Music + Vocals, its new fast split) comes to the computer with both parts, and the computer sends a song's Music part along too. The computer's mixer plays two-part songs with two sliders (#43).
 - **Next right after opening starts the next song from its start:** with last time's song shown (picked up at its saved place), pressing Next, picking another song in the queue, Play again, or removing that song from the queue started the next one at the old song's place, and the first Pause then started it over (#46).
 
+## Windows beta 0.8.0-beta.3 — not released yet (#45, stage 3)
+
+The native Windows app gets the song's parts, splitting and the lyrics tools:
+- **The Mixer**, a rounded pop-up from the bar's Mixer button: Song, No vocals, Vocals only; a slider and a meter for each of the song's parts (Drums, Bass, Other, Vocals, or Music and Vocals for a song split in two), never louder than the song; Low cut, High cut and Reverb for every song; Reset.
+- **The Music slider of a song split in two works** (it did nothing in the Linux app either, #59: fixed for both).
+- **Splitting on this computer:** Split: Music + Vocals (Fast) and Split: Four Parts in a song's menu; liked songs split by themselves, one after another; the side panel's **Splits** tab shows what's splitting and what waits; **Splitting…** at the sidebar's foot sets the cores it may use and pauses it. Each song's mark shows waiting, splitting or split.
+- **The first start gets splitting ready on the sunrise:** what it's getting and how far along, under the sun. Offline, it says so and offers Try Again or Open Radiance Music Now.
+- **Every word timed to the singing** (MMS) once a song is split.
+- **Lyrics:** Show Lyrics; the lyrics editor (each line's start, its words and who sings it; Add Line, Paste Lyrics, Tap Timing with Enter, Add a singer; saved as yours); Find Lyrics Again. Lyrics come back by themselves when you're online again.
+- **Now Playing's background follows the beat** (#56): a kick swells the art at once and pushes its flow ahead; strong bass flows it faster. It rests when the window is minimised or in the tray.
+- Lyrics go back to the top on the next song (#57); Search and Home keep to a readable width in a wide window (#58).
+
 ## Windows beta 0.8.0-beta.2 — not released yet (#45, stage 2)
 
 The native Windows app (WinUI 3, Windows' own look) gets its library and the rest of playing:

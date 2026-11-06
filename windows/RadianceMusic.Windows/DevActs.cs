@@ -94,6 +94,7 @@ internal static class DevActs
                 // a submenu opens (Expand); a button or menu item is pressed (Invoke)
                 if (peer.GetPattern(PatternInterface.ExpandCollapse) is IExpandCollapseProvider e) e.Expand();
                 else if (peer.GetPattern(PatternInterface.Invoke) is IInvokeProvider i) i.Invoke();
+                else if (peer.GetPattern(PatternInterface.Toggle) is IToggleProvider t) t.Toggle(); // (Tap Timing)
                 else return false;
                 return true;
             }
@@ -106,7 +107,7 @@ internal static class DevActs
         {
             case MenuFlyoutSubItem sub when sub.Text.StartsWith(text): return sub;
             case MenuFlyoutItem item when item.Text.StartsWith(text): return item;
-            case Button b when Words(b).StartsWith(text) || Microsoft.UI.Xaml.Automation.AutomationProperties.GetName(b).StartsWith(text): return b;
+            case Microsoft.UI.Xaml.Controls.Primitives.ButtonBase b when Words(b).StartsWith(text) || Microsoft.UI.Xaml.Automation.AutomationProperties.GetName(b).StartsWith(text): return b;
         }
         for (var i = 0; i < VisualTreeHelper.GetChildrenCount(at); i++)
             if (Find(VisualTreeHelper.GetChild(at, i), text) is { } found) return found;
@@ -114,7 +115,7 @@ internal static class DevActs
     }
 
     /// <summary>A button's words (its content's text blocks, or its string).</summary>
-    private static string Words(Button b) => b.Content switch
+    private static string Words(ContentControl b) => b.Content switch
     {
         string s => s,
         TextBlock t => t.Text,
