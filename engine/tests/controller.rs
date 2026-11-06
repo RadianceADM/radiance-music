@@ -1035,7 +1035,8 @@ fn switching_versions_keeps_the_place() {
     assert!(until(5.0, || now_id(&c) == "vid-versioned" && c.now().video && c.now().playing && c.now().at >= 11.5), "the video didn't play from 12 s: {:?}", c.now().at);
     let at = c.now().at;
     assert!(at < 14.5, "the video started at {at} s");
-    assert_eq!(c.now().quality, "Video · 720p");
+    // (its quality comes with its Ready event, a moment after it plays: "Loading…" until then, #55)
+    assert!(until(3.0, || c.now().quality == "Video · 720p"), "{}", c.now().quality);
     assert!(c.now().has_counterpart, "the way back to the song");
     assert_eq!(c.queue().0[c.queue().1].id, "vid-versioned", "the queue holds the version playing");
     c.switch_version(false);
