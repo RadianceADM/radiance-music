@@ -11,9 +11,11 @@ namespace RadianceMusic.Controls;
 /// No vocals, Vocals only), a row for each of the song's parts (Drums, Bass, Other, Vocals; Music and Vocals
 /// for a song split in two) with its meter, Low cut / High cut / Reverb (one setting, every song), and Reset.
 /// Every move is heard at once (the engine's volumes); the meters run only while it's open and shown.
+/// It holds its Expander (a class derived from Expander gets no style in WinUI 3: it crashed on layout).
 /// </summary>
-internal sealed class Mixer : Expander
+internal sealed class Mixer : Grid
 {
+    private readonly Expander expander = new();
     private static readonly (VoiceMode Mode, string Label)[] Voices = { (VoiceMode.Song, "Song"), (VoiceMode.NoVocals, "No vocals"), (VoiceMode.VocalsOnly, "Vocals only") };
     private readonly EngineHub hub;
     private readonly SelectorBar voices = new();
@@ -28,12 +30,14 @@ internal sealed class Mixer : Expander
     {
         this.hub = hub;
         HorizontalAlignment = HorizontalAlignment.Stretch;
-        HorizontalContentAlignment = HorizontalAlignment.Stretch;
+        expander.HorizontalAlignment = HorizontalAlignment.Stretch;
+        expander.HorizontalContentAlignment = HorizontalAlignment.Stretch;
         Margin = new Thickness(0, 10, 0, 0);
+        Children.Add(expander);
         var head = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 10 };
         head.Children.Add(new FontIcon { Glyph = "", FontSize = 16 });
         head.Children.Add(new TextBlock { Text = "Mixer", VerticalAlignment = VerticalAlignment.Center });
-        Header = head;
+        expander.Header = head;
         foreach (var (_, label) in Voices) voices.Items.Add(new SelectorBarItem { Text = label });
         ToolTipService.SetToolTip(voices, "No vocals: the music without the singer (karaoke). Vocals only: just the voice. Split once per song by Demucs; it carries on to the next songs.");
         voices.SelectionChanged += (_, _) =>
@@ -69,7 +73,7 @@ internal sealed class Mixer : Expander
         ToolTipService.SetToolTip(reset, "Reset: every part at full, the effects off (the song as it is)");
         reset.Click += (_, _) => hub.Engine.ResetMix();
         body.Children.Add(reset);
-        Content = body;
+        expander.Content = body;
 
         var ui = DispatcherQueue.GetForCurrentThread();
         fxLater = ui.CreateTimer();
@@ -79,10 +83,10 @@ internal sealed class Mixer : Expander
         meters = ui.CreateTimer();
         meters.Interval = TimeSpan.FromMilliseconds(250);
         meters.Tick += (_, _) => Meters();
-        Expanding += (_, _) => Clocks(true);
-        Collapsed += (_, _) => Clocks(false);
+        expander.Expanding += (_, _) => Clocks(true);
+        expander.Collapsed += (_, _) => Clocks(false);
         Unloaded += (_, _) => Clocks(false);
-        Loaded += (_, _) => Clocks(IsExpanded);
+        Loaded += (_, _) => Clocks(expander.IsExpanded);
         hub.Change += kind =>
         {
             if (kind == ChangeKind.Now) Render();
@@ -118,7 +122,7 @@ internal sealed class Mixer : Expander
     /// <summary>Each part's loudness right now (before its slider: a part nearly empty in this song shows it).</summary>
     private void Meters()
     {
-        if (!IsExpanded || parts.Count == 0 || XamlRoot == null) return;
+        if (!expander.IsExpanded || parts.Count == 0 || XamlRoot == null) return;
         foreach (var level in hub.Engine.PartLevels())
             if (parts.TryGetValue(level.Name, out var p)) p.Meter.Value = Math.Clamp(level.Level, 0, 1);
     }
@@ -180,5 +184,5 @@ internal sealed class Mixer : Expander
     }
 
     /// <summary>Open (the screenshots' --act mixer-open).</summary>
-    public void Open() => IsExpanded = true;
+    public void Open() => expander.IsExpanded = true;
 }
