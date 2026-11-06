@@ -19,6 +19,9 @@ The native Windows app (WinUI 3, Windows' own look) gets its library and the res
 - **The queue panel:** Played before, then the queue. Drag a song to move it, or remove it. Next to the page in a wide window, over it in a narrow one.
 - **Lyrics word by word:** each word lights as it's sung, the sung line grows into the middle, and a tap on a line goes there. The side panel has no Lyrics tab while Now Playing shows them.
 - **Music videos** where the cover goes, drawn by the graphics card, with fullscreen (F11, Esc, double-click). Switch between a song and its video, and the place is kept.
+- **The start's sunrise**, as the Linux app's: the sun rises while it gets ready, the logo writes itself, and the app opens from the middle. A click goes straight in.
+- **"Loading…"** in the bar and on Now Playing while a song starts. The bar shows what's playing where there's room, as the Linux bar does.
+- **A click on the bar's song opens Now Playing.**
 - About 1 % of one core with lyrics on Now Playing, about 7 % with a music video.
 
 ## v0.7.19 — 2026-11-05

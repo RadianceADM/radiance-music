@@ -43,6 +43,8 @@ marked 🔜.
 | Picks up where you left off | ✅ | ✅ | ✅ | ✅ | |
 | Says why a song won't play, skips, stops after 3 | ✅ | ✅ | ✅ | ✅ | |
 | Starts on the first click (a stuck start is started again) | ✅ | ✅ | ✅ | ➖ | the computer's sound output could refuse a song; the phone's player doesn't |
+| "Loading…" while a song starts | ✅ | ✅ | ✅ | ✅ | the bar and Now Playing say it; the phone: a ring on the cover and the mini player |
+| The bar's song opens Now Playing | ✅ | ✅ | ✅ | ✅ | the phone's mini player |
 
 ## Mixer and splitting
 
@@ -110,7 +112,7 @@ marked 🔜.
 | Installs its own update | ✅ | ✅ | 🔜 4 | ✅ | Linux download / Flatpak / Windows installer / Android installer |
 | What's New | ✅ | ✅ | 🔜 4 | ✅ | |
 | How to Use It guide | ✅ | ✅ | 🔜 4 | ✅ | |
-| Start screen with first-open setup and progress | ✅ | ✅ | 🔜 3 | ✅ | |
+| Start screen with first-open setup and progress | ✅ | ✅ | the sunrise ✅, setup 🔜 3 | ✅ | the beta has nothing to set up until splitting (stage 3) |
 | Looks: Stone, True Black | ✅ | ✅ | Windows' light/dark | ✅ | |
 | Offline sign, things retry when back online | ✅ | ✅ | Search's note ✅, retry 🔜 4 | ✅ | |
 | Report a problem: link to GitHub Issues | ✅ | ✅ | 🔜 4 | ✅ | |
