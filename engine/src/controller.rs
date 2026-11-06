@@ -70,6 +70,17 @@ pub enum Change {
     Report,
     /// The rating pop-up: due at a free moment, signing in, or how sending went.
     Rating,
+    /// Storage: the songs' folder and the space used (counted, or moved).
+    Storage,
+}
+
+/// Storage as its section shows it: where the songs are, and the space used (None: counting…).
+#[derive(Clone, Default)]
+pub struct StorageState {
+    pub folder: String,
+    pub usage: Option<crate::storage::Usage>,
+    /// A move under way.
+    pub moving: bool,
 }
 
 /// Report a Problem as its dialog shows it.
@@ -410,6 +421,9 @@ struct View {
     update: UpdateState,
     report: ReportState,
     rating: RatingState,
+    storage: StorageState,
+    autoplay: bool,
+    guide_seen: bool,
 }
 
 /// Between the app's threads and the engine's.
@@ -514,6 +528,9 @@ impl Controller {
                 update: UpdateState::default(),
                 report: ReportState::default(),
                 rating: RatingState::default(),
+                storage: StorageState::default(),
+                autoplay: true,
+                guide_seen: false,
             }),
             liked_q: Mutex::new(String::new()),
         });
@@ -1006,6 +1023,41 @@ impl Controller {
         self.post(move |e| e.set_split_paused(on));
     }
 
+    /// Storage: the songs' folder and the space used.
+    pub fn storage(&self) -> StorageState {
+        self.shared.view(|v| v.storage.clone())
+    }
+
+    /// Counts the space used (worker thread).
+    pub fn storage_count(&self) {
+        self.post(|e| e.storage_count());
+    }
+
+    /// Moves the songs to `to` (Storage's Change…: the folder picked; "Radiance Music" is added
+    /// inside it as the Linux app does); a toast says how it went.
+    pub fn move_music(&self, to: &str) {
+        let to = std::path::PathBuf::from(to);
+        self.post(move |e| e.move_music(to));
+    }
+
+    /// Autoplay When the Queue Ends.
+    pub fn autoplay(&self) -> bool {
+        self.shared.view(|v| v.autoplay)
+    }
+
+    pub fn set_autoplay(&self, on: bool) {
+        self.post(move |e| e.set_autoplay(on));
+    }
+
+    /// The first-start guide was seen (in the settings both apps share).
+    pub fn guide_seen(&self) -> bool {
+        self.shared.view(|v| v.guide_seen)
+    }
+
+    pub fn set_guide_seen(&self) {
+        self.post(|e| e.set_guide_seen());
+    }
+
     /// Report a Problem: what will be sent and how sending went.
     pub fn report(&self) -> ReportState {
         self.shared.view(|v| v.report.clone())
@@ -1271,6 +1323,12 @@ impl Engine {
         let settings = settings::load();
         // liked songs go to the folder picked in Storage (as the GTK app's start)
         crate::library::set_music_dir(settings.music_dir.clone().map(std::path::PathBuf::from));
+        let (autoplay, guide_seen) = (settings.autoplay, settings.guide_seen);
+        shared.view(|v| {
+            v.autoplay = autoplay;
+            v.guide_seen = guide_seen;
+            v.storage.folder = crate::library::music_dir().display().to_string();
+        });
         Engine {
             shared,
             epoch,
@@ -2586,6 +2644,61 @@ impl Engine {
                 }
             },
         );
+    }
+
+    // ------------------------------------------------------------------ storage, Autoplay, the guide (stage 4a)
+
+    fn set_storage(&self, f: impl FnOnce(&mut StorageState)) {
+        self.shared.view(|v| f(&mut v.storage));
+        self.shared.tell(Change::Storage);
+    }
+
+    fn storage_count(self: &Rc<Self>) {
+        let dir = crate::library::music_dir();
+        self.set_storage(|s| {
+            s.folder = dir.display().to_string();
+            s.usage = None;
+        });
+        self.bg(move || crate::storage::usage(&dir), |e, u| e.set_storage(|s| s.usage = Some(u)));
+    }
+
+    fn move_music(self: &Rc<Self>, to: std::path::PathBuf) {
+        use radiance_core::words;
+        let from = crate::library::music_dir();
+        let to = crate::storage::target(&to);
+        self.toast(words::MOVING.to_string());
+        self.set_storage(|s| s.moving = true);
+        let (a, b) = (from.clone(), to.clone());
+        self.bg(
+            move || crate::storage::move_and_switch(&a, &b, crate::library::set_music_dir, |x, y| crate::db::relocate(x, y)),
+            move |e, result: Result<(usize, usize), String>| {
+                match result {
+                    Ok((moved, kept)) => {
+                        e.settings.borrow_mut().music_dir = Some(to.display().to_string());
+                        settings::save(&e.settings.borrow());
+                        *e.liked.borrow_mut() = crate::db::liked();
+                        e.publish_liked();
+                        e.toast(words::moved(moved, kept, &to.display().to_string()));
+                    }
+                    Err(why) => e.toast(words::couldnt_move(&why)),
+                }
+                e.set_storage(|s| s.moving = false);
+                e.storage_count();
+            },
+        );
+    }
+
+    fn set_autoplay(&self, on: bool) {
+        self.settings.borrow_mut().autoplay = on;
+        settings::save(&self.settings.borrow());
+        self.shared.view(|v| v.autoplay = on);
+        self.toast(if on { radiance_core::words::AUTOPLAY_ON } else { radiance_core::words::AUTOPLAY_OFF }.to_string());
+    }
+
+    fn set_guide_seen(&self) {
+        self.settings.borrow_mut().guide_seen = true;
+        settings::save(&self.settings.borrow());
+        self.shared.view(|v| v.guide_seen = true);
     }
 
     // ------------------------------------------------------------------ report and rating (stage 4a)

@@ -2407,7 +2407,7 @@ impl Ui {
             a.set_state(&on.to_variant());
             me.settings.borrow_mut().autoplay = on;
             settings::save(&me.settings.borrow());
-            me.toast(if on { "Autoplay on: when the queue ends, songs like the last one play on" } else { "Autoplay off: the music stops when the queue ends" });
+            me.toast(if on { radiance_core::words::AUTOPLAY_ON } else { radiance_core::words::AUTOPLAY_OFF });
             *me.autoplay_for.borrow_mut() = None;
             me.render_queue();
             me.autoplay_if_last();
@@ -6369,13 +6369,11 @@ impl Ui {
 
     /// Asks, then moves the library to `to` and points everything at it.
     fn confirm_move(self: &Rc<Self>, from: std::path::PathBuf, to: std::path::PathBuf) {
-        let to = if to.file_name().is_some_and(|n| n == "Radiance Music") { to } else { to.join("Radiance Music") };
-        let ask = adw::AlertDialog::new(
-            Some("Move your songs?"),
-            Some(&format!("Everything in\n{}\ngoes to\n{}\n\nOn the same drive it's instant; to another drive each file is copied, checked, then taken from the old place.", from.display(), to.display())),
-        );
+        use radiance_core::words;
+        let to = storage::target(&to);
+        let ask = adw::AlertDialog::new(Some(words::MOVE_TITLE), Some(&words::move_text(&from.display().to_string(), &to.display().to_string())));
         ask.add_response("cancel", "Cancel");
-        ask.add_response("move", "Move");
+        ask.add_response("move", words::MOVE);
         ask.set_response_appearance("move", adw::ResponseAppearance::Suggested);
         ask.set_close_response("cancel");
         let weak = Rc::downgrade(self);
@@ -6384,42 +6382,28 @@ impl Ui {
                 return;
             }
             let Some(me) = weak.upgrade() else { return };
-            me.toast("Moving your songs…");
+            me.toast(words::MOVING);
             let (a, b) = (from.clone(), to.clone());
             let back = Rc::downgrade(&me);
+            // the engine's sequence (the beta's too): files, folder, database, then what came meanwhile
             bg(
-                move || {
-                    let first = storage::move_library(&a, &b, |_, _| {});
-                    if first.is_ok() {
-                        library::set_music_dir(Some(b.clone()));
-                        crate::db::relocate(&a, &b);
-                        // anything written meanwhile (a split finishing) follows
-                        let _ = storage::move_library(&a, &b, |_, _| {});
-                    }
-                    first
-                },
+                move || storage::move_and_switch(&a, &b, library::set_music_dir, |x, y| crate::db::relocate(x, y)),
                 {
-                    let (to, from) = (to.clone(), from.clone());
-                    move |result| {
-                    let Some(me) = back.upgrade() else { return };
-                    match result {
-                        Ok((moved, kept)) => {
-                            me.settings.borrow_mut().music_dir = Some(to.display().to_string());
-                            settings::save(&me.settings.borrow());
-                            me.liked.replace(library::load());
-                            me.render_liked();
-                            me.toast(&if kept > 0 {
-                                format!("Moved {moved} files. {kept} already there were left as they were.")
-                            } else {
-                                format!("Moved {moved} files to {}", to.display())
-                            });
-                        }
-                        Err(e) => {
-                            library::set_music_dir(Some(from.clone()));
-                            me.toast(&format!("Couldn't move your songs: {e}"));
+                    let to = to.clone();
+                    move |result: Result<(usize, usize), String>| {
+                        let Some(me) = back.upgrade() else { return };
+                        match result {
+                            Ok((moved, kept)) => {
+                                me.settings.borrow_mut().music_dir = Some(to.display().to_string());
+                                settings::save(&me.settings.borrow());
+                                me.liked.replace(library::load());
+                                me.render_liked();
+                                me.toast(&words::moved(moved, kept, &to.display().to_string()));
+                            }
+                            Err(e) => me.toast(&words::couldnt_move(&e)),
                         }
                     }
-                }},
+                },
             );
         });
         ask.present(Some(&self.window));

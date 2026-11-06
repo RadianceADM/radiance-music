@@ -82,10 +82,16 @@ pub fn usage(dir: &Path) -> Usage {
         }
     }
     let data = glib::user_data_dir().join("radiance-music");
-    u.splitter = size_of(&data.join("demucs"));
+    u.splitter = splitter_size(&data);
     u.app = size_of(&data).saturating_sub(u.splitter) + size_of(&glib::user_cache_dir().join("radiance-music"));
     u.free = free_space(dir);
     u
+}
+
+/// This computer's splitter: Linux's Python with Demucs, Windows' pack and the fast split's files
+/// (the Windows two counted as App data before).
+pub fn splitter_size(data: &Path) -> u64 {
+    ["demucs", "windows-splitter", "two-part"].iter().map(|d| size_of(&data.join(d))).sum()
 }
 
 /// "1.4 GB", "820 MB", "12 KB".
@@ -141,9 +147,110 @@ pub fn move_library(from: &Path, to: &Path, report: impl Fn(usize, usize)) -> Re
     Ok((moved, kept))
 }
 
+/// Where the songs go when `chosen` is picked: "Radiance Music" inside it (unless it's that already).
+pub fn target(chosen: &Path) -> PathBuf {
+    if chosen.file_name().is_some_and(|n| n == "Radiance Music") {
+        chosen.to_path_buf()
+    } else {
+        chosen.join("Radiance Music")
+    }
+}
+
+/// Moves the songs' folder, as the GTK app's confirm_move (moved here, issue #45): every file,
+/// then the folder switched (`set_dir`) and the database's paths (`relocate`), then whatever was
+/// written meanwhile (a split finishing). On a failure the old folder stays the one used and the
+/// database isn't touched (files already moved stay where they went: the next move finds them).
+pub fn move_and_switch(from: &Path, to: &Path, set_dir: impl Fn(Option<PathBuf>), relocate: impl Fn(&Path, &Path)) -> Result<(usize, usize), String> {
+    match move_library(from, to, |_, _| {}) {
+        Ok(done) => {
+            set_dir(Some(to.to_path_buf()));
+            relocate(from, to);
+            let _ = move_library(from, to, |_, _| {});
+            Ok(done)
+        }
+        Err(e) => {
+            set_dir(Some(from.to_path_buf()));
+            Err(e)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::RefCell;
+
+    fn base(name: &str) -> PathBuf {
+        let b = std::env::temp_dir().join(format!("radiance-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&b);
+        b
+    }
+
+    /// The folder is "Radiance Music" inside the chosen one (unless that's it already).
+    #[test]
+    fn the_chosen_folder_gets_radiance_music() {
+        assert_eq!(target(Path::new("/d/Songs")), PathBuf::from("/d/Songs/Radiance Music"));
+        assert_eq!(target(Path::new("/d/Radiance Music")), PathBuf::from("/d/Radiance Music"));
+    }
+
+    /// The GTK app's sequence: the files, then the folder switched, then the database's paths.
+    #[test]
+    fn a_move_switches_the_folder_and_the_database() {
+        let b = base("switch");
+        let (from, to) = (b.join("old/Radiance Music"), b.join("new/Radiance Music"));
+        fs::create_dir_all(&from).unwrap();
+        fs::write(from.join("A.opus"), "a").unwrap();
+        let (dir, moved_db) = (RefCell::new(None), RefCell::new(None));
+        let got = move_and_switch(&from, &to, |d| *dir.borrow_mut() = d, |a, z| *moved_db.borrow_mut() = Some((a.to_path_buf(), z.to_path_buf())));
+        assert_eq!(got, Ok((1, 0)));
+        assert_eq!(*dir.borrow(), Some(to.clone()));
+        assert_eq!(*moved_db.borrow(), Some((from.clone(), to.clone())));
+        assert!(to.join("A.opus").exists());
+        let _ = fs::remove_dir_all(&b);
+    }
+
+    /// Final plan Review Focus 3: a move that fails keeps the old folder, the database untouched.
+    #[test]
+    fn a_failed_move_keeps_the_old_folder() {
+        let b = base("fail");
+        let from = b.join("old/Radiance Music");
+        fs::create_dir_all(&from).unwrap();
+        fs::write(from.join("A.opus"), "a").unwrap();
+        fs::write(b.join("blocked"), "a file where the folder would go").unwrap();
+        let to = b.join("blocked/Radiance Music");
+        let (dir, relocated) = (RefCell::new(None), RefCell::new(false));
+        let got = move_and_switch(&from, &to, |d| *dir.borrow_mut() = d, |_, _| *relocated.borrow_mut() = true);
+        assert!(got.is_err());
+        assert_eq!(*dir.borrow(), Some(from.clone()), "the old folder is the one used");
+        assert!(!*relocated.borrow(), "the database wasn't changed");
+        assert!(from.join("A.opus").exists());
+        let _ = fs::remove_dir_all(&b);
+    }
+
+    #[test]
+    fn files_written_during_a_move_follow_it() {
+        let b = base("follow");
+        let (from, to) = (b.join("old/Radiance Music"), b.join("new/Radiance Music"));
+        fs::create_dir_all(&from).unwrap();
+        fs::write(from.join("A.opus"), "a").unwrap();
+        // a split finishing while the database is moved writes into the old folder
+        let got = move_and_switch(&from, &to, |_| {}, |a, _| fs::write(a.join("A.vocals.ogg"), "v").unwrap());
+        assert_eq!(got, Ok((1, 0)));
+        assert!(to.join("A.vocals.ogg").exists(), "it followed");
+        let _ = fs::remove_dir_all(&b);
+    }
+
+    /// Windows' splitter pack and the fast split's files are this computer's splitter, not App data.
+    #[test]
+    fn the_windows_splitter_counts_as_the_splitter() {
+        let b = base("splitter");
+        for (dir, bytes) in [("demucs", 10usize), ("windows-splitter", 20), ("two-part", 30)] {
+            fs::create_dir_all(b.join(dir)).unwrap();
+            fs::write(b.join(dir).join("f"), vec![0u8; bytes]).unwrap();
+        }
+        assert_eq!(splitter_size(&b), 60);
+        let _ = fs::remove_dir_all(&b);
+    }
 
     #[test]
     fn moves_every_file_and_keeps_clashes() {

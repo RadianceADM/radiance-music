@@ -188,6 +188,27 @@ pub const HOW_TO_FIX: &str = "How to Fix It";
 
 /// A song's menu: splitting and lyrics.
 pub const SPLIT_TWO: &str = "Split: Music + Vocals (Fast)";
+/// Storage: moving the songs' folder (GTK's confirm_move).
+pub const MOVE_TITLE: &str = "Move your songs?";
+pub fn move_text(from: &str, to: &str) -> String {
+    format!("Everything in\n{from}\ngoes to\n{to}\n\nOn the same drive it's instant; to another drive each file is copied, checked, then taken from the old place.")
+}
+pub const MOVE: &str = "Move";
+pub const MOVING: &str = "Moving your songs…";
+pub fn moved(moved: usize, kept: usize, to: &str) -> String {
+    if kept > 0 {
+        format!("Moved {moved} files. {kept} already there were left as they were.")
+    } else {
+        format!("Moved {moved} files to {to}")
+    }
+}
+pub fn couldnt_move(e: &str) -> String {
+    format!("Couldn't move your songs: {e}")
+}
+/// Autoplay's toasts (GTK's win.autoplay).
+pub const AUTOPLAY_ON: &str = "Autoplay on: when the queue ends, songs like the last one play on";
+pub const AUTOPLAY_OFF: &str = "Autoplay off: the music stops when the queue ends";
+pub const AUTOPLAY: &str = "Autoplay When the Queue Ends";
 /// The rating pop-up's busy line (GTK's src/ui/feedback.rs).
 pub const RATE_GETTING_READY: &str = "Getting the sign-in ready…";
 pub const RATE_IN_BROWSER: &str = "Finish signing in with Google in your browser…";

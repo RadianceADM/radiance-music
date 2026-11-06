@@ -1404,6 +1404,63 @@ fn a_rating_without_sign_in_asks_for_one_then_sends() {
     c.quit();
 }
 
+// ------------------------------------------------------------------ storage, Autoplay, the guide (stage 4a)
+
+#[test]
+fn storage_counts_and_moves_the_songs() {
+    let _l = setup();
+    let (c, _f, rx) = with_songs("storage", vec![]);
+    let from = radiance_engine::library::music_dir();
+    std::fs::create_dir_all(&from).unwrap();
+    std::fs::write(from.join("Storage Song.opus"), vec![0u8; 1000]).unwrap();
+    c.storage_count();
+    assert!(until(3.0, || c.storage().usage.is_some()), "never counted");
+    assert_eq!(c.storage().folder, from.display().to_string());
+    let to = std::env::temp_dir().join(format!("rm-move-{}", std::process::id())).join("Radiance Music");
+    c.move_music(&to.display().to_string());
+    let toasts = toasts_for(&c, &rx, 3.0);
+    assert!(toasts.iter().any(|t| t.starts_with("Moved 1 files")), "{toasts:?}");
+    assert_eq!(radiance_engine::settings::load().music_dir, Some(to.display().to_string()));
+    assert!(until(2.0, || c.storage().folder == to.display().to_string()));
+    assert!(to.join("Storage Song.opus").exists());
+    // back where it was, for the other tests
+    c.move_music(&from.display().to_string());
+    let _ = toasts_for(&c, &rx, 3.0);
+    let mut st = radiance_engine::settings::load();
+    st.music_dir = None;
+    radiance_engine::settings::save(&st);
+    radiance_engine::library::set_music_dir(None);
+    let _ = std::fs::remove_dir_all(to.parent().unwrap());
+    c.quit();
+}
+
+#[test]
+fn autoplay_is_kept() {
+    let _l = setup();
+    let (c, _f, rx) = with_songs("autoplay", vec![]);
+    c.set_autoplay(false);
+    let toasts = toasts_for(&c, &rx, 2.0);
+    assert!(toasts.contains(&"Autoplay off: the music stops when the queue ends".to_string()), "{toasts:?}");
+    assert!(!radiance_engine::settings::load().autoplay);
+    assert!(!c.autoplay());
+    c.set_autoplay(true);
+    assert!(until(1.0, || radiance_engine::settings::load().autoplay));
+    c.quit();
+}
+
+#[test]
+fn the_guide_is_seen_once() {
+    let _l = setup();
+    let mut st = radiance_engine::settings::load();
+    st.guide_seen = false;
+    radiance_engine::settings::save(&st);
+    let (c, _f, _rx) = with_songs("guide", vec![]);
+    assert!(!c.guide_seen());
+    c.set_guide_seen();
+    assert!(until(1.0, || radiance_engine::settings::load().guide_seen && c.guide_seen()));
+    c.quit();
+}
+
 #[test]
 fn liked_songs_are_split_by_themselves() {
     let _l = setup();
