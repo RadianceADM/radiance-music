@@ -5,7 +5,8 @@
 #   powershell -File C:\rb\beta\src\windows\measure-cpu.ps1 -App beta|gtk [-Seconds 60]
 # -Video FILE (beta): FILE playing alone in the beta's video check (--video-probe), in front, then minimized.
 # -PlayTitle WORDS (beta): Home's recent song with WORDS in its title instead of the first (a music video, say).
-param([ValidateSet('beta', 'gtk')][string]$App = 'beta', [int]$Seconds = 60, [switch]$Short, [string]$Video = '', [string]$PlayTitle = '')
+# -Page NAME (beta): that page instead of Now Playing; -NoPlay: nothing played (the app idle).
+param([ValidateSet('beta', 'gtk')][string]$App = 'beta', [int]$Seconds = 60, [switch]$Short, [string]$Video = '', [string]$PlayTitle = '', [string]$Page = 'playing', [switch]$NoPlay)
 $ErrorActionPreference = 'Stop'
 Add-Type @'
 using System; using System.Runtime.InteropServices; using System.Collections.Generic;
@@ -37,8 +38,8 @@ set RADIANCE_SILENT=1
 "@
 if ($App -eq 'beta') {
     $name = 'RadianceMusicBeta'
-    $play = if ($PlayTitle) { "--play-title `"$PlayTitle`"" } else { '--play-test' }
-    $cmd = "@echo off`r`n$data`r`nstart `"`" `"C:\rb\beta\dist\RadianceMusicBeta.exe`" $play --page playing --size 1280x800"
+    $play = if ($NoPlay) { '' } elseif ($PlayTitle) { "--play-title `"$PlayTitle`"" } else { '--play-test' }
+    $cmd = "@echo off`r`n$data`r`nstart `"`" `"C:\rb\beta\dist\RadianceMusicBeta.exe`" $play --page $Page --size 1280x800"
     if ($Video) { $cmd = "@echo off`r`n$data`r`nstart `"`" `"C:\rb\beta\dist\RadianceMusicBeta.exe`" --video-probe `"$Video`" --size 1280x720" }
 } else {
     $name = 'radiance-music'
@@ -71,7 +72,7 @@ try {
     $p = Get-Process $name -ErrorAction SilentlyContinue | Where-Object { $before -notcontains $_.Id } | Sort-Object WorkingSet64 -Descending | Select-Object -First 1
     Write-Output "measuring $name, process $($p.Id), $([math]::Round($p.WorkingSet64 / 1MB)) MB"
     if (-not $p) { throw "$name didn't start" }
-    Cpu $p $(if ($Video) { 'a video in front' } else { 'Now Playing in front' })
+    Cpu $p $(if ($Video) { 'a video in front' } elseif ($Page -ne 'playing') { "$Page in front" } else { 'Now Playing in front' })
     if ($App -eq 'gtk' -or $Short) { return }
     $h = [Win]::Find([uint32]$p.Id)
     [Win]::ShowWindow($h, 6) | Out-Null   # SW_MINIMIZE

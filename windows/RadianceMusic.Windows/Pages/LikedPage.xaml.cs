@@ -109,6 +109,13 @@ public sealed partial class LikedPage : Page
     }
 
     /// <summary>The rail's letter picked: the list goes to the first song of it (or of the next letter that has one).</summary>
+    /// <summary>A search typed into the page's own box (DevActs: the screenshots), as a person's.</summary>
+    internal void SearchFor(string q)
+    {
+        box.Text = q;
+        debounce?.Poke(q);
+    }
+
     private void JumpTo(int letter)
     {
         if (page == null) return;

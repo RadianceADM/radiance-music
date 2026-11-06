@@ -202,6 +202,10 @@ public sealed partial class MainWindow : Window
         (Pages.Content as NowPlayingPage)?.SetFullscreen(on);
     }
 
+    /// <summary>The side panel and the page shown (DevActs: the screenshots).</summary>
+    internal Controls.QueuePanel SidePanel => side;
+    internal object? Page => Pages.Content;
+
     /// <summary>For the screenshots' log: the panel's open state, mode and tabs.</summary>
     public string SideState => $"open {Side.IsPaneOpen}, {Side.DisplayMode}, tab {side.Tab}, lyrics tab {side.HasLyrics}, page {Pages.Content?.GetType().Name}";
 

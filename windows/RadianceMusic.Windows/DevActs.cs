@@ -15,6 +15,8 @@ namespace RadianceMusic;
 ///   group:KIND:NAME   an album's, artist's or genre's songs (KIND: albums, artists, genres)
 ///   switch:video|song the music video or the song (the art's button); fullscreen: the video fullscreen
 ///   wait:N        N seconds more before the next step (Shot)
+///   liked-search:TEXT  typed into Liked Songs' own search; queue-move:FROM:TO  the queue's drop
+///   (rows of its list); queue-menu:N  that queue row's menu
 /// </summary>
 internal static class DevActs
 {
@@ -29,6 +31,9 @@ internal static class DevActs
             "click" => window.Content?.XamlRoot is { } xr && Click(xr, window.Content, arg),
             "group" => Group(window, arg),
             "switch" => Switch(arg),
+            "liked-search" => window.Page is Pages.LikedPage liked && Do(() => liked.SearchFor(arg)),
+            "queue-move" => arg.Split(':') is [var a, var b] && int.TryParse(a, out var from) && int.TryParse(b, out var to) && window.SidePanel.Drop(from, to),
+            "queue-menu" => int.TryParse(arg, out var row) && window.SidePanel.OpenMenu(row),
             "fullscreen" => Fullscreen(window),
             _ => false,
         };
@@ -42,6 +47,12 @@ internal static class DevActs
         if (parts.Length != 2) return false;
         var kind = parts[0] switch { "albums" => Native.GroupKind.Albums, "artists" => Native.GroupKind.Artists, _ => Native.GroupKind.Genres };
         window.Show("group", (kind, parts[1]));
+        return true;
+    }
+
+    private static bool Do(Action a)
+    {
+        a();
         return true;
     }
 

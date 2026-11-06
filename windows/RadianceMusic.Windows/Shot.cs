@@ -28,6 +28,7 @@ internal static class Shot
         Crash.Note($"shot: {dev.Page} {dev.Width}x{dev.Height}, in {dev.Wait} s");
         window.Show(dev.Page);
         if (dev.Search != null) window.SearchFor(dev.Search);
+        if (dev.Acts.Count > 0) Crash.Note("shot: queue before the steps: " + window.SidePanel.Titles());
         foreach (var act in dev.Acts)
         {
             await Task.Delay(1500);
@@ -37,6 +38,7 @@ internal static class Shot
         }
         await Task.Delay(TimeSpan.FromSeconds(dev.Wait));
         var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(window);
+        if (dev.Acts.Count > 0) Crash.Note("shot: queue after the steps: " + window.SidePanel.Titles());
         Win32.SetForegroundWindow(hwnd);
         await Task.Delay(300);
         // opened in front, as a click on the bar's button does (over the page, the panel closes when the window loses focus)

@@ -29,6 +29,14 @@ internal static class SongMenu
     /// <summary>Each row's menu, as its right-click opens it (DevActs' "menu": the screenshots).</summary>
     private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<FrameworkElement, Action> Openers = new();
 
+    /// <summary>That row's menu, as its right-click opens it (DevActs: the screenshots).</summary>
+    public static bool Open(FrameworkElement row)
+    {
+        if (!Openers.TryGetValue(row, out var open)) return false;
+        open();
+        return true;
+    }
+
     /// <summary>The menu of the song row highest on screen under `root`.</summary>
     public static bool OpenFirst(UIElement root)
     {

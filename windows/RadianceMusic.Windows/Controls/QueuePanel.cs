@@ -23,6 +23,23 @@ internal sealed class QueuePanel : Grid
     private string shown = "-";
     private object? dragged;
     private int dragFrom = -1;
+    /// <summary>The queue's list as drawn now (made again on each change).</summary>
+    private ListView? nextList;
+
+    /// <summary>What a drag ends in, for the screenshots (--act queue-move): row `from` dropped at `to`.</summary>
+    internal bool Drop(int from, int to)
+    {
+        if (nextList is not { } l || from < 0 || from >= l.Items.Count || l.Items[from] is not SongRow r) return false;
+        if (QueueDrop.Map(first, from, to) is not { } m) return false;
+        hub.Engine.MoveInQueue(m.From, m.To, r.Key);
+        return true;
+    }
+
+    /// <summary>Row `i`'s menu (--act queue-menu:N).</summary>
+    internal bool OpenMenu(int i) => nextList is { } l && i >= 0 && i < l.Items.Count && l.Items[i] is SongRow r && SongMenu.Open(r);
+
+    /// <summary>The queue's songs, as drawn (the screenshots' log).</summary>
+    internal string Titles() => nextList == null ? "" : string.Join(" | ", nextList.Items.OfType<SongRow>().Select(r => r.Title));
     private uint first;
 
     public QueuePanel(EngineHub hub)
@@ -133,6 +150,7 @@ internal sealed class QueuePanel : Grid
             first = p.Start + 1;
         }
         var next = List();
+        nextList = next;
         next.CanReorderItems = true;
         next.CanDragItems = true;
         next.AllowDrop = true;
