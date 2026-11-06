@@ -151,7 +151,8 @@ public sealed partial class NowPlayingPage : Page
         QualityText.Text = now.Quality.Length > 0 ? now.Quality : now.Lossless ? "Lossless · FLAC" : "Compressed · Opus";
         // a music video on the panel; the switch between the song and its video (either way)
         ShowVideo(hub.Engine.VideoSwapchain());
-        VideoButton.Visibility = now.HasCounterpart || now.Video ? Visibility.Visible : Visibility.Collapsed;
+        // only where the other version was found: a video with no song (a cover, say) has nowhere to go
+        VideoButton.Visibility = now.HasCounterpart ? Visibility.Visible : Visibility.Collapsed;
         VideoIcon.Glyph = now.Video ? "\uEC4F" : "\uE714";
         ToolTipService.SetToolTip(VideoButton, now.Video ? "Back to the song" : "Watch the music video");
         FullscreenButton.Visibility = shown != 0 ? Visibility.Visible : Visibility.Collapsed;
