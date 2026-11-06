@@ -1,4 +1,5 @@
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Controls.Primitives;
 using Microsoft.UI.Xaml.Input;
@@ -12,7 +13,8 @@ namespace RadianceMusic.Controls;
 /// Shuffle, Previous, Play, Next, Repeat with the times and the seek bar in the middle; mute and the
 /// volume at the end, with the heart, Lyrics and Queue. Where the end can't hold it all the volume
 /// slider shrinks, then goes (BarFit: the heart stays); under 600 the bar keeps only the song and
-/// Previous/Play/Next.
+/// Previous/Play/Next. A click on the song opens Now Playing (#54); the quality pill says "Loading…" until a
+/// song plays (#55), and where there's no room for it, the names' line says it instead.
 /// </summary>
 internal sealed class PlayerBar : Grid
 {
@@ -32,6 +34,9 @@ internal sealed class PlayerBar : Grid
     private readonly TextBlock at = new() { Style = (Style)Application.Current.Resources["CaptionTextBlockStyle"], Foreground = (Brush)Application.Current.Resources["TextFillColorSecondaryBrush"], VerticalAlignment = VerticalAlignment.Center, MinWidth = 36, TextAlignment = TextAlignment.Right };
     private readonly TextBlock length = new() { Style = (Style)Application.Current.Resources["CaptionTextBlockStyle"], Foreground = (Brush)Application.Current.Resources["TextFillColorSecondaryBrush"], VerticalAlignment = VerticalAlignment.Center, MinWidth = 36 };
     private readonly StackPanel songWords;
+    private readonly Border qualityPill = new() { CornerRadius = new CornerRadius(4), Padding = new Thickness(8, 2, 8, 2), VerticalAlignment = VerticalAlignment.Center, MaxWidth = BarFit.Pill, Visibility = Visibility.Collapsed };
+    private readonly TextBlock qualityText = new() { Style = (Style)Application.Current.Resources["CaptionTextBlockStyle"], TextTrimming = TextTrimming.CharacterEllipsis, TextWrapping = TextWrapping.NoWrap };
+    private bool pillRoom;
     private bool setting;
     private string artFor = "";
 
@@ -59,7 +64,25 @@ internal sealed class PlayerBar : Grid
         start.Children.Add(art);
         SetColumn(songWords, 1);
         start.Children.Add(songWords);
-        Children.Add(start);
+        // the song opens Now Playing, as the Linux bar's (a button: the keyboard and Narrator reach it too)
+        var open = new Button
+        {
+            Content = start,
+            Padding = new Thickness(4),
+            Margin = new Thickness(-4),
+            BorderThickness = new Thickness(0),
+            Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent),
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            HorizontalContentAlignment = HorizontalAlignment.Stretch,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        ToolTipService.SetToolTip(open, "Open Now Playing");
+        AutomationProperties.SetName(open, "Open Now Playing");
+        open.Click += (_, _) =>
+        {
+            if (hub.Engine.Now().Song != null) App.Window?.Show("playing");
+        };
+        Children.Add(open);
 
         // the controls and the seek bar
         shuffle = Round(new FontIcon { Glyph = "\uE8B1", FontSize = 15 }, "Shuffle", () => hub.Engine.SetShuffle(!hub.Engine.Now().Shuffle));
@@ -102,9 +125,12 @@ internal sealed class PlayerBar : Grid
         var lyricsButton = Round(new FontIcon { Glyph = "\uE8D2", FontSize = 15 }, "Lyrics", () => App.Window?.ToggleSide("lyrics"));
         var queueButton = Round(new FontIcon { Glyph = "\uE8FD", FontSize = 15 }, "Queue: what plays next", () => App.Window?.ToggleSide("queue"));
         var end = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Center };
+        qualityPill.Background = (Brush)Application.Current.Resources["ControlFillColorSecondaryBrush"];
+        qualityPill.Child = qualityText;
         end.Children.Add(heart);
         end.Children.Add(mute);
         end.Children.Add(volume);
+        end.Children.Add(qualityPill);
         end.Children.Add(lyricsButton);
         end.Children.Add(queueButton);
         SetColumn(end, 2);
@@ -149,6 +175,20 @@ internal sealed class PlayerBar : Grid
         volume.Visibility = slider > 0 ? Visibility.Visible : Visibility.Collapsed;
         var phone = width < Phone ? Visibility.Collapsed : Visibility.Visible;
         foreach (var e in new UIElement[] { shuffle, repeat, mute, byline, at, length }) e.Visibility = phone;
+        pillRoom = BarFit.Quality(width - Padding.Left - Padding.Right - 2 * ColumnSpacing);
+        ShowQuality();
+    }
+
+    /// <summary>What's playing, or "Loading…" (the engine's words): in the pill where there's room, else
+    /// "Loading…" on the names' line while the song starts (the byline is back once it plays).</summary>
+    private void ShowQuality()
+    {
+        var now = hub.Engine.Now();
+        var song = now.Song;
+        qualityText.Text = now.Quality;
+        ToolTipService.SetToolTip(qualityPill, now.Quality.Length > 0 ? now.Quality : null);
+        qualityPill.Visibility = pillRoom && song != null && now.Quality.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
+        byline.Text = now.Loading && !pillRoom ? now.Quality : song?.Byline ?? "";
     }
 
     /// <summary>Mute or not (the engine's: the volume kept as it was, never louder on unmute).</summary>
@@ -159,7 +199,7 @@ internal sealed class PlayerBar : Grid
         var now = hub.Engine.Now();
         var song = now.Song;
         title.Text = song?.Title ?? "Nothing playing";
-        byline.Text = song?.Byline ?? "";
+        ShowQuality();
         foreach (var c in new Control[] { play, previous, bar, heart }) c.IsEnabled = song != null;
         heartIcon.Glyph = now.Liked ? "\uEB52" : "\uEB51";
         heartIcon.Foreground = now.Liked ? (Brush)Application.Current.Resources["SystemFillColorCriticalBrush"] : (Brush)Application.Current.Resources["TextFillColorPrimaryBrush"];

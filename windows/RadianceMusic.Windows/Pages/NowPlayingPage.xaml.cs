@@ -162,9 +162,10 @@ public sealed partial class NowPlayingPage : Page
         }
         SongTitle.Text = song.Title;
         Byline.Text = song.Byline;
-        // the GTK app's quality line (core::quality's words, from the engine)
-        Quality.Visibility = full ? Visibility.Collapsed : Visibility.Visible;
-        QualityText.Text = now.Quality.Length > 0 ? now.Quality : now.Lossless ? "Lossless · FLAC" : "Compressed · Opus";
+        // the GTK app's quality line (core::quality's words, from the engine): "Loading…" until it plays (#55),
+        // none while nothing does (stopped, or last time's song, paused), as the Linux app hides it
+        Quality.Visibility = full || now.Quality.Length == 0 ? Visibility.Collapsed : Visibility.Visible;
+        QualityText.Text = now.Quality;
         // a music video on the panel; the switch between the song and its video (either way)
         ShowVideo(hub.Engine.VideoSwapchain());
         // only where the other version was found: a video with no song (a cover, say) has nowhere to go

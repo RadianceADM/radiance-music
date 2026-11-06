@@ -11,7 +11,7 @@ namespace RadianceMusic;
 /// the shot, done by the app itself, so no clicks or keys go to the owner's desktop:
 ///   like:TITLE    likes Home's recent song of that title (if it isn't already)
 ///   menu          opens the menu of the song row highest on screen
-///   click:TEXT    presses the button or menu item whose words start with TEXT (a menu's or dialog's first)
+///   click:TEXT    presses the button or menu item whose words (or Narrator name) start with TEXT (a menu's or dialog's first)
 ///   group:KIND:NAME   an album's, artist's or genre's songs (KIND: albums, artists, genres)
 ///   switch:video|song the music video or the song (the art's button); fullscreen: the video fullscreen
 ///   wait:N        N seconds more before the next step (Shot)
@@ -100,7 +100,7 @@ internal static class DevActs
         {
             case MenuFlyoutSubItem sub when sub.Text.StartsWith(text): return sub;
             case MenuFlyoutItem item when item.Text.StartsWith(text): return item;
-            case Button b when Words(b).StartsWith(text): return b;
+            case Button b when Words(b).StartsWith(text) || Microsoft.UI.Xaml.Automation.AutomationProperties.GetName(b).StartsWith(text): return b;
         }
         for (var i = 0; i < VisualTreeHelper.GetChildrenCount(at); i++)
             if (Find(VisualTreeHelper.GetChild(at, i), text) is { } found) return found;

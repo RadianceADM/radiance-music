@@ -16,6 +16,8 @@ pub enum Heard<'a> {
     Server { format: &'a str },
     /// A YouTube stream (`kbps` 0: not known).
     Opus { kbps: u32 },
+    /// Picked, its sound not flowing yet (the stream being found, or the file opening).
+    Loading,
 }
 
 /// "44.1 kHz", "96 kHz".
@@ -39,6 +41,7 @@ pub fn text(h: Heard) -> String {
         Heard::Server { format } => format!("Compressed · {format}"),
         Heard::Opus { kbps: 0 } => "Compressed · Opus".into(),
         Heard::Opus { kbps } => format!("Compressed · Opus · {kbps} kbps"),
+        Heard::Loading => "Loading…".into(),
     }
 }
 
@@ -57,6 +60,7 @@ mod tests {
         assert_eq!(text(Heard::Server { format: "AAC" }), "Compressed · AAC");
         assert_eq!(text(Heard::Opus { kbps: 128 }), "Compressed · Opus · 128 kbps");
         assert_eq!(text(Heard::Opus { kbps: 0 }), "Compressed · Opus");
+        assert_eq!(text(Heard::Loading), "Loading…");
     }
 
     #[test]

@@ -26,6 +26,19 @@ internal static class Shot
     private static async Task Take(MainWindow window, Dev dev)
     {
         Crash.Note($"shot: {dev.Page} {dev.Width}x{dev.Height}, in {dev.Wait} s");
+        // --splash-at: the start's sunrise at those seconds on its own clock (FILE-splash-S.png)
+        if (dev.SplashAt.Count > 0 && window.Splash is { } splash)
+        {
+            var front = WinRT.Interop.WindowNative.GetWindowHandle(window);
+            Win32.SetForegroundWindow(front);
+            foreach (var at in dev.SplashAt.OrderBy(a => a))
+            {
+                while (splash.Elapsed < at && !splash.Finished) await Task.Delay(10);
+                var file = Path.ChangeExtension(dev.Shot!, null) + $"-splash-{at.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture)}.png";
+                Crash.Note($"shot: the sunrise at {splash.Elapsed:0.00} s");
+                await Save(front, file);
+            }
+        }
         window.Show(dev.Page);
         if (dev.Search != null) window.SearchFor(dev.Search);
         if (dev.Acts.Count > 0) Crash.Note("shot: queue before the steps: " + window.SidePanel.Titles());

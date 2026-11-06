@@ -60,12 +60,16 @@ public partial class App : Application
         Hub = EngineHub.Start(ui);
         Trace("engine started");
         Window = new MainWindow(Hub);
+        // the sunrise while it gets ready, as the Linux app's start (#55); not in screenshots unless asked
+        if (Program.Dev.Shot == null || Program.Dev.SplashAt.Count > 0) Window.CoverWithSplash(Program.Dev.SplashAt.Count > 0);
         Window.Activate();
         Trace("window shown");
         var icon = Path.Combine(AppContext.BaseDirectory, "radiance-music.ico");
         tray = new Tray(Hub, icon);
         keys = new MediaKeys(Hub, WinRT.Interop.WindowNative.GetWindowHandle(Window));
         Trace($"tray icon added: {tray.Added}; media keys: on");
+        // ready: the engine runs on its own thread and the pages are built (the sun settles once it has shown)
+        Window.Splash?.Ready();
         if (Program.Dev.Shot != null) _ = Shot.TakeAsync(Window, Program.Dev);
         if (Program.Dev.PlayTest && Hub.Engine.Home().Recent is { Length: > 0 } recent)
         {

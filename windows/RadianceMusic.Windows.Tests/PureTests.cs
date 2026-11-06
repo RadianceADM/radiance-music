@@ -186,6 +186,13 @@ public class BarFitTests
 
     [Fact]
     public void ANarrowBarLetsItGo() => Assert.Equal(0, BarFit.Volume(796)); // an 860 px window
+
+    // the quality pill ("Loading…", then what's playing, as the Linux bar's): only where the whole slider fits beside it
+    [Fact]
+    public void AMaximizedBarHasRoomForTheQuality() => Assert.True(BarFit.Quality(1856)); // a 1920 px window
+
+    [Fact]
+    public void A1400BarKeepsTheSliderInstead() => Assert.False(BarFit.Quality(1336));
 }
 
 /// <summary>Now Playing's art: the square cover, or a video wider (16:9, as the GTK app's) within the room it has.</summary>
@@ -223,4 +230,96 @@ public class LeadCheckTests
 
     [Fact]
     public void InSightStartsTheCountAgain() => Assert.Equal((0, false), LeadCheck.Step(lit: 3, inSight: true, misses: 1));
+}
+
+/// <summary>The start's sunrise (the Linux app's splash.rs and its numbers, #55): the sun holds at least 1.4 s,
+/// settles once the app is ready (or after 10 s), the logo writes itself, the app shows, then the dark opens.</summary>
+public class SplashTimelineTests
+{
+    private static SplashTimeline At(SplashTimeline line, params double[] frames)
+    {
+        foreach (var t in frames) line.Frame(t);
+        return line;
+    }
+
+    [Fact]
+    public void TheSunHoldsUntilItHasShownEvenWhenReady()
+    {
+        var line = new SplashTimeline();
+        line.SetReady();
+        At(line, 0, 0.5, 1.0);
+        Assert.Null(line.SettleFrom);
+        At(line, 1.4);
+        Assert.Equal(1.4, line.SettleFrom);
+    }
+
+    [Fact]
+    public void ItSettlesAfterTenSecondsReadyOrNot()
+    {
+        var line = At(new SplashTimeline(), 0, 5, 9.9);
+        Assert.Null(line.SettleFrom);
+        At(line, 10);
+        Assert.Equal(10, line.SettleFrom);
+    }
+
+    [Fact]
+    public void TheAppShowsOnceTheLogoIsWrittenThenTheDarkOpens()
+    {
+        var line = new SplashTimeline();
+        line.SetReady();
+        At(line, 0, 1.4, 3.7);
+        Assert.False(line.ContentShown);
+        At(line, 3.8); // 1.4 + 0.35 + 0.3 + 1.75: written
+        Assert.True(line.ContentShown);
+        At(line, 4.0, 4.1);
+        Assert.Null(line.FadeFrom); // it stays a moment (0.35 s)
+        At(line, 4.2);
+        Assert.Equal(4.2, line.FadeFrom);
+        Assert.False(line.Done);
+        At(line, 5.2); // 0.9 s later: the app alone
+        Assert.True(line.Done);
+    }
+
+    [Fact]
+    public void AClickGoesStraightInOnlyOnceReady()
+    {
+        var line = At(new SplashTimeline(), 0, 0.5);
+        line.Skip();
+        Assert.Null(line.FadeFrom);
+        line.SetReady();
+        At(line, 0.6);
+        line.Skip();
+        Assert.Equal(0.6, line.FadeFrom);
+        Assert.True(line.ContentShown);
+    }
+
+    [Fact]
+    public void TheLogoWritesItselfStrokeByStroke()
+    {
+        var line = new SplashTimeline();
+        line.SetReady();
+        At(line, 0, 1.4);
+        At(line, 1.4 + 0.35 + 0.3 + 0.65); // the R written, the leg just begun, no tail yet
+        var (r, leg, tail) = line.Strokes;
+        Assert.Equal(1, r, 3);
+        Assert.InRange(leg, 0.001, 0.2);
+        Assert.Equal(0, tail);
+        Assert.Equal(0, line.Name);
+        At(line, 1.4 + 0.35 + 0.3 + 1.7); // all of it, and the name under it
+        Assert.Equal((1.0, 1.0, 1.0), line.Strokes);
+        Assert.Equal(1, line.Name, 3);
+    }
+
+    [Fact]
+    public void TheSunRisesAndItsBarsPlayUntilTheySettle()
+    {
+        var line = At(new SplashTimeline(), 0.5);
+        Assert.InRange(line.Rise, 0.4, 0.6);
+        Assert.Equal(0, line.Play);
+        At(line, 1.2);
+        Assert.Equal(1, line.Play, 3);
+        line.SetReady();
+        At(line, 1.4, 1.4 + 0.35);
+        Assert.Equal(0, line.Play, 3); // at rest
+    }
 }

@@ -7,6 +7,8 @@ namespace RadianceMusic;
 public static class BarFit
 {
     public const double Slider = 120, MinSlider = 60, Middle = 640;
+    /// <summary>The quality pill's widest ("Loading…", then what's playing, as the Linux bar's), and its gap.</summary>
+    public const double Pill = 200, PillGap = 6;
     /// <summary>The four buttons and their four gaps (the slider's own included).</summary>
     public const double EndWithoutSlider = 4 * 36 + 4 * 6;
 
@@ -19,4 +21,7 @@ public static class BarFit
         var room = Math.Min(Slider, Math.Floor(Side(inner) - EndWithoutSlider));
         return room >= MinSlider ? room : 0;
     }
+
+    /// <summary>The quality pill shows: only where the whole slider fits beside it (the Linux bar hides it on smaller windows too).</summary>
+    public static bool Quality(double inner) => Side(inner) >= EndWithoutSlider + Slider + Pill + PillGap;
 }

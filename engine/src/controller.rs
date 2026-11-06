@@ -187,8 +187,11 @@ pub struct NowState {
     pub video: bool,
     /// The song's other version is known (the video button: its music video, or back to the song).
     pub has_counterpart: bool,
-    /// What's really playing, in the Linux app's words ("Lossless · FLAC · 24-bit · 96 kHz").
+    /// What's really playing, in the Linux app's words ("Lossless · FLAC · 24-bit · 96 kHz");
+    /// "Loading…" while `loading`; empty when nothing is (a song that stopped, or last time's, paused).
     pub quality: String,
+    /// Picked and not playing yet: its stream being found, or its sound not flowing yet (#55).
+    pub loading: bool,
 }
 
 /// Milliseconds on the engine's monotonic clock (NowState::since's).
@@ -833,6 +836,8 @@ struct Engine {
     swapchain: Cell<u64>,
     /// What's really playing, in words (NowState::quality).
     quality: RefCell<String>,
+    /// The song picked hasn't started yet (NowState::loading).
+    loading: Cell<bool>,
 }
 
 /// A music video's streams, as found (through the relay).
@@ -891,6 +896,7 @@ impl Engine {
             video_height: Cell::new(0),
             swapchain: Cell::new(0),
             quality: RefCell::default(),
+            loading: Cell::new(false),
         }
     }
 
@@ -1133,7 +1139,9 @@ impl Engine {
                 p.stop(); // not the last song under this one's name while it's found
             }
         }
-        self.update_quality();
+        // "Loading…" until its sound flows (the Ready event), as the Linux app's bar says it
+        self.loading.set(true);
+        *self.quality.borrow_mut() = quality::text(Heard::Loading);
         if video {
             self.play_video(&t, gen);
         } else if let Some(f) = &t.file {
@@ -1291,6 +1299,7 @@ impl Engine {
                     self.switching.replace(None); // the video plays: no way back needed
                     self.swapchain.set(p.video_swapchain()); // (the sink may make it only once it plays)
                 }
+                self.loading.set(false);
                 self.update_quality();
                 self.publish_now();
             }
@@ -1347,6 +1356,9 @@ impl Engine {
         if let Some(p) = self.player.borrow().as_ref() {
             p.stop();
         }
+        // stopped: nothing's loading or playing (never "Loading…" for ever, the Linux app's 2026-10-31 audit)
+        self.loading.set(false);
+        self.quality.borrow_mut().clear();
         self.say(trouble::cant_play_text(title, reason, fails, every_song), true);
         self.publish_now();
     }
@@ -1616,8 +1628,7 @@ impl Engine {
         match out {
             Some(Ok(v)) => {
                 self.swapchain.set(v.swapchain);
-                self.update_quality();
-                self.publish_now();
+                self.publish_now(); // still "Loading…": what it is once it plays (Ready)
             }
             Some(Err(why)) => {
                 if !self.back_from_video(&why) {
@@ -2043,6 +2054,7 @@ impl Engine {
             video,
             has_counterpart: song.as_ref().is_some_and(|t| self.counterpart.borrow().as_ref().is_some_and(|(k, _)| *k == t.key())),
             quality: self.quality.borrow().clone(),
+            loading: self.loading.get() && song.is_some(),
             song,
         };
         drop(q);

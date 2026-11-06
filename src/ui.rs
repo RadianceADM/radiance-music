@@ -5305,7 +5305,7 @@ impl Ui {
             });
         });
         self.set_backdrop(&source);
-        self.set_quality(Some("Loading…"), false);
+        self.set_quality(Some(&quality::text(Heard::Loading)), false);
         self.seek.set_range(0.0, t.seconds.max(1) as f64);
         self.seek.set_value(0.0);
         self.pos.set_label("0:00");

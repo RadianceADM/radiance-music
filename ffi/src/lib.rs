@@ -175,8 +175,11 @@ pub struct NowView {
     pub video: bool,
     /// The song's other version is known: show the video button.
     pub has_counterpart: bool,
-    /// What's really playing, in the Linux app's words ("Lossless · FLAC · 24-bit · 96 kHz").
+    /// What's really playing, in the Linux app's words ("Lossless · FLAC · 24-bit · 96 kHz"); "Loading…"
+    /// while `loading`; empty when nothing is (stopped, or last time's song, paused).
     pub quality: String,
+    /// Picked and not playing yet (#55).
+    pub loading: bool,
 }
 
 /// What went wrong; `retry`: it stopped (show Try Again).
@@ -375,6 +378,7 @@ impl MusicEngine {
             video: n.video,
             has_counterpart: n.has_counterpart,
             quality: n.quality,
+            loading: n.loading,
         }
     }
 

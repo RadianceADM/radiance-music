@@ -488,6 +488,42 @@ fn next_while_picked_up_starts_the_next_song_from_its_start() {
     again.quit();
 }
 
+/// A song says "Loading…" (bar and Now Playing, as the Linux app) from its pick until its sound
+/// flows, then what's really playing (#55, owner: "ay asan yung loading???").
+#[test]
+fn a_song_says_loading_until_its_sound_flows() {
+    let _l = setup();
+    let mut slow = song(Source::YouTube, "slow-load", "Slow to load");
+    slow.seconds = 2;
+    let (c, fake, _rx) = with_songs("files loading", vec![slow, wav("loading-file", 2.0)]);
+    // (a stream plays through the relay, which a test's file can't: this one is only ever being found)
+    fake.streams.lock().unwrap().insert("slow-load".into(), (Duration::from_millis(3000), Err("still looking".into())));
+    c.play_from(ListRef::Songs, 0, "yt:slow-load");
+    assert!(until(0.5, || now_id(&c) == "slow-load"), "never picked");
+    let n = c.now();
+    assert!(n.loading, "not loading while its stream is found");
+    assert_eq!(n.quality, "Loading…");
+    assert!(!n.playing);
+    c.play_from(ListRef::Songs, 1, "yt:file-loading-file");
+    assert!(until(4.0, || now_id(&c) == "file-loading-file" && c.now().playing && !c.now().loading), "still loading after it played");
+    assert_eq!(c.now().quality, "Compressed · Opus");
+    c.quit();
+}
+
+/// One that stops for good (Try Again) isn't left saying "Loading…" (the Linux app's 2026-10-31
+/// audit: "Loading…" for ever): nothing is said until it plays.
+#[test]
+fn a_song_that_stops_for_good_isnt_left_loading() {
+    let _l = setup();
+    let gone: Vec<Track> = (1..=3).map(|i| song(Source::YouTube, &format!("stuck{i}"), &format!("Stuck {i}"))).collect();
+    let (c, _f, _rx, list) = with_list("files stuck", gone);
+    c.play_from(list.clone(), 0, "yt:stuck1");
+    assert!(until(6.0, || c.problem().is_some_and(|p| p.retry)), "never stopped");
+    assert!(!c.now().loading);
+    assert_eq!(c.now().quality, "");
+    c.quit();
+}
+
 #[test]
 fn try_again_starts_over_after_three_failures() {
     let _l = setup();

@@ -95,6 +95,11 @@ public sealed partial class MainWindow : Window
         Show("home");
     }
 
+    /// <summary>The start's sunrise over the whole window (#55; none with animations off, or for screenshots unless --splash-at).</summary>
+    internal Controls.Splash? Splash { get; private set; }
+
+    internal void CoverWithSplash(bool forShots) => Splash = Controls.Splash.Cover(Root, forShots);
+
     /// <summary>A page by name: "home", "search", "playing", "liked", "history", "albums", "artists",
     /// "genres", "group" (`what`: (GroupKind, name)), "playlist:{id}", "new-playlist".</summary>
     public void Show(string name, object? subject = null)
