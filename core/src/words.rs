@@ -212,6 +212,33 @@ pub fn found_lyrics_again(timed: bool) -> &'static str {
     if timed { "New lyrics, every word timed to the singing" } else { "New lyrics found" }
 }
 
+/// The Splits tab (the Linux app's split queue).
+pub const SPLITS_TAB: &str = "Splits";
+pub const SPLITTING_NOW_HEADING: &str = "Splitting now";
+pub const NOTHING_TO_SPLIT: &str = "Nothing to split";
+pub const SPLITS_NOTE: &str = "Liked songs are split one after another, by themselves.";
+pub fn in_line(n: usize, byline: &str) -> String {
+    format!("Number {n} in line · {byline}")
+}
+pub const PAUSE_SPLITTING: &str = "Pause Splitting";
+pub const SPLITTING_DIALOG: &str = "Splitting…";
+pub const TRY_AGAIN: &str = "Try Again";
+
+/// The lyrics editor (the Linux app's).
+pub const EDITOR_NOTE: &str = "Each line: when it starts, its words, who sings it. Saved as yours: never replaced by a lookup. Once the song is split, every word gets its own time.";
+pub const ADD_LINE: &str = "Add Line";
+pub const PASTE_LYRICS: &str = "Paste Lyrics";
+pub const PASTE_TIP: &str = "Lines from the clipboard (one per line), in place of these";
+pub const TAP_TIMING: &str = "Tap Timing";
+pub const TAP_TIP: &str = "Play the song and press Enter as each line starts: it gets the time, and the next line is chosen";
+pub const REMOVE_LINE_TIP: &str = "Remove this line";
+pub const START_TIP: &str = "When the line starts. Click while the song plays to set it to now.";
+pub const SINGER_TIP: &str = "Who sings this line";
+pub const NOBODY_SET: &str = "Nobody set";
+pub const ADD_SINGER: &str = "Add a singer";
+pub const LINE_PLACEHOLDER: &str = "The words of this line";
+pub const SAVE: &str = "Save";
+
 /// Split by hand (the menu): what's happening, and how long it takes.
 pub fn split_two_toast(title: &str) -> String {
     format!("Splitting “{title}” into Music and Vocals: a few seconds")
@@ -265,6 +292,16 @@ mod tests {
         assert_eq!(BROWSE[0], ("Pinoy hip-hop", "pinoy hip hop"));
         assert_eq!(BROWSE[11], ("Reggae", "reggae"));
         assert_eq!(ROW_CARDS, 20);
+    }
+
+    #[test]
+    fn the_splits_tab_and_editor_say_it_as_the_linux_app() {
+        assert_eq!(in_line(2, "Ann · Blue"), "Number 2 in line · Ann · Blue");
+        assert_eq!((SPLITTING_NOW_HEADING, NOTHING_TO_SPLIT, PAUSE_SPLITTING), ("Splitting now", "Nothing to split", "Pause Splitting"));
+        assert_eq!(SPLITS_NOTE, "Liked songs are split one after another, by themselves.");
+        assert_eq!((ADD_LINE, PASTE_LYRICS, TAP_TIMING, NOBODY_SET, ADD_SINGER), ("Add Line", "Paste Lyrics", "Tap Timing", "Nobody set", "Add a singer"));
+        assert_eq!(TAP_TIP, "Play the song and press Enter as each line starts: it gets the time, and the next line is chosen");
+        assert_eq!(TRY_AGAIN, "Try Again");
     }
 
     #[test]

@@ -1137,6 +1137,88 @@ pub struct PulseView {
     pub bass: Vec<f32>,
 }
 
+/// The beta's stage-3 words (core's, the Linux app's), in one call.
+#[derive(Clone, Debug, uniffi::Record)]
+pub struct BetaWords {
+    pub splits_tab: String,
+    pub splitting_now: String,
+    pub nothing_to_split: String,
+    pub splits_note: String,
+    pub pause_splitting: String,
+    pub splitting_dialog: String,
+    pub ready_title: String,
+    pub ready_note: String,
+    pub try_again: String,
+    pub open_now: String,
+    pub open_now_note: String,
+    pub show_lyrics: String,
+    pub edit_lyrics: String,
+    pub editor_note: String,
+    pub add_line: String,
+    pub paste_lyrics: String,
+    pub paste_tip: String,
+    pub tap_timing: String,
+    pub tap_tip: String,
+    pub remove_line_tip: String,
+    pub start_tip: String,
+    pub singer_tip: String,
+    pub nobody_set: String,
+    pub add_singer: String,
+    pub line_placeholder: String,
+    pub save: String,
+}
+
+#[uniffi::export]
+pub fn beta_words() -> BetaWords {
+    use radiance_core::words as w;
+    BetaWords {
+        splits_tab: w::SPLITS_TAB.into(),
+        splitting_now: w::SPLITTING_NOW_HEADING.into(),
+        nothing_to_split: w::NOTHING_TO_SPLIT.into(),
+        splits_note: w::SPLITS_NOTE.into(),
+        pause_splitting: w::PAUSE_SPLITTING.into(),
+        splitting_dialog: w::SPLITTING_DIALOG.into(),
+        ready_title: w::SPLITTING_READY.0.into(),
+        ready_note: w::SPLITTING_READY.1.into(),
+        try_again: w::TRY_AGAIN.into(),
+        open_now: w::OPEN_NOW.into(),
+        open_now_note: w::OPEN_NOW_NOTE.into(),
+        show_lyrics: w::SHOW_LYRICS.into(),
+        edit_lyrics: w::EDIT_LYRICS.into(),
+        editor_note: w::EDITOR_NOTE.into(),
+        add_line: w::ADD_LINE.into(),
+        paste_lyrics: w::PASTE_LYRICS.into(),
+        paste_tip: w::PASTE_TIP.into(),
+        tap_timing: w::TAP_TIMING.into(),
+        tap_tip: w::TAP_TIP.into(),
+        remove_line_tip: w::REMOVE_LINE_TIP.into(),
+        start_tip: w::START_TIP.into(),
+        singer_tip: w::SINGER_TIP.into(),
+        nobody_set: w::NOBODY_SET.into(),
+        add_singer: w::ADD_SINGER.into(),
+        line_placeholder: w::LINE_PLACEHOLDER.into(),
+        save: w::SAVE.into(),
+    }
+}
+
+/// A row's split mark in words (its tooltip), as the Linux app's badges say it.
+#[uniffi::export]
+pub fn split_mark_tip(mark: SplitMarkView) -> String {
+    use radiance_core::words as w;
+    match mark {
+        SplitMarkView::None => String::new(),
+        SplitMarkView::Waiting { place } => format!("{}. {}", w::SPLIT_WAITING, w::split_place(place as usize)),
+        SplitMarkView::Splitting => w::SPLITTING_NOW.to_string(),
+        SplitMarkView::Two | SplitMarkView::Four => format!("{}. {}", w::SPLIT_DONE.0, w::SPLIT_DONE.1),
+    }
+}
+
+/// A waiting song's line in the Splits tab: "Number 2 in line · {byline}".
+#[uniffi::export]
+pub fn in_line(n: u32, byline: String) -> String {
+    radiance_core::words::in_line(n as usize, &byline)
+}
+
 #[uniffi::export]
 impl MusicEngine {
     // the Mixer
