@@ -187,3 +187,22 @@ public class BarFitTests
     [Fact]
     public void ANarrowBarLetsItGo() => Assert.Equal(0, BarFit.Volume(796)); // an 860 px window
 }
+
+/// <summary>Now Playing's art: the square cover, or a video wider (16:9, as the GTK app's) within the room it has.</summary>
+public class ArtFitTests
+{
+    [Fact]
+    public void ACoverStaysSquare() => Assert.Equal((340.0, 340.0), ArtFit.Of(340, 900, video: false));
+
+    [Fact]
+    public void AVideoIsWiderAsFarAsTheRoomGoes()
+    {
+        var (w, h) = ArtFit.Of(340, 2000, video: true);
+        Assert.Equal(340 * 16 / 9.0, w, 3);
+        Assert.Equal(340, h, 3);
+        Assert.Equal((500.0, 281.25), ArtFit.Of(340, 500, video: true));
+    }
+
+    [Fact]
+    public void AVideoNeverGetsNarrowerThanTheCover() => Assert.Equal((340.0, 191.25), ArtFit.Of(340, 200, video: true));
+}

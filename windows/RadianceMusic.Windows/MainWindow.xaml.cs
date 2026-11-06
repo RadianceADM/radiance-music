@@ -56,6 +56,26 @@ public sealed partial class MainWindow : Window
             SyncLyricsTab();
         };
         SideHost.Content = side;
+        // F11: a music video fullscreen (or back); Esc: back from it
+        var f11 = new Microsoft.UI.Xaml.Input.KeyboardAccelerator { Key = Windows.System.VirtualKey.F11 };
+        f11.Invoked += (_, e) =>
+        {
+            if (Pages.Content is NowPlayingPage { HasVideo: true })
+            {
+                SetVideoFullscreen(!VideoFullscreen);
+                e.Handled = true;
+            }
+        };
+        var esc = new Microsoft.UI.Xaml.Input.KeyboardAccelerator { Key = Windows.System.VirtualKey.Escape };
+        esc.Invoked += (_, e) =>
+        {
+            if (!VideoFullscreen) return;
+            SetVideoFullscreen(false);
+            e.Handled = true;
+        };
+        Root.KeyboardAccelerators.Add(f11);
+        Root.KeyboardAccelerators.Add(esc);
+        Root.KeyboardAcceleratorPlacementMode = Microsoft.UI.Xaml.Input.KeyboardAcceleratorPlacementMode.Hidden;
         Side.PaneOpened += (_, _) => side.Opened();
         Root.SizeChanged += (_, e) => Side.DisplayMode = e.NewSize.Width >= 1300 ? SplitViewDisplayMode.Inline : SplitViewDisplayMode.Overlay;
         // closing while music plays: it plays on (the tray icon brings the window back); else it quits
@@ -79,6 +99,7 @@ public sealed partial class MainWindow : Window
     /// "genres", "group" (`what`: (GroupKind, name)), "playlist:{id}", "new-playlist".</summary>
     public void Show(string name, object? subject = null)
     {
+        if (VideoFullscreen && name != "playing") SetVideoFullscreen(false);
         if (name == "new-playlist")
         {
             _ = NewPlaylist();
@@ -163,6 +184,22 @@ public sealed partial class MainWindow : Window
         }
         side.Tab = tab;
         Side.IsPaneOpen = true;
+    }
+
+    /// <summary>A music video fills the screen (Now Playing): the window fullscreen, the title bar,
+    /// sidebar, player bar and side panel away; or back as it was.</summary>
+    public bool VideoFullscreen { get; private set; }
+
+    public void SetVideoFullscreen(bool on)
+    {
+        if (on == VideoFullscreen) return;
+        if (on && Pages.Content is not NowPlayingPage { HasVideo: true }) return;
+        VideoFullscreen = on;
+        AppWindow.SetPresenter(on ? AppWindowPresenterKind.FullScreen : AppWindowPresenterKind.Overlapped);
+        AppTitleBar.Visibility = BarHost.Visibility = on ? Visibility.Collapsed : Visibility.Visible;
+        Nav.IsPaneVisible = !on;
+        if (on) Side.IsPaneOpen = false;
+        (Pages.Content as NowPlayingPage)?.SetFullscreen(on);
     }
 
     /// <summary>For the screenshots' log: the panel's open state, mode and tabs.</summary>

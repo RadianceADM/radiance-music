@@ -13,6 +13,8 @@ namespace RadianceMusic;
 ///   menu          opens the menu of the song row highest on screen
 ///   click:TEXT    presses the button or menu item whose words start with TEXT (a menu's or dialog's first)
 ///   group:KIND:NAME   an album's, artist's or genre's songs (KIND: albums, artists, genres)
+///   switch:video|song the music video or the song (the art's button); fullscreen: the video fullscreen
+///   wait:N        N seconds more before the next step (Shot)
 /// </summary>
 internal static class DevActs
 {
@@ -26,6 +28,8 @@ internal static class DevActs
             "menu" => window.Content is { } root && Controls.SongMenu.OpenFirst(root),
             "click" => window.Content?.XamlRoot is { } xr && Click(xr, window.Content, arg),
             "group" => Group(window, arg),
+            "switch" => Switch(arg),
+            "fullscreen" => Fullscreen(window),
             _ => false,
         };
         Crash.Note($"act: {act}: {(done ? "done" : "not found")}");
@@ -39,6 +43,19 @@ internal static class DevActs
         var kind = parts[0] switch { "albums" => Native.GroupKind.Albums, "artists" => Native.GroupKind.Artists, _ => Native.GroupKind.Genres };
         window.Show("group", (kind, parts[1]));
         return true;
+    }
+
+    /// <summary>switch:video or switch:song: the version switch, as the button on the art.</summary>
+    private static bool Switch(string to)
+    {
+        App.Hub.Engine.SwitchVersion(to == "video");
+        return true;
+    }
+
+    private static bool Fullscreen(MainWindow window)
+    {
+        window.SetVideoFullscreen(true);
+        return window.VideoFullscreen;
     }
 
     private static bool Like(string title)

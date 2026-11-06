@@ -69,7 +69,7 @@ public partial class App : Application
         if (Program.Dev.Shot != null) _ = Shot.TakeAsync(Window, Program.Dev);
         if (Program.Dev.PlayTest && Hub.Engine.Home().Recent is { Length: > 0 } recent)
         {
-            var i = Program.Dev.PlayTitle is { } title ? Math.Max(0, Array.FindIndex(recent, s => s.Title == title)) : 0;
+            var i = Program.Dev.PlayTitle is { } title ? Math.Max(0, Array.FindIndex(recent, s => s.Title.Contains(title, StringComparison.OrdinalIgnoreCase))) : 0;
             Hub.Engine.PlayFrom(ListKind.Recent, (uint)i, recent[i].Key);
         }
     }

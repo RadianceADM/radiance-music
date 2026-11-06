@@ -58,7 +58,7 @@ public sealed class Dev
     public double Again { get; private set; }
     /// <summary>--play-test: plays the first of Home's recent songs after start.</summary>
     public bool PlayTest { get; private set; }
-    /// <summary>--play-title TITLE: as --play-test, the recent song of that title (else the first).</summary>
+    /// <summary>--play-title WORDS: as --play-test, the first recent song whose title has WORDS (else the first).</summary>
     public string? PlayTitle { get; private set; }
     /// <summary>--act STEP (again for more): done in order before the shot (DevActs).</summary>
     public List<string> Acts { get; } = new();
