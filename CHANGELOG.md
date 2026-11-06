@@ -17,7 +17,7 @@ The native Windows app gets the song's parts, splitting and the lyrics tools:
 - **Every word timed to the singing** (MMS) once a song is split.
 - **Lyrics:** Show Lyrics; the lyrics editor (each line's start, its words and who sings it; Add Line, Paste Lyrics, Tap Timing with Enter, Add a singer; saved as yours); Find Lyrics Again. Lyrics come back by themselves when you're online again.
 - **Now Playing's background follows the beat** (#56): a kick swells the art at once and pushes its flow ahead; strong bass flows it faster. It rests when the window is minimised or in the tray.
-- Lyrics go back to the top on the next song (#57); Search and Home keep to a readable width in a wide window (#58).
+- Lyrics go back to the top on the next song (#57). Search, Home, History, Albums, Artists, Genres and a playlist keep to one readable column in a wide window, as the Linux app's: nothing runs off the edge any more (#58, #60).
 
 ## Windows beta 0.8.0-beta.2 — not released yet (#45, stage 2)
 

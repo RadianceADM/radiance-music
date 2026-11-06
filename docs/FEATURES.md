@@ -52,7 +52,7 @@ marked 🔜.
 | Feature | Linux | Windows | Windows beta | Phone | Notes |
 |---|---|---|---|---|---|
 | Part sliders: Drums, Bass, Other, Vocals | ✅ | ✅ | ✅ | ✅ | |
-| Two-part songs: Music and Vocals sliders | ✅ | ✅ | 🔜 3 | 🔜 | the phone's split (0.5.17, #43); on the computer, songs split before there were four parts |
+| Two-part songs: Music and Vocals sliders | ✅ | ✅ | ✅ | 🔜 | the phone's split (0.5.17, #43); on the computer, songs split before there were four parts |
 | Keeps the loudness when parts are turned down | ✅ | ✅ | ✅ | ✅ | |
 | Low cut, High cut, Reverb (one setting, every song) | ✅ | ✅ | ✅ | ✅ | built into the computer app since 0.7.14 |
 | Fast split in two (Music + Vocals, a few seconds) | ✅ | ✅ | ✅ | 🔜 | computer: inside the app, no Python; the Split button asks "Music + Vocals (fast)" or "Four parts" (#43); phone: its only split (0.5.17) |

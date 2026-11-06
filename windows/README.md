@@ -34,12 +34,24 @@ any test window, create `D:\rpos\HOLD` (the POS session's tests wait for it) and
 | `--act STEP` (again for more) | done by the app before the shot, no input sent to the desktop: `like:TITLE`, `menu`, `click:WORDS` (a button or menu item, in a menu or dialog too), `group:albums:NAME`, `switch:video\|song`, `fullscreen`, `liked-search:TEXT`, `queue-move:FROM:TO`, `queue-menu:N`, `lyric-tap:N`, `wait:N`. The log (`beta-crash.log`) says what each did, the queue's order and where the song is |
 | `--video-probe FILE` | a video alone in a test window (the music video spike); `--probe-video FILE OUT` the same with no window (fails over SSH: no desktop for a swapchain) |
 
-`measure-cpu.ps1 -App beta [-PlayTitle WORDS] [-Page NAME] [-NoPlay] [-Video FILE] [-Seconds N]`: the
-beta's CPU in front, minimized and in the tray. Stage 2 (2026-11-06, ribs03, GTX 1060 6GB):
+`measure-cpu.ps1 -App beta [-PlayTitle WORDS] [-Page NAME] [-NoPlay] [-NoBeat] [-Video FILE] [-Seconds N] [-Settle N] [-Front]`:
+the beta's CPU on a page, then minimized, then in the tray. It runs hidden (`--behind`: past every
+screen's edge, no focus; `-Front` only when the owner is away), and the app minimises and trays itself
+on time (`--minimize-at`, `--tray-at`): from SSH (session 0) the script can't reach the desktop's windows,
+so stage 2's minimized and tray numbers were the page still showing (and `--page` reached only
+screenshot runs, so stage 2's "Now Playing" was Home). `-Settle 45` waits out a stream's one-time pulse
+decode. Stage 3 (2026-11-07, ribs03, GTX 1060 6GB, a stream playing, % of one core):
 
-| What | In front | Minimized | Tray |
+| What | Shown | Minimized | Tray |
 |---|---|---|---|
-| Now Playing, word-by-word lyrics | 1 % | 0.8 % | 0.8 % |
-| Now Playing, a music video (H.264 720p, decoded and drawn by the graphics card) | 7.1 % | | |
-| Liked Songs, nothing playing | 2.2 % | 1.2 % | 0.6 % |
-| The video check alone (`--video-probe`) | 0.1 % | 0.1 % | |
+| Now Playing, word-by-word lyrics, the background following the beat | 3.5 % | 2.1 % | 2.2 % |
+| The same without the beat (`-NoBeat`) | 2.9 % | 2.3 % | 2.3 % |
+| Home | 1.2 % | | |
+| Now Playing with the Mixer open, a song's four parts playing | 10.8 % | | |
+| Now Playing with the Mixer open, a song split in two | 12 % | | |
+| A song being split in four (the app's own share; the splitter at Idle priority on its cores) | 10.3 % | | |
+| Now Playing, a music video (stage 2) | 7.1 % | | |
+
+The developer runs log their busiest threads by name when over a fifth of a core (`busy:` in
+beta-crash.log): with the Mixer open, most of it is the compositor's thread (the pop-up's meters) and
+GStreamer's mixing the parts.
