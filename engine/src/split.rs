@@ -712,3 +712,25 @@ mod tests {
         assert_eq!(gst_path(Path::new("/home/me/.local/share/radiance-music/job.flac")), "/home/me/.local/share/radiance-music/job.flac");
     }
 }
+
+/// A saved song's own sample rate, kept when it plays among its parts: Opus
+/// is always 48 kHz; a FLAC says in its STREAMINFO (None: the mixer picks).
+pub fn file_rate(path: &str) -> Option<u32> {
+    let low = path.to_lowercase();
+    if low.ends_with(".opus") {
+        return Some(48_000);
+    }
+    if !low.ends_with(".flac") {
+        return None;
+    }
+    use std::io::Read;
+    let mut head = [0u8; 42];
+    std::fs::File::open(path).ok()?.read_exact(&mut head).ok()?;
+    // "fLaC", then STREAMINFO's header (4) and its first 10 bytes; the rate is the next 20 bits
+    if &head[..4] != b"fLaC" {
+        return None;
+    }
+    let b = &head[18..21];
+    let rate = (u32::from(b[0]) << 12) | (u32::from(b[1]) << 4) | (u32::from(b[2]) >> 4);
+    (8_000..=768_000).contains(&rate).then_some(rate)
+}

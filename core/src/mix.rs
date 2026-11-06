@@ -45,6 +45,8 @@ pub fn part_volumes(sliders: &HashMap<String, f64>, six: bool) -> HashMap<String
         g.insert("piano".into(), other);
         g.insert("guitar".into(), other);
     }
+    // a song split in two: Music has its own slider (it was left out, so it did nothing)
+    g.insert("music".into(), sliders.get("music").copied().unwrap_or(1.0));
     g
 }
 
@@ -89,6 +91,10 @@ mod tests {
         let g = part_volumes(&other_down, false);
         assert_eq!((g["piano"], g["guitar"]), (0.5, 0.5));
         assert_eq!(part_volumes(&other_down, true)["piano"], 0.9);
+        // a song in two: Music's slider counts too
+        let music_down: HashMap<String, f64> = [("music".to_string(), 0.25)].into();
+        assert_eq!(part_volumes(&music_down, false)["music"], 0.25);
+        assert_eq!(part_volumes(&after_reset, false)["music"], 1.0);
     }
 
     #[test]

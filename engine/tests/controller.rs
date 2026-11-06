@@ -67,6 +67,8 @@ pub struct Fake {
     pub split_wait: Mutex<Duration>,
     pub split_fails: Mutex<std::collections::HashSet<String>>,
     pub splits_started: Mutex<Vec<(String, bool)>>,
+    /// A split lays the song's four parts down (short FLACs), as a real one would.
+    pub split_makes_parts: std::sync::atomic::AtomicBool,
 }
 
 fn kind_name(k: Kind) -> &'static str {
@@ -153,6 +155,9 @@ impl Sources for Fake {
         std::thread::sleep(wait);
         if self.split_fails.lock().unwrap().contains(&t.id) {
             return Err("the splitter stopped".into());
+        }
+        if self.split_makes_parts.load(Ordering::SeqCst) {
+            make_parts(t, &["drums", "bass", "other", "vocals"], 6);
         }
         Ok(())
     }
@@ -1293,3 +1298,116 @@ fn cores_are_kept_for_the_next_split() {
     c.quit();
     no_local_splitter();
 }
+
+// ---------------------------------------------------------------------------------- parts and the Mixer (Task 6)
+
+use radiance_engine::effects::Sound;
+use radiance_engine::split::Voice;
+
+/// A song's parts, laid down where the Mixer finds them (beside its file): short quiet FLACs.
+fn make_parts(t: &Track, parts: &[&str], secs: u32) {
+    use gst::prelude::*;
+    gst::init().unwrap();
+    let base = radiance_engine::split::stems_base(t);
+    for part in parts {
+        let path = base.with_file_name(format!("{}.{part}.flac", base.file_name().unwrap().to_string_lossy()));
+        let desc = format!("audiotestsrc num-buffers={} samplesperbuffer=4410 volume=0.05 ! audio/x-raw,format=S16LE,rate=44100,channels=2 ! flacenc ! filesink name=out", secs * 10);
+        let p = gst::parse::launch(&desc).unwrap();
+        p.downcast_ref::<gst::Bin>().unwrap().by_name("out").unwrap().set_property("location", path.to_str().unwrap());
+        p.set_state(gst::State::Playing).unwrap();
+        let done = p.bus().unwrap().timed_pop_filtered(gst::ClockTime::from_seconds(30), &[gst::MessageType::Eos, gst::MessageType::Error]);
+        p.set_state(gst::State::Null).unwrap();
+        assert_eq!(done.map(|m| m.type_()), Some(gst::MessageType::Eos), "the part {part} wasn't made");
+    }
+}
+
+fn part_names(c: &Controller) -> Vec<String> {
+    c.now().mix.parts.iter().map(|(p, _)| p.clone()).collect()
+}
+
+fn gain(c: &Controller, part: &str) -> f64 {
+    c.now().mix.parts.iter().find(|(p, _)| p == part).map(|(_, g)| *g).unwrap_or(-1.0)
+}
+
+#[test]
+fn a_split_song_plays_its_parts() {
+    let _l = setup();
+    let t = wav("parts-play", 4.0);
+    make_parts(&t, &["drums", "bass", "other", "vocals"], 4);
+    let (c, _f, _rx, list) = with_list("parts play", vec![t.clone()]);
+    c.play_from(list, 0, &t.key());
+    assert!(until(4.0, || c.now().playing && c.now().mix.plays_parts), "it didn't play its parts");
+    assert_eq!(part_names(&c), ["drums", "bass", "other", "vocals"]);
+    // all up, it's the song's own file that's heard (its quality); a part down, the Mixer's
+    c.set_part("vocals", 0.5);
+    assert!(until(2.0, || c.now().quality == "Mixer · its four parts"), "{}", c.now().quality);
+    c.quit();
+}
+
+#[test]
+fn the_mixer_shows_the_parts_the_song_has() {
+    let _l = setup();
+    let (four, two, none) = (wav("mix-four", 3.0), wav("mix-two", 3.0), wav("mix-none", 3.0));
+    make_parts(&four, &["drums", "bass", "other", "vocals"], 3);
+    make_parts(&two, &["music", "vocals"], 3);
+    let (c, _f, _rx, list) = with_list("mix parts", vec![four.clone(), two.clone(), none.clone()]);
+    c.play_from(list.clone(), 0, &four.key());
+    assert!(until(4.0, || part_names(&c) == ["drums", "bass", "other", "vocals"]), "{:?}", part_names(&c));
+    c.set_voice(Voice::NoVocals);
+    assert!(until(1.0, || gain(&c, "vocals") == 0.0 && gain(&c, "drums") == 1.0), "No vocals is a preset on four parts");
+    c.set_voice(Voice::Song);
+    c.play_from(list.clone(), 1, &two.key());
+    assert!(until(4.0, || part_names(&c) == ["music", "vocals"]), "{:?}", part_names(&c));
+    c.set_voice(Voice::VocalsOnly);
+    assert!(until(1.0, || gain(&c, "music") == 0.0 && gain(&c, "vocals") == 1.0), "on halves too");
+    c.set_voice(Voice::Song);
+    c.play_from(list, 2, &none.key());
+    assert!(until(4.0, || now_id(&c) == none.id && part_names(&c).is_empty()), "{:?}", part_names(&c));
+    c.quit();
+}
+
+#[test]
+fn parts_landing_while_playing_switch_over_in_place() {
+    let _l = setup();
+    let t = wav("parts-land", 6.0);
+    let (c, fake, _rx, list) = with_list("parts land", vec![t.clone()]);
+    fake.split_makes_parts.store(true, Ordering::SeqCst);
+    c.play_from(list, 0, &t.key());
+    assert!(until(4.0, || c.now().playing && c.now().at >= 1.0), "never got going");
+    c.split(&t.key(), false);
+    assert!(until(6.0, || c.now().mix.plays_parts), "it didn't switch to its parts");
+    assert!(c.now().at >= 0.8, "it went back to the start: {}", c.now().at);
+    c.quit();
+}
+
+#[test]
+fn effects_are_kept_in_settings() {
+    let _l = setup();
+    let (c, _f, _rx) = with_songs("effects kept", vec![]);
+    let s = Sound { low_cut: 120.0, high_cut: 9000.0, reverb: 30.0 };
+    c.set_effects(s);
+    assert!(until(1.0, || radiance_engine::settings::load().effects == s), "not saved");
+    assert_eq!(radiance_engine::effects::now(), s);
+    assert!(until(1.0, || c.now().mix.effects == s));
+    c.set_effects(Sound::OFF);
+    assert!(until(1.0, || radiance_engine::settings::load().effects == Sound::OFF));
+    c.quit();
+}
+
+#[test]
+fn reset_puts_every_part_back_at_full() {
+    let _l = setup();
+    let t = wav("parts-reset", 4.0);
+    make_parts(&t, &["drums", "bass", "other", "vocals"], 4);
+    let (c, _f, _rx, list) = with_list("parts reset", vec![t.clone()]);
+    c.play_from(list, 0, &t.key());
+    assert!(until(4.0, || c.now().mix.plays_parts));
+    c.set_part("vocals", 0.2);
+    c.set_effects(Sound { low_cut: 200.0, high_cut: HIGH, reverb: 0.0 });
+    assert!(until(1.0, || gain(&c, "vocals") == 0.2));
+    c.reset_mix();
+    assert!(until(1.0, || c.now().mix.parts.iter().all(|(_, g)| *g == 1.0) && c.now().mix.effects == Sound::OFF));
+    c.quit();
+}
+
+const HIGH: f64 = radiance_engine::effects::HIGH_CUT.1;

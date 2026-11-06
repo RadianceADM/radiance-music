@@ -33,6 +33,8 @@ use crate::settings::{self, Settings};
 use crate::sources::Sources;
 use crate::split;
 use crate::splitting::Phase;
+use crate::effects::{self, Sound};
+use radiance_core::mix::{part_volumes, preset, Voice};
 use crate::track::{Source, Track};
 
 /// What changed (read it again with the getter of the same name).
@@ -199,6 +201,25 @@ pub struct NowState {
     pub quality: String,
     /// Picked and not playing yet: its stream being found, or its sound not flowing yet (#55).
     pub loading: bool,
+    /// The Mixer (stage 3): the song's parts with their volumes, the voice button, the effects, and
+    /// whether its parts play now.
+    pub mix: MixState,
+}
+
+/// The Mixer as Now Playing shows it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct MixState {
+    /// (part, volume 0..1), as split::mix_parts lists them (none: not split).
+    pub parts: Vec<(String, f64)>,
+    pub voice: Voice,
+    pub effects: Sound,
+    pub plays_parts: bool,
+}
+
+impl Default for MixState {
+    fn default() -> Self {
+        MixState { parts: Vec::new(), voice: Voice::Song, effects: Sound::OFF, plays_parts: false }
+    }
 }
 
 /// Milliseconds on the engine's monotonic clock (NowState::since's).
@@ -801,6 +822,34 @@ impl Controller {
 
     /// Stops the engine: where you are is saved, the player stops, no more changes are told.
     /// Safe to call twice.
+    /// The Mixer (stage 3): a part's volume (0..1), Reset, the voice buttons, the effects, and each part's
+    /// loudness now (its meter).
+    pub fn set_part(&self, part: &str, gain: f64) {
+        let part = part.to_string();
+        self.post(move |e| e.set_part(&part, gain));
+    }
+
+    pub fn reset_mix(&self) {
+        self.post(|e| e.reset_mix());
+    }
+
+    pub fn set_voice(&self, v: Voice) {
+        self.post(move |e| e.set_voice(v));
+    }
+
+    pub fn set_effects(&self, s: Sound) {
+        self.post(move |e| e.set_effects(s));
+    }
+
+    /// Each part's loudness right now (the Mixer's meters, polled while it's open).
+    pub fn part_levels(&self) -> Vec<(String, f64)> {
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.post(move |e| {
+            let _ = tx.send(e.player.borrow().as_ref().map(|p| p.part_levels()).unwrap_or_default());
+        });
+        rx.recv_timeout(Duration::from_millis(500)).unwrap_or_default()
+    }
+
     /// Split a song by hand: first in line (stage 3). `two`: the fast split (Music + Vocals), else four parts.
     pub fn split(&self, key: &str, two: bool) {
         let key = key.to_string();
@@ -945,6 +994,9 @@ struct Engine {
     two_q: RefCell<VecDeque<(Track, bool)>>,
     splitting_two: RefCell<Option<Track>>,
     split_asked: RefCell<HashSet<String>>,
+    /// The Mixer's sliders for this run (not kept, as the GTK app's), and the voice button.
+    part_gains: RefCell<HashMap<String, f64>>,
+    voice: Cell<Voice>,
 }
 
 /// A music video's streams, as found (through the relay).
@@ -1008,6 +1060,8 @@ impl Engine {
             two_q: RefCell::default(),
             splitting_two: RefCell::default(),
             split_asked: RefCell::default(),
+            part_gains: RefCell::default(),
+            voice: Cell::new(Voice::Song),
         }
     }
 
@@ -1038,6 +1092,7 @@ impl Engine {
                 self.shared.view(|v| v.problem = Some(Problem { text: format!("The player didn't start: {err}"), retry: false }));
             }
         }
+        effects::set(self.settings.borrow().effects); // Low cut, High cut, Reverb: one setting, every song
         self.restore_session();
         self.publish_home();
         self.publish_liked();
@@ -1258,7 +1313,9 @@ impl Engine {
         // "Loading…" until its sound flows (the Ready event), as the Linux app's bar says it
         self.loading.set(true);
         *self.quality.borrow_mut() = quality::text(Heard::Loading);
-        if video {
+        if !video && self.play_parts(&t, 0.0, false) {
+            // its parts at hand: the Mixer plays them (its own file among them)
+        } else if video {
             self.play_video(&t, gen);
         } else if let Some(f) = &t.file {
             use gio::prelude::*;
@@ -1761,6 +1818,124 @@ impl Engine {
         }
     }
 
+    // ------------------------------------------------------------------ parts and the Mixer (stage 3)
+
+    /// A song's parts as (name, file uri), its own file's uri and sample rate (the GTK app's parts_of).
+    fn parts_of(&self, t: &Track) -> (Vec<(String, String)>, Option<String>, Option<u32>) {
+        use gio::prelude::*;
+        let parts = split::mix_parts(t).iter().filter_map(|p| split::ready_part(t, p).map(|f| (p.to_string(), gio::File::for_path(&f).uri().to_string()))).collect();
+        let file = t.file.as_deref().filter(|f| std::path::Path::new(f).exists());
+        (parts, file.map(|f| gio::File::for_path(f).uri().to_string()), file.and_then(split::file_rate))
+    }
+
+    fn gains_for(&self, t: &Track) -> HashMap<String, f64> {
+        part_volumes(&self.part_gains.borrow(), split::wants_six(t))
+    }
+
+    /// Plays the song with its parts at hand, from `at` (`switch`: from the song playing as a plain
+    /// file, fading over). False: none here, or they wouldn't load.
+    fn play_parts(&self, t: &Track, at: f64, switch: bool) -> bool {
+        let (parts, whole, rate) = self.parts_of(t);
+        if parts.is_empty() {
+            return false;
+        }
+        let gains = self.gains_for(t);
+        match self.player.borrow().as_ref().map(|p| p.load_parts(whole.as_deref(), &parts, at, &gains, rate, switch)) {
+            Some(Ok(())) => {
+                crate::log::note(&format!("“{}” plays with its parts at hand{}", t.title, if switch { " (switched over, fading)" } else { "" }));
+                true
+            }
+            Some(Err(e)) => {
+                crate::log::note(&format!("stems: {e}"));
+                false
+            }
+            None => false,
+        }
+    }
+
+    /// The sliders to the player (the GTK app's apply_mix): with its parts playing, each part's
+    /// volume, the song's own file blended in when all are up; a plain file, over to its parts.
+    fn apply_mix(&self) {
+        let Some(t) = self.current.borrow().clone() else { return };
+        let have = split::mix_parts(&t);
+        if have.is_empty() {
+            return;
+        }
+        let gains = self.gains_for(&t);
+        let full = have.iter().all(|p| gains.get(*p).is_none_or(|g| *g >= 0.999));
+        let stems = self.player.borrow().as_ref().is_some_and(|p| p.is_stems());
+        if stems {
+            if let Some(p) = self.player.borrow().as_ref() {
+                for (part, g) in &gains {
+                    p.set_part(part, *g);
+                }
+                p.set_whole(full); // all up: the song's own file again, blended in
+            }
+            self.update_quality();
+            return;
+        }
+        if !full {
+            let at = self.player.borrow().as_ref().and_then(|p| p.position()).unwrap_or(0.0);
+            self.play_parts(&t, at, true);
+        }
+    }
+
+    fn set_part(&self, part: &str, gain: f64) {
+        self.part_gains.borrow_mut().insert(part.to_string(), gain.clamp(0.0, 1.0));
+        self.apply_mix();
+        self.publish_now();
+    }
+
+    /// Reset: every part at full, the voice back to the song, the effects off.
+    fn reset_mix(&self) {
+        self.part_gains.borrow_mut().clear();
+        self.voice.set(Voice::Song);
+        self.set_effects(Sound::OFF);
+        self.apply_mix();
+        self.publish_now();
+    }
+
+    /// Song / No vocals / Vocals only: on a split song (four parts, or Music and Vocals), Mixer presets;
+    /// not split, the fast split is asked for first (the button holds; its parts come in seconds).
+    fn set_voice(self: &Rc<Self>, v: Voice) {
+        self.voice.set(v);
+        let Some(t) = self.current.borrow().clone() else { return };
+        let have = split::mix_parts(&t);
+        if have.is_empty() {
+            if v != Voice::Song {
+                self.split_fast(&playing::saved_copy(&self.liked.borrow(), &t), true);
+            }
+        } else {
+            let mut g = self.part_gains.borrow_mut();
+            for p in radiance_core::mix::SIX.iter().chain(["music"].iter()) {
+                g.insert(p.to_string(), preset(v, p));
+            }
+        }
+        self.apply_mix();
+        self.publish_now();
+    }
+
+    /// Low cut, High cut, Reverb: one setting for every song, kept.
+    fn set_effects(&self, s: Sound) {
+        effects::set(s);
+        self.settings.borrow_mut().effects = s;
+        settings::save(&self.settings.borrow());
+        self.publish_now();
+    }
+
+    fn mix_state(&self) -> MixState {
+        let parts = match self.current.borrow().as_ref() {
+            Some(t) => {
+                let gains = self.gains_for(t);
+                split::mix_parts(t).iter().map(|p| (p.to_string(), gains.get(*p).copied().unwrap_or(1.0))).collect()
+            }
+            None => Vec::new(),
+        };
+        // its parts are loaded (the Mixer is live; all up, the song's own file is what's heard)
+        let plays_parts = self.player.borrow().as_ref().is_some_and(|p| p.is_stems());
+        MixState { parts, voice: self.voice.get(), effects: effects::now(), plays_parts }
+    }
+
     // ------------------------------------------------------------------ splitting (stage 3)
 
     /// Split as picked on the song's menu (the GTK app's split_as): in two, a few seconds; or in four,
@@ -2032,6 +2207,14 @@ impl Engine {
         self.shared.view(|v| {
             v.split_done.insert(t.key(), mark);
         });
+        // the song playing: on with its parts from where it's got to (fading over)
+        let cur = self.current.borrow().clone();
+        if let Some(cur) = cur.filter(|c| c.key() == t.key() && !c.video) {
+            let at = self.player.borrow().as_ref().and_then(|p| p.position()).unwrap_or(0.0);
+            if self.play_parts(&cur, at, true) {
+                self.publish_now();
+            }
+        }
     }
 
     /// Every liked (saved) song gets split, one after another, in the background.
@@ -2069,6 +2252,10 @@ impl Engine {
             return;
         };
         let player = self.player.borrow();
+        if player.as_ref().is_some_and(|p| p.hears_parts()) {
+            *self.quality.borrow_mut() = quality::text(Heard::Parts);
+            return;
+        }
         let text = if player.as_ref().is_some_and(|p| p.is_video()) || (t.video && t.file.is_none()) {
             quality::text(Heard::Video { height: self.video_height.get(), kbps: self.kbps.get() })
         } else {
@@ -2476,6 +2663,7 @@ impl Engine {
             has_counterpart: song.as_ref().is_some_and(|t| self.counterpart.borrow().as_ref().is_some_and(|(k, _)| *k == t.key())),
             quality: self.quality.borrow().clone(),
             loading: self.loading.get() && song.is_some(),
+            mix: self.mix_state(),
             song,
         };
         drop(q);
