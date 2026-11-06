@@ -16,6 +16,7 @@ internal static class SongMenu
     /// <summary>`play`: what Play does where the row is (the page knows its list).</summary>
     public static void Attach(FrameworkElement row, EngineHub hub, string key, uint index, MenuPlace place, Action? play)
     {
+        Openers.AddOrUpdate(row, () => Build(hub, row, key, index, place, play).ShowAt(row));
         row.ContextRequested += (_, e) =>
         {
             var menu = Build(hub, row, key, index, place, play);
@@ -23,6 +24,22 @@ internal static class SongMenu
             else menu.ShowAt(row);
             e.Handled = true;
         };
+    }
+
+    /// <summary>Each row's menu, as its right-click opens it (DevActs' "menu": the screenshots).</summary>
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<FrameworkElement, Action> Openers = new();
+
+    /// <summary>The first song row's menu under `root` (in the order it's drawn).</summary>
+    public static bool OpenFirst(DependencyObject root)
+    {
+        if (root is FrameworkElement f && Openers.TryGetValue(f, out var open))
+        {
+            open();
+            return true;
+        }
+        for (var i = 0; i < Microsoft.UI.Xaml.Media.VisualTreeHelper.GetChildrenCount(root); i++)
+            if (OpenFirst(Microsoft.UI.Xaml.Media.VisualTreeHelper.GetChild(root, i))) return true;
+        return false;
     }
 
     private static MenuFlyout Build(EngineHub hub, FrameworkElement row, string key, uint index, MenuPlace place, Action? play)

@@ -9,7 +9,7 @@ namespace RadianceMusic;
 ///   RadianceMusicBeta.exe --self-check FILE   the self-check, no window (over SSH on ribs03)
 ///   RadianceMusicBeta.exe --probe-video VIDEO FILE   a video played the app's way, no window: the report
 ///   RadianceMusicBeta.exe [developer switches] the app (Dev: --shot, --page, --size, --search, --wait,
-///                                                   --play-test, --play-title TITLE, --side TAB, --video-probe VIDEO)
+///                                                   --play-test, --play-title TITLE, --side TAB, --act STEP, --video-probe VIDEO)
 /// </summary>
 public static class Program
 {
@@ -60,6 +60,8 @@ public sealed class Dev
     public bool PlayTest { get; private set; }
     /// <summary>--play-title TITLE: as --play-test, the recent song of that title (else the first).</summary>
     public string? PlayTitle { get; private set; }
+    /// <summary>--act STEP (again for more): done in order before the shot (DevActs).</summary>
+    public List<string> Acts { get; } = new();
     /// <summary>--side queue|lyrics: the side panel open on that tab.</summary>
     public string? Side { get; private set; }
     /// <summary>--video-probe VIDEO: only VIDEO, playing in a window of its own (VideoProbeWindow).</summary>
@@ -81,6 +83,7 @@ public sealed class Dev
                 case "--play-title": d.PlayTest = true; d.PlayTitle = Next(); break;
                 case "--video-probe": d.VideoProbe = Next(); break;
                 case "--side": d.Side = Next(); break;
+                case "--act": d.Acts.Add(Next()); break;
                 case "--again": d.Again = double.TryParse(Next(), System.Globalization.CultureInfo.InvariantCulture, out var a) ? a : 0; break;
                 case "--size":
                     var wh = Next().Split('x');

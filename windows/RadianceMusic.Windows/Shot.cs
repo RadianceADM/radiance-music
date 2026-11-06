@@ -29,6 +29,11 @@ internal static class Shot
         window.Show(dev.Page);
         if (dev.Search != null) window.SearchFor(dev.Search);
         if (dev.Side != null) window.ToggleSide(dev.Side);
+        foreach (var act in dev.Acts)
+        {
+            await Task.Delay(1500);
+            DevActs.Run(window, act);
+        }
         await Task.Delay(TimeSpan.FromSeconds(dev.Wait));
         var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(window);
         Win32.SetForegroundWindow(hwnd);
