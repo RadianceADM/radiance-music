@@ -13,6 +13,10 @@ internal static partial class Win32
     [StructLayout(LayoutKind.Sequential)]
     public struct Rect { public int Left, Top, Right, Bottom; }
 
+    /// <summary>This thread's id as Windows numbers it (developer runs: which thread is busy).</summary>
+    [LibraryImport("kernel32.dll")]
+    public static partial uint GetCurrentThreadId();
+
     [LibraryImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
     public static partial bool GetWindowRect(nint hwnd, out Rect rect);

@@ -78,7 +78,22 @@ public partial class App : Application
         {
             Window.Activate();
         }
-        Trace("window shown");
+        Trace($"window shown (the UI thread: {Win32.GetCurrentThreadId()})");
+        // developer runs: layout passes every 5 s (a page laying itself out over and over shows here)
+        if (Program.Dev.Shot != null || Program.Dev.PlayTest || Program.Dev.Behind)
+        {
+            var passes = 0;
+            ((FrameworkElement)Window.Content).LayoutUpdated += (_, _) => passes++;
+            var count = DispatcherQueue.GetForCurrentThread().CreateTimer();
+            devTimers.Add(count);
+            count.Interval = TimeSpan.FromSeconds(5);
+            count.Tick += (_, _) =>
+            {
+                if (passes > 0) Trace($"layout: {passes} passes in 5 s");
+                passes = 0;
+            };
+            count.Start();
+        }
         var icon = Path.Combine(AppContext.BaseDirectory, "radiance-music.ico");
         tray = new Tray(Hub, icon);
         keys = new MediaKeys(Hub, WinRT.Interop.WindowNative.GetWindowHandle(Window));
@@ -201,7 +216,7 @@ public partial class App : Application
     /// <summary>Developer runs (--shot, --play-test): each step of the start in the crash note.</summary>
     internal static void Trace(string step)
     {
-        if (Program.Dev.Shot != null || Program.Dev.PlayTest) Crash.Note($"[{Environment.ProcessId}] {step}");
+        if (Program.Dev.Shot != null || Program.Dev.PlayTest || Program.Dev.Behind) Crash.Note($"[{Environment.ProcessId}] {step}");
     }
 
     /// <summary>Quits: where you are saved, the tray icon gone, the window closed.</summary>
