@@ -9,7 +9,7 @@
 # The beta runs hidden (--behind: behind everything, no focus, never minimised over or restored in front of
 # the owner's work; his rule, 2026-11-06); -Front: in front, as before (only when he's away).
 # -Settle N: seconds before measuring (default 15; 45 lets a stream's one-time pulse decode finish first).
-param([ValidateSet('beta', 'gtk')][string]$App = 'beta', [int]$Seconds = 60, [switch]$Short, [string]$Video = '', [string]$PlayTitle = '', [string]$Page = 'playing', [switch]$NoPlay, [switch]$Front, [int]$Settle = 15)
+param([ValidateSet('beta', 'gtk')][string]$App = 'beta', [int]$Seconds = 60, [switch]$Short, [string]$Video = '', [string]$PlayTitle = '', [string]$Page = 'playing', [switch]$NoPlay, [switch]$Front, [int]$Settle = 15, [switch]$NoBeat)
 $ErrorActionPreference = 'Stop'
 Add-Type @'
 using System; using System.Runtime.InteropServices; using System.Collections.Generic;
@@ -43,6 +43,9 @@ if ($App -eq 'beta') {
     $name = 'RadianceMusicBeta'
     $play = if ($NoPlay) { '' } elseif ($PlayTitle) { "--play-title `"$PlayTitle`"" } else { '--play-test' }
     $where = if ($Front) { '' } else { ' --behind' }
+    # the app minimises and trays itself on time (this SSH session can't reach the desktop's windows)
+    $where += " --minimize-at $($Settle + $Seconds + 2) --tray-at $($Settle + 2 * $Seconds + 8)"
+    if ($NoBeat) { $where += ' --no-beat' }
     $cmd = "@echo off`r`n$data`r`nstart `"`" `"C:\rb\beta\dist\RadianceMusicBeta.exe`" $play --page $Page --size 1280x800$where"
     if ($Video) { $cmd = "@echo off`r`n$data`r`nstart `"`" `"C:\rb\beta\dist\RadianceMusicBeta.exe`" --video-probe `"$Video`" --size 1280x720" }
 } else {
@@ -79,18 +82,17 @@ try {
     $shown = if ($App -eq 'beta' -and -not $Front) { 'behind (hidden run)' } else { 'in front' }
     Cpu $p $(if ($Video) { "a video $shown" } elseif ($Page -ne 'playing') { "$Page $shown" } else { "Now Playing $shown" })
     if ($App -eq 'gtk' -or $Short) { return }
-    $h = [Win]::Find([uint32]$p.Id)
-    # (hidden: SW_SHOWMINNOACTIVE, nothing else gets or loses focus)
-    [Win]::ShowWindow($h, $(if ($Front -or $App -ne 'beta') { 6 } else { 7 })) | Out-Null   # SW_MINIMIZE
-    Start-Sleep -Seconds 3
+    # the beta minimises and trays itself on time (--minimize-at, --tray-at); [Win] can't reach the desktop
+    # session from SSH (session 0): it found no window, so the old minimized/tray numbers were the page still
+    $self = $App -eq 'beta' -and -not $Video
+    if (-not $self) {
+        $h = [Win]::Find([uint32]$p.Id)
+        [Win]::ShowWindow($h, 6) | Out-Null   # SW_MINIMIZE
+    }
+    Start-Sleep -Seconds 4
     Cpu $p 'minimized'
-    if ($App -eq 'beta' -and -not $Video) {
-        if ($Front) {
-            [Win]::ShowWindow($h, 9) | Out-Null   # SW_RESTORE
-            Start-Sleep -Seconds 2
-        }
-        [Win]::PostMessage($h, 0x10, [IntPtr]::Zero, [IntPtr]::Zero) | Out-Null   # WM_CLOSE: playing, so it hides to the tray
-        Start-Sleep -Seconds 3
+    if ($self) {
+        Start-Sleep -Seconds 7
         Cpu $p 'hidden to the tray'
     }
     $p.Refresh()

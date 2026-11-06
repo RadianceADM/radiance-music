@@ -97,6 +97,8 @@ public partial class App : Application
         if (Program.Dev.Shot != null) _ = Shot.TakeAsync(Window, Program.Dev);
         // --page without a screenshot (measure-cpu.ps1): that page at once (it only reached shots before)
         else if (Program.Dev.Page != "home") Window.Show(Program.Dev.Page);
+        Later(Program.Dev.MinimizeAt, () => Win32.ShowWindow(WinRT.Interop.WindowNative.GetWindowHandle(Window), Program.Dev.Hidden ? 7 /* SW_SHOWMINNOACTIVE */ : 6 /* SW_MINIMIZE */), "minimized itself");
+        Later(Program.Dev.TrayAt, () => Window.AppWindow.Hide(), "hid itself to the tray"); // (as closing while it plays)
         if (Program.Dev.PlayTest && Hub.Engine.Home().Recent is { Length: > 0 } recent)
         {
             var i = Program.Dev.PlayTitle is { } title ? Math.Max(0, Array.FindIndex(recent, s => s.Title.Contains(title, StringComparison.OrdinalIgnoreCase))) : 0;
@@ -176,6 +178,21 @@ public partial class App : Application
         p.Children.Add(new FontIcon { Glyph = glyph, FontSize = 14 });
         p.Children.Add(new TextBlock { Text = text });
         return p;
+    }
+
+    /// <summary>A developer run's step `seconds` after the start (0: none).</summary>
+    private static void Later(double seconds, Action step, string what)
+    {
+        if (seconds <= 0) return;
+        var timer = DispatcherQueue.GetForCurrentThread().CreateTimer();
+        timer.Interval = TimeSpan.FromSeconds(seconds);
+        timer.IsRepeating = false;
+        timer.Tick += (_, _) =>
+        {
+            step();
+            Trace($"dev: {what}");
+        };
+        timer.Start();
     }
 
     /// <summary>Developer runs (--shot, --play-test): each step of the start in the crash note.</summary>

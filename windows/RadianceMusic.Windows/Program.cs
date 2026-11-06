@@ -74,6 +74,12 @@ public sealed class Dev
     /// <summary>--behind: started hidden (behind everything, no focus, not in the taskbar) without a screenshot:
     /// measure-cpu.ps1's runs (the owner's PC stays his).</summary>
     public bool Behind { get; private set; }
+    /// <summary>--minimize-at S, --tray-at S: the app minimises itself (no focus change) or hides to the tray
+    /// S seconds after it starts (measure-cpu.ps1: its SSH session can't reach the desktop's windows).</summary>
+    public double MinimizeAt { get; private set; }
+    public double TrayAt { get; private set; }
+    /// <summary>--no-beat: Now Playing's background flows without following the beat (to measure the beat's cost).</summary>
+    public bool NoBeat { get; private set; }
     public bool Hidden => (Shot != null || Behind) && !Front;
     /// <summary>--splash-at 1.2,3.3: the start's sunrise in a --shot run too, drawn to FILE-splash-S.png at those seconds.</summary>
     public List<double> SplashAt { get; } = new();
@@ -96,6 +102,9 @@ public sealed class Dev
                 case "--side": d.Side = Next(); break;
                 case "--front": d.Front = true; break;
                 case "--behind": d.Behind = true; break;
+                case "--minimize-at": d.MinimizeAt = double.TryParse(Next(), System.Globalization.CultureInfo.InvariantCulture, out var m) ? m : 0; break;
+                case "--tray-at": d.TrayAt = double.TryParse(Next(), System.Globalization.CultureInfo.InvariantCulture, out var tr) ? tr : 0; break;
+                case "--no-beat": d.NoBeat = true; break;
                 case "--setup-act": d.SetupAct = true; break;
                 case "--splash-at":
                     foreach (var s in Next().Split(','))

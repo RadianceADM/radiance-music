@@ -88,7 +88,7 @@ public sealed partial class NowPlayingPage : Page
 
     private void FollowBeat()
     {
-        var on = IsLoaded && playing && App.Window?.Seen != false;
+        var on = IsLoaded && playing && App.Window?.Seen != false && !Program.Dev.NoBeat;
         Func<double?>? moment = on ? () => playing ? LyricClock.At(engineAt, since, Native.Native.ClockMs(), true) : (double?)null : null;
         Back.Follow(moment);
         if (Back.Following != following)
