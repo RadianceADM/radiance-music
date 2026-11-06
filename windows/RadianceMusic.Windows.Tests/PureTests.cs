@@ -168,3 +168,22 @@ public class SideTabsTests
         Assert.Equal("queue", SideTabs.Tab("queue", hasLyrics: false));
     }
 }
+
+/// <summary>The player bar's end (heart, mute, volume, Lyrics, Queue): the volume slider shrinks, then goes, so the heart stays.</summary>
+public class BarFitTests
+{
+    // the bar's inner width: the window's less its padding (32) and column gaps (32)
+    [Fact]
+    public void AWideBarKeepsTheWholeSlider() => Assert.Equal(120, BarFit.Volume(1336)); // a 1400 px window
+
+    [Fact]
+    public void AMidSizeBarShrinksItSoTheHeartStays()
+    {
+        var slider = BarFit.Volume(936); // a 1000 px window: its end column is 234 px
+        Assert.InRange(slider, BarFit.MinSlider, 119);
+        Assert.True(BarFit.EndWithoutSlider + slider <= BarFit.Side(936));
+    }
+
+    [Fact]
+    public void ANarrowBarLetsItGo() => Assert.Equal(0, BarFit.Volume(796)); // an 860 px window
+}

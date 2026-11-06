@@ -10,12 +10,13 @@ namespace RadianceMusic.Controls;
 /// <summary>
 /// The player bar, as the GTK app's (ui.rs layout): the song (cover, title, names) at the start;
 /// Shuffle, Previous, Play, Next, Repeat with the times and the seek bar in the middle; mute and the
-/// volume at the end. The heart and the quality badge come with liking (stage 2). Under 860 px the
-/// volume slider makes room; under 600 the bar keeps only the song and Previous/Play/Next.
+/// volume at the end, with the heart, Lyrics and Queue. Where the end can't hold it all the volume
+/// slider shrinks, then goes (BarFit: the heart stays); under 600 the bar keeps only the song and
+/// Previous/Play/Next.
 /// </summary>
 internal sealed class PlayerBar : Grid
 {
-    private const double Narrow = 860, Phone = 600;
+    private const double Phone = 600;
     private readonly EngineHub hub;
     private readonly SeekModel seek = new();
     private readonly Border art = new() { Width = 56, Height = 56, CornerRadius = new CornerRadius(4) };
@@ -143,7 +144,9 @@ internal sealed class PlayerBar : Grid
 
     private void Fit(double width)
     {
-        volume.Visibility = width < Narrow ? Visibility.Collapsed : Visibility.Visible;
+        var slider = BarFit.Volume(width - Padding.Left - Padding.Right - 2 * ColumnSpacing);
+        volume.Width = Math.Max(slider, BarFit.MinSlider);
+        volume.Visibility = slider > 0 ? Visibility.Visible : Visibility.Collapsed;
         var phone = width < Phone ? Visibility.Collapsed : Visibility.Visible;
         foreach (var e in new UIElement[] { shuffle, repeat, mute, byline, at, length }) e.Visibility = phone;
     }
