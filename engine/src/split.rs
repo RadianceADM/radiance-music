@@ -18,32 +18,8 @@ use crate::net;
 use crate::settings::{LocalSplitter, SplitServer};
 use crate::track::{file_name, Track};
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Voice {
-    /// The song as it is.
-    Song,
-    /// Karaoke: the music without the voice.
-    NoVocals,
-    VocalsOnly,
-}
-
-impl Voice {
-    pub fn stem(self) -> Option<&'static str> {
-        match self {
-            Voice::Song => None,
-            Voice::NoVocals => Some("music"),
-            Voice::VocalsOnly => Some("vocals"),
-        }
-    }
-
-    pub fn label(self) -> &'static str {
-        match self {
-            Voice::Song => "Song",
-            Voice::NoVocals => "No vocals",
-            Voice::VocalsOnly => "Vocals only",
-        }
-    }
-}
+/// The voice buttons (Song / No vocals / Vocals only): core's, shared with the Windows beta.
+pub use radiance_core::mix::Voice;
 
 /// The cache's place for a song's halves (any song, by its key).
 fn cache_base(t: &Track) -> PathBuf {
@@ -124,7 +100,7 @@ pub fn ready_part(t: &Track, name: &str) -> Option<PathBuf> {
 }
 
 /// Split in six (ticked song by song): the four, and the beat's piano and guitar apart.
-pub const SIX: [&str; 6] = ["drums", "bass", "other", "vocals", "guitar", "piano"];
+pub use radiance_core::mix::SIX;
 
 /// Six parts (Piano and Guitar) are put away for a later release (owner,
 /// 2026-10-30): no tick, songs split in four. Songs already split in six still

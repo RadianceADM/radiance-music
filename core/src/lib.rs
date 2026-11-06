@@ -6,10 +6,12 @@
 pub mod library;
 pub mod lyrics;
 pub mod menu;
+pub mod mix;
 pub mod quality;
 pub mod queue;
 pub mod search;
 pub mod sing;
+pub mod split_queue;
 pub mod track;
 pub mod trouble;
 pub mod words;

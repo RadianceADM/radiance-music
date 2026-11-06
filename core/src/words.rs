@@ -146,6 +146,53 @@ pub fn next_playlist_name(existing: usize) -> String {
     format!("My Playlist {}", existing + 1)
 }
 
+// ----------------------------------------------------------------- splitting (stage 3, the Linux app's words)
+
+/// A song's split mark while it waits, and its place in line.
+pub const SPLIT_WAITING: &str = "Waiting to be split";
+pub fn split_place(n: usize) -> String {
+    format!("Number {n} in line; liked songs are split one after another.")
+}
+pub const SPLITTING_NOW: &str = "Being split into the voice and the music now";
+pub const SPLIT_DONE: (&str, &str) = ("Split", "No vocals and Vocals only are ready: switch on Now Playing, instantly.");
+
+/// The split's bar: how far, in words (sending, splitting, bringing back); after the split, its
+/// copy for the split server's library (-1) and its words' times (-2).
+pub fn split_progress(p: f64) -> String {
+    match p {
+        p if p <= -2.0 => "Timing every word (MMS on the split server)…".to_string(),
+        p if p < 0.0 => "Keeping a copy in the split server's library…".to_string(),
+        p if p < 0.05 => format!("Sending the song · {:.0}%", p * 100.0),
+        p if p < 0.93 => format!("Splitting · {:.0}%", p * 100.0),
+        p => format!("Bringing the parts back · {:.0}%", p * 100.0),
+    }
+}
+
+pub fn split_failed(title: &str) -> String {
+    format!("Couldn't split “{title}” right now")
+}
+
+/// Getting splitting ready at the first start (under the sunrise).
+pub const SETUP_GETTING: &str = "Getting Radiance Music ready…";
+pub fn setup_step(step: &str) -> String {
+    format!("Getting Radiance Music ready: {step}")
+}
+pub const SETUP_RETRY: &str = "Couldn't get splitting ready yet. Trying again in a moment…";
+pub const SETUP_OFFLINE: &str = "You're offline. Splitting songs needs a one-time download: it starts when you're back online.";
+pub const OPEN_NOW: &str = "Open Radiance Music Now";
+pub const OPEN_NOW_NOTE: &str = "Play music now; splitting gets ready in the background when the internet's back";
+pub const HOW_TO_FIX: &str = "How to Fix It";
+
+/// A song's menu: splitting and lyrics.
+pub const SPLIT_TWO: &str = "Split: Music + Vocals (Fast)";
+pub const SPLIT_FOUR: &str = "Split: Four Parts";
+pub const SPLIT_FOUR_AFTER_TWO: &str = "Split in Four Parts";
+pub const SHOW_LYRICS: &str = "Show Lyrics";
+pub const EDIT_LYRICS: &str = "Edit Lyrics…";
+pub const FIND_LYRICS_AGAIN: &str = "Find Lyrics Again";
+pub const LYRICS_SAVED: &str = "Lyrics saved";
+pub const LYRICS_NOT_SAVED: &str = "Couldn't save the lyrics";
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -191,5 +238,21 @@ mod tests {
         assert_eq!(BROWSE[0], ("Pinoy hip-hop", "pinoy hip hop"));
         assert_eq!(BROWSE[11], ("Reggae", "reggae"));
         assert_eq!(ROW_CARDS, 20);
+    }
+
+    #[test]
+    fn splitting_says_it_as_the_linux_app() {
+        assert_eq!(split_progress(-2.0), "Timing every word (MMS on the split server)…");
+        assert_eq!(split_progress(-1.0), "Keeping a copy in the split server's library…");
+        assert_eq!(split_progress(0.02), "Sending the song · 2%");
+        assert_eq!(split_progress(0.5), "Splitting · 50%");
+        assert_eq!(split_progress(0.95), "Bringing the parts back · 95%");
+        assert_eq!(split_place(3), "Number 3 in line; liked songs are split one after another.");
+        assert_eq!(split_failed("Tarot"), "Couldn't split “Tarot” right now");
+        assert_eq!(setup_step("Downloading Demucs…"), "Getting Radiance Music ready: Downloading Demucs…");
+        assert_eq!(SPLIT_WAITING, "Waiting to be split");
+        assert_eq!(SETUP_OFFLINE, "You're offline. Splitting songs needs a one-time download: it starts when you're back online.");
+        assert_eq!((SPLIT_TWO, SPLIT_FOUR, SPLIT_FOUR_AFTER_TWO), ("Split: Music + Vocals (Fast)", "Split: Four Parts", "Split in Four Parts"));
+        assert_eq!((LYRICS_SAVED, LYRICS_NOT_SAVED), ("Lyrics saved", "Couldn't save the lyrics"));
     }
 }

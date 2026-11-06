@@ -36,7 +36,9 @@ use crate::relay::Relay;
 use crate::settings::{self, Settings, Transition, FADE_RANGE};
 use crate::split::{self, Voice};
 use crate::track::{clock, file_key, letter_of, matches, Source, Track};
+use radiance_core::mix::{self as mixer, part_volumes};
 use radiance_core::quality::{self, Heard};
+use radiance_core::split_queue::{self, SplitQueue};
 use radiance_core::queue::{self, Queue, Removed, Repeat, Step};
 use radiance_core::library::{self as shelf, GroupKind as LikedView, Saved, AZ, RECENT_ROWS};
 use radiance_core::sing;
@@ -995,8 +997,8 @@ pub struct Ui {
     voice_status: gtk::Label,
     /// The half of a split song playing now, if one is.
     on_half: Cell<Option<Voice>>,
-    splitting: RefCell<Option<Track>>,
-    split_queue: RefCell<Vec<Track>>,
+    /// The four-part split queue: one song at a time, a song asked for by hand first (core's).
+    split_q: RefCell<SplitQueue>,
     /// The fast split's own lane (#43), beside the four-part queue: the song being split in two,
     /// and those waiting (each: asked for by hand).
     splitting_two: RefCell<Option<Track>>,
@@ -1283,8 +1285,7 @@ impl Ui {
             counterpart: RefCell::default(),
             voice_status: gtk::Label::builder().xalign(0.0).wrap(true).wrap_mode(gtk::pango::WrapMode::WordChar).css_classes(["dim-label", "caption"]).build(),
             on_half: Cell::new(None),
-            splitting: RefCell::default(),
-            split_queue: RefCell::default(),
+            split_q: RefCell::default(),
             splitting_two: RefCell::default(),
             two_queue: RefCell::default(),
             split_asked: RefCell::default(),
@@ -2029,15 +2030,7 @@ impl Ui {
         *self.six_check.borrow_mut() = Some(six);
         for part in ["drums", "bass", "other", "piano", "guitar", "music", "vocals"] {
             let row = gtk::Box::builder().spacing(8).build();
-            let name = match part {
-                "drums" => "Drums",
-                "bass" => "Bass",
-                "other" => "Other",
-                "piano" => "Piano",
-                "guitar" => "Guitar",
-                "music" => "Music",
-                _ => "Vocals",
-            };
+            let name = mixer::part_title(part);
             row.append(&gtk::Label::builder().label(name).xalign(0.0).width_chars(7).css_classes(["caption"]).build());
             // how much of it this song has, right now (a part can be nearly empty in a song)
             let meter = gtk::LevelBar::builder().min_value(0.0).max_value(1.0).value(0.0).valign(gtk::Align::Center).width_request(28).css_classes(["part-meter"]).build();
@@ -2941,11 +2934,7 @@ impl Ui {
         };
         if split::has_parts(&t) || Self::shown_parts(&t).len() >= 4 {
             // with the four parts: the buttons are mixer presets
-            let preset = |p: &str| match v {
-                Voice::Song => 1.0,
-                Voice::NoVocals => if p == "vocals" { 0.0 } else { 1.0 },
-                Voice::VocalsOnly => if p == "vocals" { 1.0 } else { 0.0 },
-            };
+            let preset = |p: &str| mixer::preset(v, p);
             for p in split::SIX {
                 self.part_gains.borrow_mut().insert(p.to_string(), preset(p));
             }
@@ -3282,18 +3271,9 @@ impl Ui {
         if !self.can_split() {
             return;
         }
-        let key = t.key();
-        if self.splitting.borrow().as_ref().is_some_and(|x| x.key() == key) {
+        if !self.split_q.borrow_mut().ask(t.clone(), first) {
             return; // being split now
         }
-        let mut queue = self.split_queue.borrow_mut();
-        queue.retain(|x| x.key() != key);
-        if first {
-            queue.insert(0, t.clone());
-        } else {
-            queue.push(t.clone());
-        }
-        drop(queue);
         self.run_splits();
     }
 
@@ -3302,11 +3282,9 @@ impl Ui {
         if std::env::var_os("RADIANCE_SHOT").is_some() {
             return; // a screenshot copy splits nothing
         }
-        let liked: Vec<Track> = self.liked.borrow().iter().filter(|t| t.file.is_some() && !t.video).cloned().collect();
+        let liked = split_queue::auto_list(&self.liked.borrow(), split::done);
         for t in liked {
-            if !split::done(&t) {
-                self.request_split(&t);
-            }
+            self.request_split(&t);
         }
     }
 
@@ -3339,8 +3317,8 @@ impl Ui {
 
     /// The pause / resume button: shown while songs wait or one is being split.
     fn show_split_toggle(&self) {
-        let waiting = self.split_queue.borrow().len();
-        let busy = self.splitting.borrow().is_some();
+        let waiting = self.split_q.borrow().waiting().len();
+        let busy = self.split_q.borrow().now().is_some();
         let paused = Self::split_paused();
         self.split_toggle.set_visible(self.can_split() && (waiting > 0 || busy || paused));
         let (icon, text) = if paused {
@@ -3354,7 +3332,7 @@ impl Ui {
     /// One split at a time on the server.
     fn run_splits(self: &Rc<Self>) {
         crate::watch::doing("starting the next split");
-        if self.splitting.borrow().is_some() || self.split_queue.borrow().is_empty() {
+        if self.split_q.borrow().now().is_some() || self.split_q.borrow().waiting().is_empty() {
             self.update_voice_status();
             return;
         }
@@ -3368,15 +3346,15 @@ impl Ui {
             });
             return;
         }
-        let t = self.split_queue.borrow_mut().remove(0);
+        let Some(t) = self.split_q.borrow_mut().take_next() else { return };
         let (server, local) = (self.settings.borrow().split.clone(), self.settings.borrow().local_split.clone());
         if server.is_none() && local.is_none() {
+            self.split_q.borrow_mut().finish();
             self.run_splits(); // (set up no more: the next one, if it can)
             return;
         }
         let uri = self.uri_plain(&t);
         let relay = self.relay.clone();
-        self.splitting.replace(Some(t.clone()));
         self.split_progress.set(0.0);
         self.update_voice_status();
         self.refresh_split_marks();
@@ -3427,14 +3405,14 @@ impl Ui {
             },
             move |result| {
                 let Some(me) = me.upgrade() else { return };
-                me.splitting.replace(None);
+                me.split_q.borrow_mut().finish();
                 let asked = me.split_asked.borrow_mut().remove(&t.key());
                 match result {
                     Ok(()) => me.split_landed(&t, asked),
                     Err(e) => {
                         debug(&format!("split {}: {e}", t.title));
                         if asked {
-                            me.toast(&format!("Couldn't split “{}” right now", t.title));
+                            me.toast(&words::split_failed(&t.title));
                         }
                     }
                 }
@@ -3459,18 +3437,19 @@ impl Ui {
             Some(LyricsKind::Text) => slot.append(&badge("format-justify-center-symbolic", "lyrics-text", "Lyrics", "The words as text. Once the song is split, they're timed to the singing.")),
             None => {}
         }
-        let splitting = self.splitting.borrow().as_ref().is_some_and(|x| x.key() == t.key()) || self.away_on_server(t);
-        let waiting = self.split_queue.borrow().iter().position(|x| x.key() == t.key());
+        let place = self.split_q.borrow().place(&t.key());
+        let splitting = place == Some(0) || self.away_on_server(t);
+        let waiting = place.filter(|p| *p > 0).map(|p| p - 1);
         let on_server = t.source == Source::Server && t.file.is_none() && !servers::mix_parts(t).is_empty();
         if on_server {
             slot.append(&badge("edit-cut-symbolic", "split", "Split on its server", "Its parts are on the server: the Mixer, No vocals and Vocals only play them from there."));
         } else if splitting {
-            let spin = gtk::Spinner::builder().spinning(true).tooltip_text("Being split into the voice and the music now").build();
+            let spin = gtk::Spinner::builder().spinning(true).tooltip_text(words::SPLITTING_NOW).build();
             slot.append(&spin);
         } else if split::is_split(t) {
-            slot.append(&badge("edit-cut-symbolic", "split", "Split", "No vocals and Vocals only are ready: switch on Now Playing, instantly."));
+            slot.append(&badge("edit-cut-symbolic", "split", words::SPLIT_DONE.0, words::SPLIT_DONE.1));
         } else if let Some(i) = waiting {
-            slot.append(&badge("content-loading-symbolic", "waiting", "Waiting to be split", &format!("Number {} in line; liked songs are split one after another.", i + 1)));
+            slot.append(&badge("content-loading-symbolic", "waiting", words::SPLIT_WAITING, &words::split_place(i + 1)));
         }
     }
 
@@ -3490,20 +3469,14 @@ impl Ui {
     /// The split's bar: how far, in words (sending, splitting, bringing back).
     fn show_split_progress(&self) {
         crate::watch::doing("showing split progress");
-        let busy = self.splitting.borrow().is_some();
+        let busy = self.split_q.borrow().now().is_some();
         self.split_bar.set_visible(busy);
         if !busy {
             return;
         }
         let p = self.split_progress.get();
         // split; then its copy goes to the split server's library and its words get their times
-        let text = match p {
-            p if p <= -2.0 => "Timing every word (MMS on the split server)…".to_string(),
-            p if p < 0.0 => "Keeping a copy in the split server's library…".to_string(),
-            p if p < 0.05 => format!("Sending the song · {:.0}%", p * 100.0),
-            p if p < 0.93 => format!("Splitting · {:.0}%", p * 100.0),
-            p => format!("Bringing the parts back · {:.0}%", p * 100.0),
-        };
+        let text = words::split_progress(p);
         if p < 0.0 {
             self.split_bar.pulse();
         } else {
@@ -3541,9 +3514,9 @@ impl Ui {
         self.mixer_row.set_subtitle(if parts { "Each part as loud as you like, and effects" } else { "Low cut, high cut and reverb" });
         self.mixer_list.set_visible(true);
         let cur = self.current.borrow().clone();
-        let splitting_key = self.splitting.borrow().as_ref().map(|t| t.key());
+        let splitting_key = self.split_q.borrow().now().map(|t| t.key());
         // not while it's being split or waiting in line for it
-        let queued = |t: &Track| self.split_queue.borrow().iter().any(|x| x.key() == t.key());
+        let queued = |t: &Track| self.split_q.borrow().place(&t.key()).is_some_and(|p| p > 0);
         // Music + Vocals already (the fast split): Four parts is what's left, where it can work
         let halves = cur.as_ref().is_some_and(|t| Self::shown_parts(t).len() == 2 && !split::has_parts(t));
         let can = cur.as_ref().is_some_and(|t| {
@@ -3572,7 +3545,7 @@ impl Ui {
         } else {
             "Into Music and Vocals (a few seconds), or four parts for the Mixer (about 3 minutes). Then No vocals and Vocals only switch at once."
         }));
-        let waiting = self.split_queue.borrow().len();
+        let waiting = self.split_q.borrow().waiting().len();
         // the vocals choices only where they can work (owner, 2026-11-04: "do not offer if not possible")
         self.voice_group.set_sensitive(true);
         let video = cur.as_ref().is_some_and(|t| t.video);
@@ -3586,7 +3559,7 @@ impl Ui {
             // a music video is never split (it plays with its picture): nothing to offer for it
             self.voice_group.set_sensitive(false);
             "Music videos play as they are: No vocals and Vocals only are for songs.".to_string()
-        } else if let Some(t) = self.splitting.borrow().as_ref() {
+        } else if let Some(t) = self.split_q.borrow().now() {
             let host = self.settings.borrow().split.as_ref().map(|s| s.host.clone());
             let more = if waiting > 0 { format!(" ({waiting} more waiting)") } else { String::new() };
             let both = match (host, self.settings.borrow().local_split.is_some()) {
@@ -3602,7 +3575,7 @@ impl Ui {
         };
         self.voice_status.set_visible(!text.is_empty());
         self.voice_status.set_label(&text);
-        let busy = self.splitting.borrow().is_some() || waiting > 0;
+        let busy = self.split_q.borrow().now().is_some() || waiting > 0;
         let away = self.show_away(); // your songs in a server's split queue
         self.split_queue_btn.set_visible(busy || away);
         self.split_card.set_visible(busy || away); // nothing to say: no card (paused shows its own line while songs wait)
@@ -4088,7 +4061,7 @@ impl Ui {
                 let t1 = t.clone();
                 add(&mine, "Split: Music + Vocals (Fast)", "split", Box::new(move |me| me.split_as(&t1, true)));
             }
-            let four_busy = self.splitting.borrow().as_ref().is_some_and(|x| x.key() == t.key()) || self.split_queue.borrow().iter().any(|x| x.key() == t.key());
+            let four_busy = self.split_q.borrow().place(&t.key()).is_some();
             if self.can_split() && Self::shown_parts(&t).len() < 4 && !four_busy {
                 let t1 = t.clone();
                 add(&mine, if halves { "Split in Four Parts" } else { "Split: Four Parts" }, "split-four", Box::new(move |me| me.split_as(&t1, false)));
@@ -6221,7 +6194,7 @@ impl Ui {
                     Err(e) => {
                         debug(&format!("fast split {}: {e}", t.title));
                         if asked {
-                            me.toast(&format!("Couldn't split “{}” right now", t.title));
+                            me.toast(&words::split_failed(&t.title));
                         }
                     }
                 }
@@ -6758,14 +6731,14 @@ impl Ui {
             });
             r
         };
-        let now = self.splitting.borrow().clone();
+        let now = self.split_q.borrow().now().cloned();
         if let Some(t) = &now {
             let r = row(t, "Splitting now");
             self.split_list.append(&r);
             self.split_now_row.replace(Some(r));
             self.show_split_progress(); // its status and progress, right away
         }
-        let waiting = self.split_queue.borrow().clone();
+        let waiting = self.split_q.borrow().waiting().to_vec();
         for (i, t) in waiting.iter().enumerate() {
             self.split_list.append(&row(t, &format!("Number {} in line · {}", i + 1, t.credit())));
         }
@@ -6922,39 +6895,10 @@ impl Ui {
     }
 }
 
-/// Every part's volume for the player, at full unless its slider says otherwise. Every part,
-/// always: Reset empties the sliders' record, and a part left out kept its last volume in the
-/// player while its slider showed full (owner, 2026-10-31: "vocals lang natugtog": after Reset
-/// and Vocals down, only the vocals played until Drums, Bass and Other were each moved).
-/// Four-part songs: Piano and Guitar are inside Other, so they follow it.
-fn part_volumes(sliders: &HashMap<String, f64>, six: bool) -> HashMap<String, f64> {
-    let mut g: HashMap<String, f64> = split::SIX.iter().map(|p| (p.to_string(), sliders.get(*p).copied().unwrap_or(1.0))).collect();
-    if !six {
-        let other = g["other"];
-        g.insert("piano".into(), other);
-        g.insert("guitar".into(), other);
-    }
-    g
-}
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn every_part_gets_a_volume() {
-        // after Reset (nothing set) and Vocals down: drums, bass and other go at full, said
-        let after_reset: HashMap<String, f64> = [("vocals".to_string(), 0.3)].into();
-        let g = part_volumes(&after_reset, false);
-        for p in ["drums", "bass", "other", "piano", "guitar"] {
-            assert_eq!(g[p], 1.0, "{p}");
-        }
-        assert_eq!(g["vocals"], 0.3);
-        // four parts: piano and guitar follow other
-        let other_down: HashMap<String, f64> = [("other".to_string(), 0.4), ("piano".to_string(), 0.9)].into();
-        assert_eq!(part_volumes(&other_down, false)["piano"], 0.4);
-        assert_eq!(part_volumes(&other_down, true)["piano"], 0.9);
-    }
 
     #[test]
     fn karaoke_lights_the_sung_part() {
