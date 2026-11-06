@@ -36,7 +36,11 @@ internal static class Shot
             await Task.Delay(1500);
             // wait:N: N seconds more before the next step (a song's other version is found online)
             if (act.StartsWith("wait:") && double.TryParse(act[5..], System.Globalization.CultureInfo.InvariantCulture, out var secs)) await Task.Delay(TimeSpan.FromSeconds(secs));
-            else DevActs.Run(window, act);
+            else
+            {
+                if (act.StartsWith("queue-") || act.StartsWith("click:")) Crash.Note($"shot: queue before {act}: " + window.SidePanel.Titles());
+                DevActs.Run(window, act);
+            }
         }
         await Task.Delay(TimeSpan.FromSeconds(dev.Wait));
         var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(window);
