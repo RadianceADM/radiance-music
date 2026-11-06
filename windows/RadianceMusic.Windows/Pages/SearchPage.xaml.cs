@@ -77,7 +77,8 @@ public sealed partial class SearchPage : Page
         if (Program.Dev.Hidden && Find<Microsoft.UI.Xaml.Controls.Primitives.Popup>(Box, "SuggestionsPopup") is { IsOpen: false } list)
             list.ShouldConstrainToRootBounds = true;
         // (the box opens its list by itself only as you type: your songs on an empty box's focus open it too)
-        Box.IsSuggestionListOpen = items.Count > 0 && Box.FocusState != FocusState.Unfocused;
+        // (a hidden screenshot's window never takes the keyboard: its list shows for the shot all the same)
+        Box.IsSuggestionListOpen = items.Count > 0 && (Box.FocusState != FocusState.Unfocused || Program.Dev.Hidden);
         App.Trace($"suggestions: {items.Count}, focus {Box.FocusState}, list open {Box.IsSuggestionListOpen}");
     }
 

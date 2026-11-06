@@ -32,7 +32,14 @@ any test window, create `D:\rpos\HOLD` (the POS session's tests wait for it) and
 | `--play-test`, `--play-title WORDS` | Home's first recent song, or the one with WORDS in its title |
 | `--side queue\|lyrics` | the side panel open, as the bar's buttons open it |
 | `--act STEP` (again for more) | done by the app before the shot, no input sent to the desktop: `like:TITLE`, `menu`, `click:WORDS` (a button or menu item, in a menu or dialog too), `group:albums:NAME`, `switch:video\|song`, `fullscreen`, `liked-search:TEXT`, `queue-move:FROM:TO`, `queue-menu:N`, `lyric-tap:N`, `wait:N`. The log (`beta-crash.log`) says what each did, the queue's order and where the song is |
+| `--act STEP` (stage 4a) | `settings:0\|1\|2` (Playing, Storage, Help), `guide`, `whats-new`, `update`, `report`, `rating`, `storage-move:FOLDER` (the move's confirm only), `suggest:WORDS` (typed into Search's box, its list open) |
+| `--update-shot out\|downloading\|ready\|failed` | the update pop-up at that step, with a made-up release (nothing fetched, nothing put on) |
+| `--offline` | no internet as far as the app knows: the Offline sign |
 | `--video-probe FILE` | a video alone in a test window (the music video spike); `--probe-video FILE OUT` the same with no window (fails over SSH: no desktop for a swapchain) |
+
+Developer runs (`--shot`, `--play-test`, `--behind`) split nothing by themselves and download no
+splitter onto the test computer: they set `RADIANCE_AUTO_SPLIT_S=off` and `RADIANCE_SETUP=off` unless
+the caller set them (#61 M7). The first-start guide is counted as seen in them.
 
 `measure-cpu.ps1 -App beta [-PlayTitle WORDS] [-Page NAME] [-NoPlay] [-NoBeat] [-Video FILE] [-Seconds N] [-Settle N] [-Front]`:
 the beta's CPU on a page, then minimized, then in the tray. It runs hidden (`--behind`: past every
@@ -55,3 +62,12 @@ decode. Stage 3 (2026-11-07, ribs03, GTX 1060 6GB, a stream playing, % of one co
 The developer runs log their busiest threads by name when over a fifth of a core (`busy:` in
 beta-crash.log): with the Mixer open, most of it is the compositor's thread (the pop-up's meters) and
 GStreamer's mixing the parts.
+
+## Releasing a beta
+
+The beta updates itself from the newest GitHub release that carries `RadianceMusic-Beta-Setup.exe`
+with the asset **label** `Radiance Music (beta) 0.8.0-beta.N` (the label is where its version is
+read; the Linux and Windows apps never take that file). Upload it with its label:
+`gh release upload TAG "RadianceMusic-Beta-Setup.exe#Radiance Music (beta) 0.8.0-beta.N"`. A beta
+installed by its installer updates itself (Update Now → Restart to Update puts it on where it is,
+`/D=`); one run from `dist` only links to the release. It keeps its own `update-beta.json`.
