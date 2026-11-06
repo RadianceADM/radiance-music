@@ -216,11 +216,13 @@ pub struct MixState {
     pub voice: Voice,
     pub effects: Sound,
     pub plays_parts: bool,
+    /// What the Mixer says under its buttons ("Plays as the full song until it's split."), or nothing.
+    pub note: String,
 }
 
 impl Default for MixState {
     fn default() -> Self {
-        MixState { parts: Vec::new(), voice: Voice::Song, effects: Sound::OFF, plays_parts: false }
+        MixState { parts: Vec::new(), voice: Voice::Song, effects: Sound::OFF, plays_parts: false, note: String::new() }
     }
 }
 
@@ -1065,6 +1067,8 @@ struct Engine {
     /// Splitting (stage 3): the four-part queue, the fast lane (song, asked by hand) and the song in it,
     /// and the songs asked for by hand (a failure says so).
     split_q: RefCell<SplitQueue>,
+    /// A paused queue's one look-again pending (final review I5: one per waiting song before).
+    pause_looking: Cell<bool>,
     two_q: RefCell<VecDeque<(Track, bool)>>,
     splitting_two: RefCell<Option<Track>>,
     split_asked: RefCell<HashSet<String>>,
@@ -1137,6 +1141,7 @@ impl Engine {
             quality: RefCell::default(),
             loading: Cell::new(false),
             split_q: RefCell::default(),
+            pause_looking: Cell::new(false),
             two_q: RefCell::default(),
             splitting_two: RefCell::default(),
             split_asked: RefCell::default(),
@@ -1158,6 +1163,16 @@ impl Engine {
     }
 
     fn start_up(self: &Rc<Self>) {
+        // the internet: GIO says when it comes and goes, as the GTK app's (final review I4: the first
+        // start's download and offline lyrics waited for a search or a song to notice it was back)
+        use gio::prelude::*;
+        let monitor = gio::NetworkMonitor::default();
+        let me = Rc::downgrade(self);
+        monitor.connect_network_changed(move |_, available| {
+            if let Some(e) = me.upgrade() {
+                e.set_online(available);
+            }
+        });
         *self.liked.borrow_mut() = crate::db::liked();
         *self.counts.borrow_mut() = crate::db::counts();
         let me = Rc::downgrade(self);
@@ -1991,16 +2006,16 @@ impl Engine {
     fn set_voice(self: &Rc<Self>, v: Voice) {
         self.voice.set(v);
         let Some(t) = self.current.borrow().clone() else { return };
-        let have = split::mix_parts(&t);
-        if have.is_empty() {
-            if v != Voice::Song {
-                self.split_fast(&playing::saved_copy(&self.liked.borrow(), &t), true);
-            }
-        } else {
+        // the preset always (a song not split yet gets it once its parts land: final review C2, it came
+        // back with every part at full), and its split asked for
+        {
             let mut g = self.part_gains.borrow_mut();
             for p in radiance_core::mix::SIX.iter().chain(["music"].iter()) {
                 g.insert(p.to_string(), preset(v, p));
             }
+        }
+        if split::mix_parts(&t).is_empty() && v != Voice::Song {
+            self.split_fast(&playing::saved_copy(&self.liked.borrow(), &t), true);
         }
         self.apply_mix();
         self.publish_now();
@@ -2024,7 +2039,10 @@ impl Engine {
         };
         // its parts are loaded (the Mixer is live; all up, the song's own file is what's heard)
         let plays_parts = self.player.borrow().as_ref().is_some_and(|p| p.is_stems());
-        MixState { parts, voice: self.voice.get(), effects: effects::now(), plays_parts }
+        // a voice asked for on a song not split yet: the full song plays till its parts land (GTK's status)
+        let voice = self.voice.get();
+        let note = if voice != Voice::Song && parts.is_empty() && self.current.borrow().is_some() { radiance_core::words::FULL_UNTIL_SPLIT.to_string() } else { String::new() };
+        MixState { parts, voice, effects: effects::now(), plays_parts, note }
     }
 
     // ------------------------------------------------------------------ splitting (stage 3)
@@ -2132,7 +2150,12 @@ impl Engine {
         }
         if Self::split_paused() {
             self.publish_splits();
-            self.bg(|| std::thread::sleep(Duration::from_secs(30)), |e, ()| e.run_splits()); // once the pause is over
+            if !self.pause_looking.replace(true) {
+                self.bg(|| std::thread::sleep(pause_poll()), |e, ()| {
+                    e.pause_looking.set(false);
+                    e.run_splits();
+                }); // once the pause is over
+            }
             return;
         }
         let Some(t) = self.split_q.borrow_mut().take_next() else { return };
@@ -2292,7 +2315,18 @@ impl Engine {
             self.set_splitter_up();
             return;
         }
-        if self.settings.borrow().local_split.is_some() {
+        {
+            // GTK's guard: a split server needs no splitter here; one whose Python is gone is set up again
+            let s = self.settings.borrow();
+            if s.split.is_some() || s.local_split.as_ref().is_some_and(|l| std::path::Path::new(&l.python).exists()) {
+                return;
+            }
+        }
+        // a computer that can't split (too few cores, too little memory or disk) goes on without it, as
+        // GTK's: no hold on the sunrise, no endless retry (final review I3)
+        let problems = self.shared.sources.setup_problems();
+        if !problems.is_empty() {
+            crate::log::note(&format!("splitting can't be set up on this computer: {}", problems.join(" ")));
             return;
         }
         if std::env::var_os("RADIANCE_SETUP_TEST").is_none() {
@@ -2316,6 +2350,10 @@ impl Engine {
     /// The download and install (worker thread), each step said as it comes; offline, it waits for the
     /// internet; another failure tries again in 30 s.
     fn set_splitter_up(self: &Rc<Self>) {
+        // (one at a time: the internet coming back and the retry's timer could both ask)
+        if matches!(self.shared.view(|v| v.setup.clone()), SetupState::Getting { .. }) {
+            return;
+        }
         crate::log::note("getting splitting ready on this computer (its first start)");
         self.set_setup(SetupState::Getting { step: String::new(), done: 0.0 });
         let (sources, shared) = (self.shared.sources.clone(), self.shared.clone());
@@ -2334,6 +2372,7 @@ impl Engine {
             |e, result| match result {
                 Ok(local) => {
                     crate::log::note("splitting is set up on this computer");
+                    e.set_online(true); // (it came from the internet)
                     e.settings.borrow_mut().local_split = Some(local);
                     settings::save(&e.settings.borrow());
                     e.set_setup(SetupState::Ready);
@@ -2348,12 +2387,14 @@ impl Engine {
                         e.set_online(false); // (back online, it starts again)
                     } else {
                         e.set_setup(SetupState::Failed { why });
-                        e.bg(|| std::thread::sleep(Duration::from_secs(30)), |e, ()| {
-                            if matches!(e.shared.view(|v| v.setup.clone()), SetupState::Failed { .. }) {
-                                e.set_splitter_up();
-                            }
-                        });
                     }
+                    // tried again in a while, offline too, as GTK's (final review I4: offline it waited for
+                    // a search or a song to notice the internet was back)
+                    e.bg(|| std::thread::sleep(setup_retry()), |e, ()| {
+                        if matches!(e.shared.view(|v| v.setup.clone()), SetupState::Failed { .. } | SetupState::Offline) {
+                            e.set_splitter_up();
+                        }
+                    });
                 }
             },
         );
@@ -2385,10 +2426,18 @@ impl Engine {
         if cur.as_ref().is_some_and(|c| c.key() == t.key()) {
             self.load_lyrics(t, self.play_gen.get());
         }
-        if let Some(cur) = cur.filter(|c| c.key() == t.key() && !c.video) {
+        // (only while it plays: paused, or last time's song shown at the start, it's left alone, as GTK's
+        // split_landed; the next slider move picks the parts up. Final review C1: it started by itself.)
+        let playing = self.player.borrow().as_ref().is_some_and(|p| p.playing());
+        if let Some(cur) = cur.filter(|c| c.key() == t.key() && !c.video && playing) {
             let at = self.player.borrow().as_ref().and_then(|p| p.position()).unwrap_or(0.0);
             if self.play_parts(&cur, at, true) {
                 self.publish_now();
+                // a voice was asked for before it was split: it's heard now (GTK's words)
+                let v = self.voice.get();
+                if v != Voice::Song {
+                    self.toast(format!("“{}”: {}", t.title, v.label().to_lowercase()));
+                }
             }
         }
     }
@@ -3045,6 +3094,17 @@ mod tests {
     fn explorer_selects_a_path_with_spaces() {
         assert_eq!(super::explorer_select(r"C:\Music\Radiance Music\A B - Song.flac"), r#"/select,"C:\Music\Radiance Music\A B - Song.flac""#);
     }
+}
+
+/// How often a paused split queue looks again (the pause is a file other copies can lift; 30 s, or
+/// RADIANCE_SPLIT_PAUSE_POLL_MS in the tests).
+fn pause_poll() -> Duration {
+    std::env::var("RADIANCE_SPLIT_PAUSE_POLL_MS").ok().and_then(|v| v.parse().ok()).map(Duration::from_millis).unwrap_or(Duration::from_secs(30))
+}
+
+/// How long getting splitting ready waits before trying again (GTK's 30 s; RADIANCE_SETUP_RETRY_MS: the tests').
+fn setup_retry() -> Duration {
+    std::env::var("RADIANCE_SETUP_RETRY_MS").ok().and_then(|v| v.parse().ok()).map(Duration::from_millis).unwrap_or(Duration::from_secs(30))
 }
 
 /// RADIANCE_SETUP_TEST=act: the first start's download acted out (screenshot checks of the sunrise's

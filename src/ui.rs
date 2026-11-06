@@ -2826,15 +2826,10 @@ impl Ui {
     fn update_meters(&self) {
         let levels: HashMap<String, f64> = self.player.borrow().as_ref().map(|p| p.part_levels().into_iter().collect()).unwrap_or_default();
         for (name, meter) in self.part_meters.borrow().iter() {
-            let db = levels.get(name).map(|p| 10.0 * p.max(1e-12).log10());
-            // -60 dB (nothing) to -6 dB (as loud as a part gets)
-            meter.set_value(db.map(|d| ((d + 60.0) / 54.0).clamp(0.0, 1.0)).unwrap_or(0.0));
-            let label = name[..1].to_uppercase() + &name[1..];
-            meter.set_tooltip_text(Some(&match db {
-                Some(d) if d < -42.0 => format!("{label}: almost nothing in the song here"),
-                Some(d) => format!("{label}: {d:.0} dB in the song here"),
-                None => format!("{label}: how loud it is in the song (while its parts play)"),
-            }));
+            let power = levels.get(name).copied();
+            // -60 dB (nothing) to -6 dB (as loud as a part gets): core's, the beta's too
+            meter.set_value(power.map(radiance_core::mix::meter).unwrap_or(0.0));
+            meter.set_tooltip_text(Some(&radiance_core::mix::meter_tip(name, power)));
         }
     }
 

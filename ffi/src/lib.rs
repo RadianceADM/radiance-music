@@ -1041,6 +1041,8 @@ pub struct MixView {
     pub high_cut: f64,
     pub reverb: f64,
     pub plays_parts: bool,
+    /// Under the voice buttons: "Plays as the full song until it's split.", or empty.
+    pub note: String,
 }
 
 fn mix_view(m: &controller::MixState) -> MixView {
@@ -1051,6 +1053,7 @@ fn mix_view(m: &controller::MixState) -> MixView {
         high_cut: m.effects.high_cut,
         reverb: m.effects.reverb,
         plays_parts: m.plays_parts,
+        note: m.note.clone(),
     }
 }
 
@@ -1058,6 +1061,9 @@ fn mix_view(m: &controller::MixState) -> MixView {
 pub struct PartLevelView {
     pub name: String,
     pub level: f64,
+    /// Its meter, 0..1 in dB (core::mix::meter, the Linux app's), and what it says when pointed at.
+    pub meter: f64,
+    pub tip: String,
 }
 
 /// The song being split, how far, and at what (core's words: "Splitting · 40%"…).
@@ -1236,7 +1242,7 @@ impl MusicEngine {
     }
     /// Each part's loudness now (the meters, while the Mixer is open).
     pub fn part_levels(&self) -> Vec<PartLevelView> {
-        self.inner.part_levels().into_iter().map(|(name, level)| PartLevelView { name, level }).collect()
+        self.inner.part_levels().into_iter().map(|(name, level)| PartLevelView { meter: radiance_core::mix::meter(level), tip: radiance_core::mix::meter_tip(&name, Some(level)), name, level }).collect()
     }
 
     // splitting
@@ -1343,7 +1349,7 @@ mod tests {
 
     #[test]
     fn the_mix_view_names_the_parts_in_the_linux_words() {
-        let m = controller::MixState { parts: vec![("drums".into(), 1.0), ("vocals".into(), 0.3)], voice: radiance_core::mix::Voice::NoVocals, effects: radiance_engine::effects::Sound::OFF, plays_parts: true };
+        let m = controller::MixState { parts: vec![("drums".into(), 1.0), ("vocals".into(), 0.3)], voice: radiance_core::mix::Voice::NoVocals, effects: radiance_engine::effects::Sound::OFF, plays_parts: true, note: String::new() };
         let v = mix_view(&m);
         assert_eq!(v.parts.iter().map(|p| p.title.as_str()).collect::<Vec<_>>(), ["Drums", "Vocals"]);
         assert_eq!(v.parts[1].gain, 0.3);

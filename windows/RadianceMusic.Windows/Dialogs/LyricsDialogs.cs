@@ -153,7 +153,8 @@ internal static class LyricsDialogs
             Content = body,
             PrimaryButtonText = W.Save,
             CloseButtonText = "Cancel",
-            DefaultButton = ContentDialogButton.Primary,
+            // (no default button: Enter in a line's box would save the half-edited lyrics as yours; final review I6)
+            DefaultButton = ContentDialogButton.None,
             CornerRadius = new CornerRadius(16),
         };
         dialog.Resources["ContentDialogMaxWidth"] = 900.0;

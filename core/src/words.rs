@@ -188,6 +188,8 @@ pub const HOW_TO_FIX: &str = "How to Fix It";
 
 /// A song's menu: splitting and lyrics.
 pub const SPLIT_TWO: &str = "Split: Music + Vocals (Fast)";
+/// The Mixer's note while a voice waits for the song's split (GTK's voice status).
+pub const FULL_UNTIL_SPLIT: &str = "Plays as the full song until it's split.";
 pub const SPLIT_FOUR: &str = "Split: Four Parts";
 pub const SPLIT_FOUR_AFTER_TWO: &str = "Split in Four Parts";
 pub const SHOW_LYRICS: &str = "Show Lyrics";

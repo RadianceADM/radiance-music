@@ -72,8 +72,38 @@ pub fn part_title(part: &str) -> &'static str {
     }
 }
 
+/// A part's meter (0..1): its power in dB, -60 dB (nothing) to -6 dB (as loud as a part gets), as the
+/// Linux app's update_meters.
+pub fn meter(power: f64) -> f64 {
+    let db = 10.0 * power.max(1e-12).log10();
+    ((db + 60.0) / 54.0).clamp(0.0, 1.0)
+}
+
+/// What a part's meter says when you point at it (`power` None: its parts aren't playing).
+pub fn meter_tip(name: &str, power: Option<f64>) -> String {
+    let label = name.get(..1).map(|f| f.to_uppercase() + &name[1..]).unwrap_or_default();
+    match power.map(|p| 10.0 * p.max(1e-12).log10()) {
+        Some(d) if d < -42.0 => format!("{label}: almost nothing in the song here"),
+        Some(d) => format!("{label}: {d:.0} dB in the song here"),
+        None => format!("{label}: how loud it is in the song (while its parts play)"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
+
+    /// A part's meter, as the Linux app's update_meters: its power in dB, -60 dB (nothing) to -6 dB
+    /// (as loud as a part gets) across the bar (final review I1: the beta showed the raw power, 0-5 %).
+    #[test]
+    fn a_meter_reads_decibels() {
+        assert_eq!(meter(1e-6), 0.0);
+        assert!((meter(10f64.powf(-0.6)) - 1.0).abs() < 1e-9);
+        assert!((meter(1e-3) - 30.0 / 54.0).abs() < 1e-9);
+        assert_eq!(meter(0.0), 0.0);
+        assert_eq!(meter_tip("drums", Some(1e-5)), "Drums: almost nothing in the song here");
+        assert_eq!(meter_tip("vocals", Some(0.01)), "Vocals: -20 dB in the song here");
+        assert_eq!(meter_tip("bass", None), "Bass: how loud it is in the song (while its parts play)");
+    }
     use super::*;
     use std::collections::HashMap;
 

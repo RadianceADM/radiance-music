@@ -26,6 +26,15 @@ public class PageXamlTests
         Assert.Equal(Array.Empty<string>(), pages.Where(p => !known.Contains(p)).ToArray());
     }
 
+    /// <summary>The lyrics editor has no default button: Enter in a line's box would save the half-edited
+    /// lyrics as yours and close it (final review I6); the Linux editor saves only on Save.</summary>
+    [Fact]
+    public void TheLyricsEditorNeverSavesOnEnter()
+    {
+        var editor = File.ReadAllText(Path.Combine(Pages(), "..", "Dialogs", "LyricsDialogs.cs"));
+        Assert.DoesNotContain("DefaultButton = ContentDialogButton.Primary", editor);
+    }
+
     /// <summary>A page that may scroll sideways sizes to its longest row and drifts off-centre or off the edge in a
     /// wide window (#58 Search, #60 History, Albums, Artists, Genres): every page's ScrollViewer has it off
     /// (PageKit.Column does, as the Linux app's adw::Clamp).</summary>

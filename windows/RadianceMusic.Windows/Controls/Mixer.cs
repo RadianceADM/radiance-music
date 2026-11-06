@@ -19,6 +19,8 @@ internal sealed class Mixer : StackPanel
     private readonly EngineHub hub;
     private readonly SelectorBar voices = new();
     private readonly StackPanel partRows = new() { Spacing = 4 };
+    /// <summary>"Plays as the full song until it's split." (a voice asked for on a song not split yet).</summary>
+    private readonly TextBlock note = new() { TextWrapping = TextWrapping.Wrap, Visibility = Visibility.Collapsed };
     private readonly Dictionary<string, (Slider Slider, ProgressBar Meter)> parts = new();
     private readonly Slider[] fx = new Slider[3];
     private readonly DispatcherQueueTimer meters, fxLater;
@@ -41,6 +43,9 @@ internal sealed class Mixer : StackPanel
         };
         var body = this;
         body.Children.Add(voices);
+        note.Style = (Style)Application.Current.Resources["CaptionTextBlockStyle"];
+        note.Foreground = (Brush)Application.Current.Resources["TextFillColorSecondaryBrush"];
+        body.Children.Add(note);
         body.Children.Add(partRows);
         var effects = new StackPanel { Spacing = 4 };
         string[] names = { "Low cut", "High cut", "Reverb" };
@@ -113,7 +118,12 @@ internal sealed class Mixer : StackPanel
     {
         if (parts.Count == 0 || XamlRoot == null) return;
         foreach (var level in hub.Engine.PartLevels())
-            if (parts.TryGetValue(level.Name, out var p)) p.Meter.Value = Math.Clamp(level.Level, 0, 1);
+            if (parts.TryGetValue(level.Name, out var p))
+            {
+                // in dB, as the Linux app's (core's mix::meter): the raw power hardly moved the bar
+                p.Meter.Value = level.Meter;
+                ToolTipService.SetToolTip(p.Meter, level.Tip);
+            }
     }
 
     private void SendEffects() => hub.Engine.SetEffects(EffectText.LowCut(fx[0].Value / 100), EffectText.HighCut(fx[1].Value / 100), EffectText.Reverb(fx[2].Value / 100));
@@ -153,6 +163,8 @@ internal sealed class Mixer : StackPanel
                 }
             }
             partRows.Visibility = mix.Parts.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
+            note.Text = mix.Note;
+            note.Visibility = mix.Note.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
             foreach (var part in mix.Parts)
                 if (parts.TryGetValue(part.Name, out var p)) p.Slider.Value = Math.Round(part.Gain * 100);
             var v = Array.FindIndex(Voices, x => x.Mode == mix.Voice);

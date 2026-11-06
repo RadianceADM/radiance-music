@@ -71,6 +71,11 @@ pub struct Fake {
     pub split_makes_parts: std::sync::atomic::AtomicBool,
     /// MMS word timing asked for (stage 3, Task 7).
     pub time_words_calls: AtomicUsize,
+    /// What stops splitting being set up here (too few cores, too little memory or disk); and installs started.
+    pub setup_problems: Mutex<Vec<String>>,
+    pub installs: AtomicUsize,
+    /// How often the split queue was drawn (publish_splits asks can_split each time).
+    pub can_split_calls: AtomicUsize,
 }
 
 fn kind_name(k: Kind) -> &'static str {
@@ -128,12 +133,17 @@ impl Sources for Fake {
         answer.map(|(picture, sound)| (Stream { url: picture, size: 0, mime: "video/mp4".into(), kbps: 720 }, Stream { url: sound, size: 0, mime: "audio/webm".into(), kbps: 160 }))
     }
     fn can_split(&self) -> bool {
+        self.can_split_calls.fetch_add(1, Ordering::SeqCst);
         true
     }
     fn can_split_two(&self) -> bool {
         true
     }
+    fn setup_problems(&self) -> Vec<String> {
+        self.setup_problems.lock().unwrap().clone()
+    }
     fn install_splitter(&self, threads: u32, say: &(dyn Fn(&str, f64) + Send + Sync)) -> Result<radiance_engine::settings::LocalSplitter, String> {
+        self.installs.fetch_add(1, Ordering::SeqCst);
         if self.offline.load(Ordering::SeqCst) {
             return Err("Temporary failure in name resolution".into());
         }
@@ -1211,6 +1221,30 @@ fn pausing_finishes_the_song_being_split_then_waits() {
     c.quit();
 }
 
+/// Final review I5: while splitting is paused, the queue looks again once in a while, once, however
+/// many songs wait (each queued song started a sleeper thread of its own before).
+#[test]
+fn a_paused_queue_looks_again_once_however_many_wait() {
+    let _l = setup();
+    std::env::set_var("RADIANCE_SPLIT_PAUSE_POLL_MS", "100");
+    let ids = ["q1", "q2", "q3", "q4", "q5", "q6"];
+    let songs: Vec<Track> = ids.iter().map(|i| song(Source::YouTube, i, &format!("Queued {i}"))).collect();
+    let (c, fake, _rx) = with_songs("split pause poll", songs);
+    c.set_split_paused(true);
+    std::thread::sleep(Duration::from_millis(200));
+    for i in ids {
+        c.split(&format!("yt:{i}"), false);
+    }
+    std::thread::sleep(Duration::from_millis(300));
+    let before = fake.can_split_calls.load(Ordering::SeqCst);
+    std::thread::sleep(Duration::from_millis(1000));
+    let looks = fake.can_split_calls.load(Ordering::SeqCst) - before;
+    assert!(looks <= 14, "{looks} looks in a second at 100 ms: one sleeper per waiting song");
+    c.set_split_paused(false);
+    std::env::remove_var("RADIANCE_SPLIT_PAUSE_POLL_MS");
+    c.quit();
+}
+
 #[test]
 fn liked_songs_are_split_by_themselves() {
     let _l = setup();
@@ -1270,6 +1304,48 @@ fn first_start(fake: Arc<Fake>) -> Controller {
     c
 }
 
+/// Final review I3: a computer that can't split (too little disk, memory or cores) goes on without it,
+/// as GTK's get_splitter_ready: no hold, no endless retry.
+#[test]
+fn a_computer_that_cant_split_goes_on_without_it() {
+    let _l = setup();
+    let fake = Arc::new(Fake::default());
+    *fake.setup_problems.lock().unwrap() = vec!["It needs 6 GB free on the drive with your home folder; 1.0 GB is free.".into()];
+    let c = first_start(fake.clone());
+    std::thread::sleep(Duration::from_millis(800));
+    assert_eq!(c.setup(), SetupState::NotNeeded, "it held the start for a splitter that can't be");
+    assert_eq!(fake.installs.load(Ordering::SeqCst), 0);
+    c.quit();
+}
+
+/// Final review I2: with a split server set, nothing is downloaded at the first start; a splitter whose
+/// Python is gone is set up again (GTK's guard).
+#[test]
+fn a_split_server_needs_no_first_start_download() {
+    let _l = setup();
+    let mut st = radiance_engine::settings::load();
+    st.split = Some(radiance_engine::settings::SplitServer { host: "server".into(), user: "me".into(), python: "python3".into(), script: "split.py".into(), work: "/tmp".into(), library: String::new() });
+    radiance_engine::settings::save(&st);
+    let fake = Arc::new(Fake::default());
+    let c = first_start(fake.clone());
+    std::thread::sleep(Duration::from_millis(800));
+    assert_eq!(c.setup(), SetupState::NotNeeded);
+    assert_eq!(fake.installs.load(Ordering::SeqCst), 0, "it downloaded a splitter the server makes unneeded");
+    c.quit();
+    let mut st = radiance_engine::settings::load();
+    st.split = None;
+    st.local_split = Some(radiance_engine::settings::LocalSplitter { python: "/nowhere/python".into(), script: "/nowhere/split.py".into(), threads: 2 });
+    radiance_engine::settings::save(&st);
+    let fake = Arc::new(Fake::default());
+    std::env::set_var("RADIANCE_SETUP_TEST", "1");
+    let (heard, _rx) = listener();
+    let c = Controller::start(heard, fake.clone()).unwrap();
+    std::env::remove_var("RADIANCE_SETUP_TEST");
+    assert!(until(4.0, || fake.installs.load(Ordering::SeqCst) == 1), "a splitter whose Python is gone wasn't set up again");
+    c.quit();
+    no_local_splitter();
+}
+
 #[test]
 fn the_first_start_gets_splitting_ready_with_progress() {
     let _l = setup();
@@ -1301,6 +1377,23 @@ fn offline_first_start_lets_you_in_and_gets_ready_later() {
     fake.offline.store(false, Ordering::SeqCst);
     c.search("back online");
     assert!(until(4.0, || c.setup() == SetupState::Ready), "it didn't get ready once online: {:?}", c.setup());
+    c.quit();
+    no_local_splitter();
+}
+
+/// Final review I4: offline at the first start, it tries again by itself (GTK's 30 s; here
+/// RADIANCE_SETUP_RETRY_MS), with no search or song needed to notice the internet's back.
+#[test]
+fn offline_first_start_tries_again_by_itself() {
+    let _l = setup();
+    std::env::set_var("RADIANCE_SETUP_RETRY_MS", "300");
+    let fake = Arc::new(Fake::default());
+    fake.offline.store(true, Ordering::SeqCst);
+    let c = first_start(fake.clone());
+    assert!(until(2.0, || c.setup() == SetupState::Offline), "{:?}", c.setup());
+    fake.offline.store(false, Ordering::SeqCst);
+    assert!(until(4.0, || c.setup() == SetupState::Ready), "it never tried again: {:?}", c.setup());
+    std::env::remove_var("RADIANCE_SETUP_RETRY_MS");
     c.quit();
     no_local_splitter();
 }
@@ -1385,6 +1478,30 @@ fn the_mixer_shows_the_parts_the_song_has() {
     c.quit();
 }
 
+/// Final review C2: No vocals on a song not split yet asks for its split and, once it lands, plays it
+/// without the singer (the presets were dropped: it came back with every part at full), saying so as
+/// GTK's split_landed does ("“Title”: no vocals").
+#[test]
+fn no_vocals_on_a_song_not_split_plays_without_the_singer_once_split() {
+    let _l = setup();
+    let t = wav("voice-unsplit", 8.0);
+    let (c, fake, rx, list) = with_list("voice unsplit", vec![t.clone()]);
+    fake.split_makes_parts.store(true, Ordering::SeqCst);
+    c.play_from(list, 0, &t.key());
+    assert!(until(4.0, || c.now().playing && c.now().at >= 0.5), "never got going");
+    *fake.split_wait.lock().unwrap() = Duration::from_millis(1500);
+    c.set_voice(Voice::NoVocals);
+    // until it's split, the Mixer says so (GTK's voice status)
+    assert!(until(1.0, || c.now().mix.note == "Plays as the full song until it's split."), "{:?}", c.now().mix.note);
+    let toasts = toasts_for(&c, &rx, 5.0);
+    assert!(until(6.0, || c.now().mix.plays_parts), "its parts never played");
+    assert_eq!(c.now().mix.note, "", "the note stays once it's split");
+    assert_eq!(gain(&c, "vocals"), 0.0, "the singer is back: {:?}", c.now().mix.parts);
+    assert!(toasts.iter().any(|m| m == &format!("“{}”: no vocals", t.title)), "{toasts:?}");
+    c.set_voice(Voice::Song);
+    c.quit();
+}
+
 #[test]
 fn parts_landing_while_playing_switch_over_in_place() {
     let _l = setup();
@@ -1396,6 +1513,26 @@ fn parts_landing_while_playing_switch_over_in_place() {
     c.split(&t.key(), false);
     assert!(until(6.0, || c.now().mix.plays_parts), "it didn't switch to its parts");
     assert!(c.now().at >= 0.8, "it went back to the start: {}", c.now().at);
+    c.quit();
+}
+
+/// Final review C1: parts landing for a paused song (or last time's song, shown at the start) leave it
+/// paused, as GTK's split_landed (it never starts the parts; the next Play or a slider picks them up).
+#[test]
+fn parts_landing_while_paused_stay_paused() {
+    let _l = setup();
+    let t = wav("parts-land-paused", 6.0);
+    let (c, fake, _rx, list) = with_list("parts land paused", vec![t.clone()]);
+    fake.split_makes_parts.store(true, Ordering::SeqCst);
+    c.play_from(list, 0, &t.key());
+    assert!(until(4.0, || c.now().playing && c.now().at >= 1.0), "never got going");
+    c.toggle_play();
+    assert!(until(2.0, || !c.now().playing), "it didn't pause");
+    c.split(&t.key(), false);
+    assert!(until(6.0, || !fake.splits_started.lock().unwrap().is_empty()), "the split never started");
+    assert!(until(6.0, || c.splits().now.is_none() && c.splits().waiting.is_empty()), "the split never landed");
+    std::thread::sleep(std::time::Duration::from_millis(800));
+    assert!(!c.now().playing, "the landing parts started it playing");
     c.quit();
 }
 

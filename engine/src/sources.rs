@@ -51,6 +51,10 @@ pub trait Sources: Send + Sync + 'static {
     }
     /// Splitting set up on this computer at its first start (worker thread; minutes: the Windows pack's
     /// download), saying each step and how far along (0..1).
+    /// What stops splitting being set up on this computer (cores, memory, free disk), in plain words; empty: it can.
+    fn setup_problems(&self) -> Vec<String> {
+        crate::setup::check().problems()
+    }
     fn install_splitter(&self, threads: u32, say: &(dyn Fn(&str, f64) + Send + Sync)) -> Result<crate::settings::LocalSplitter, String> {
         crate::setup::install(threads, say)
     }
