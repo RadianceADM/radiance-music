@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex, Once};
 use std::time::{Duration, Instant};
 
 use radiance_core::library::GroupKind;
-use radiance_engine::controller::{Change, Controller, ListRef, Listener};
+use radiance_engine::controller::{Change, Controller, ListRef, Listener, SplitMark};
 use radiance_engine::lyrics::Lyrics;
 use radiance_engine::sources::Sources;
 use radiance_engine::track::{Source, Track};
@@ -63,6 +63,10 @@ pub struct Fake {
     pub videos: Mutex<HashMap<String, Result<(String, String), String>>>,
     /// A seed's radio (by its id), and how long YouTube Music takes to answer.
     pub radios: Mutex<HashMap<String, (Duration, Vec<Track>)>>,
+    /// Splits (stage 3): how long each takes, the songs that fail, and every job started (id, in two), in order.
+    pub split_wait: Mutex<Duration>,
+    pub split_fails: Mutex<std::collections::HashSet<String>>,
+    pub splits_started: Mutex<Vec<(String, bool)>>,
 }
 
 fn kind_name(k: Kind) -> &'static str {
@@ -118,6 +122,22 @@ impl Sources for Fake {
     fn video_streams(&self, id: &str) -> Result<(Stream, Stream), String> {
         let answer = self.videos.lock().unwrap().get(id).cloned().unwrap_or_else(|| Err("no video in this test".into()));
         answer.map(|(picture, sound)| (Stream { url: picture, size: 0, mime: "video/mp4".into(), kbps: 720 }, Stream { url: sound, size: 0, mime: "audio/webm".into(), kbps: 160 }))
+    }
+    fn can_split(&self) -> bool {
+        true
+    }
+    fn can_split_two(&self) -> bool {
+        true
+    }
+    fn split(&self, t: &Track, two: bool, _uri: &str, report: std::sync::Arc<dyn Fn(radiance_engine::splitting::Phase) + Send + Sync>) -> Result<(), String> {
+        self.splits_started.lock().unwrap().push((t.id.clone(), two));
+        report(radiance_engine::splitting::Phase::Splitting(0.5));
+        let wait = *self.split_wait.lock().unwrap();
+        std::thread::sleep(wait);
+        if self.split_fails.lock().unwrap().contains(&t.id) {
+            return Err("the splitter stopped".into());
+        }
+        Ok(())
     }
 }
 
@@ -1104,5 +1124,89 @@ fn a_playlist_song_found_nowhere_else_keeps_its_menu() {
     assert!(until(3.0, || c.queue().0.iter().any(|t| t.key() == key)), "Play Next found the song");
     c.do_menu(key, 0, Action::RemoveFromPlaylist(id));
     assert!(until(3.0, || c.playlist(id).is_some_and(|p| p.songs.len() == 1)));
+    c.quit();
+}
+
+// ---------------------------------------------------------------------------------- splitting (stage 3, Task 4)
+
+fn started(f: &Fake) -> Vec<(String, bool)> {
+    f.splits_started.lock().unwrap().clone()
+}
+
+#[test]
+fn a_split_asked_for_goes_first() {
+    let _l = setup();
+    let songs: Vec<Track> = ["sa", "sb", "sc"].iter().map(|i| song(Source::YouTube, i, &format!("Split {i}"))).collect();
+    let (c, fake, _rx) = with_songs("split order", songs);
+    *fake.split_wait.lock().unwrap() = Duration::from_millis(400);
+    c.split("yt:sa", false);
+    assert!(until(1.0, || started(&fake).len() == 1), "the first never started");
+    c.split("yt:sb", false);
+    c.split("yt:sc", false);
+    assert!(until(1.0, || c.splits().waiting.len() == 2));
+    assert_eq!(c.splits().waiting.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(), ["sc", "sb"], "asked by hand: first in line");
+    assert!(matches!(c.split_mark("yt:sb"), SplitMark::Waiting(2)));
+    assert!(until(3.0, || started(&fake).len() == 3));
+    assert_eq!(started(&fake).iter().map(|x| x.0.as_str()).collect::<Vec<_>>(), ["sa", "sc", "sb"]);
+    c.quit();
+}
+
+#[test]
+fn pausing_finishes_the_song_being_split_then_waits() {
+    let _l = setup();
+    let songs: Vec<Track> = ["pa", "pb"].iter().map(|i| song(Source::YouTube, i, &format!("Pause {i}"))).collect();
+    let (c, fake, _rx) = with_songs("split pause", songs);
+    *fake.split_wait.lock().unwrap() = Duration::from_millis(500);
+    c.split("yt:pb", false);
+    c.split("yt:pa", false);
+    assert!(until(1.0, || !started(&fake).is_empty()));
+    c.set_split_paused(true);
+    assert!(until(2.0, || c.splits().now.is_none()), "the one being split finishes");
+    std::thread::sleep(Duration::from_millis(1000));
+    assert_eq!(started(&fake).len(), 1, "nothing else starts while paused");
+    assert!(c.splits().paused);
+    c.set_split_paused(false);
+    assert!(until(2.0, || started(&fake).len() == 2), "it carries on once resumed");
+    c.quit();
+}
+
+#[test]
+fn liked_songs_are_split_by_themselves() {
+    let _l = setup();
+    std::env::set_var("RADIANCE_AUTO_SPLIT_S", "0");
+    let fake = Arc::new(Fake::default());
+    let (a, b) = (liked_song("auto-a", "Auto A", "Someone", "", None), liked_song("auto-b", "Auto B", "Someone", "", None));
+    let (c, _rx) = with_liked(&[a, b], fake.clone());
+    let got = until(4.0, || started(&fake).len() == 2);
+    std::env::remove_var("RADIANCE_AUTO_SPLIT_S");
+    assert!(got, "liked songs weren't split by themselves: {:?}", started(&fake));
+    assert!(started(&fake).iter().all(|(_, two)| !two), "in four parts");
+    c.quit();
+}
+
+#[test]
+fn a_failed_split_asked_for_says_so() {
+    let _l = setup();
+    let (c, fake, rx) = with_songs("split fails", vec![song(Source::YouTube, "sf", "Will Not Split")]);
+    fake.split_fails.lock().unwrap().insert("sf".into());
+    c.split("yt:sf", false);
+    let toasts = toasts_for(&c, &rx, 3.0);
+    assert!(toasts.iter().any(|t| t == "Couldn't split “Will Not Split” right now"), "{toasts:?}");
+    assert!(matches!(c.split_mark("yt:sf"), SplitMark::None));
+    c.quit();
+}
+
+#[test]
+fn the_fast_split_takes_its_own_lane() {
+    let _l = setup();
+    let songs = vec![song(Source::YouTube, "f4", "Four Parts"), song(Source::YouTube, "f2", "Two Parts")];
+    let (c, fake, _rx) = with_songs("split lanes", songs);
+    *fake.split_wait.lock().unwrap() = Duration::from_millis(800);
+    c.split("yt:f4", false);
+    assert!(until(1.0, || started(&fake).len() == 1));
+    c.split("yt:f2", true);
+    assert!(until(0.5, || started(&fake).len() == 2), "the fast split waited for the four-part one");
+    assert_eq!(started(&fake)[1], ("f2".to_string(), true));
+    assert_eq!(c.splits().two_waiting.len(), 0);
     c.quit();
 }

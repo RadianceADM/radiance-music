@@ -193,6 +193,14 @@ pub const FIND_LYRICS_AGAIN: &str = "Find Lyrics Again";
 pub const LYRICS_SAVED: &str = "Lyrics saved";
 pub const LYRICS_NOT_SAVED: &str = "Couldn't save the lyrics";
 
+/// Split by hand (the menu): what's happening, and how long it takes.
+pub fn split_two_toast(title: &str) -> String {
+    format!("Splitting “{title}” into Music and Vocals: a few seconds")
+}
+pub fn split_four_toast(title: &str) -> String {
+    format!("Splitting “{title}” into four parts: about 3 minutes")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

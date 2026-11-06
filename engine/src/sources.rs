@@ -27,6 +27,28 @@ pub trait Sources: Send + Sync + 'static {
     fn counterpart(&self, t: &Track) -> Option<Track>;
     /// A YouTube video's picture and its sound, as two streams.
     fn video_streams(&self, id: &str) -> Result<(Stream, Stream), String>;
+    /// This computer's splitter (or your split server) is set up: four-part splits can run (stage 3).
+    fn can_split(&self) -> bool {
+        let s = crate::settings::load();
+        s.local_split.is_some() || s.split.is_some()
+    }
+    /// The fast split's pieces are here (else the internet fetches them when it runs).
+    fn can_split_two(&self) -> bool {
+        crate::two_part::ready().is_some()
+    }
+    /// A song split (worker thread; minutes): in two, the fast split; else in four with the settings'
+    /// splitter, then its words timed (engine::splitting). `uri`: its file, or its stream through the relay.
+    fn split(&self, t: &Track, two: bool, uri: &str, report: std::sync::Arc<dyn Fn(crate::splitting::Phase) + Send + Sync>) -> Result<(), String> {
+        if uri.is_empty() {
+            return Err("couldn't get the song".into());
+        }
+        let s = crate::settings::load();
+        if two {
+            crate::splitting::two_parts(t, uri, s.local_split.as_ref(), report)
+        } else {
+            crate::splitting::four_parts(t, uri, s.split.as_ref(), s.local_split.as_ref(), report)
+        }
+    }
 }
 
 /// The real ones: the Internet Archive, YouTube Music (yt-dlp), LRCLIB.

@@ -20,6 +20,7 @@ use radiance_core::menu::{self, Action, Item, Place};
 use radiance_core::quality::{self, Heard};
 use radiance_core::queue::{self, Queue, Repeat, Step};
 use radiance_core::search;
+use radiance_core::split_queue::{self, SplitQueue};
 use radiance_core::trouble::{self, After};
 use radiance_core::words::{self, Kind};
 
@@ -30,6 +31,8 @@ use crate::playing::{self, Streams};
 use crate::relay::Relay;
 use crate::settings::{self, Settings};
 use crate::sources::Sources;
+use crate::split;
+use crate::splitting::Phase;
 use crate::track::{Source, Track};
 
 /// What changed (read it again with the getter of the same name).
@@ -53,6 +56,8 @@ pub enum Change {
     History,
     /// A playlist made, renamed, deleted, or a song added or taken out.
     Playlists,
+    /// The split queue: a song being split (and how far), waiting, done, paused (stage 3).
+    Splits,
 }
 
 /// Liked Songs as a page: the songs shown (A to Z, the search applied), the words under it,
@@ -230,6 +235,31 @@ pub struct HomeState {
     pub liked: Vec<Track>,
 }
 
+/// A song's split mark on its row (stage 3): waiting (its place in line), being split, or split.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SplitMark {
+    None,
+    Waiting(usize),
+    Splitting,
+    /// In two: Music and Vocals.
+    Two,
+    /// In four parts.
+    Four,
+}
+
+/// The split queue as the app shows it (the Splits tab): the song being split, how far and at what,
+/// the songs waiting (in four parts; in two, the fast lane), paused or not, and what can split here.
+#[derive(Clone, Debug, Default)]
+pub struct SplitsState {
+    pub now: Option<(Track, Phase)>,
+    pub waiting: Vec<Track>,
+    pub two_now: Option<Track>,
+    pub two_waiting: Vec<Track>,
+    pub paused: bool,
+    pub can_split: bool,
+    pub can_split_two: bool,
+}
+
 static RUNNING: AtomicBool = AtomicBool::new(false);
 
 /// What an app reads (written on the engine's thread).
@@ -254,6 +284,9 @@ struct View {
     /// The music video's swapchain while one plays, held (review I5): no one hands out a pointer
     /// the sink may have let go of.
     video: Option<crate::comref::ComRef>,
+    splits: SplitsState,
+    /// Songs split while the app runs, and how (their rows' marks; the files tell the rest).
+    split_done: HashMap<String, SplitMark>,
 }
 
 /// Between the app's threads and the engine's.
@@ -351,6 +384,8 @@ impl Controller {
                 panel: QueuePanel::default(),
                 counts: HashMap::new(),
                 video: None,
+                splits: SplitsState::default(),
+                split_done: HashMap::new(),
             }),
             liked_q: Mutex::new(String::new()),
         });
@@ -749,6 +784,34 @@ impl Controller {
 
     /// Stops the engine: where you are is saved, the player stops, no more changes are told.
     /// Safe to call twice.
+    /// Split a song by hand: first in line (stage 3). `two`: the fast split (Music + Vocals), else four parts.
+    pub fn split(&self, key: &str, two: bool) {
+        let key = key.to_string();
+        self.post(move |e| e.split_by_hand(&key, two));
+    }
+
+    /// Pause splitting (the song being split finishes first) or carry on.
+    pub fn set_split_paused(&self, on: bool) {
+        self.post(move |e| e.set_split_paused(on));
+    }
+
+    pub fn splits(&self) -> SplitsState {
+        self.shared.view(|v| v.splits.clone())
+    }
+
+    /// A song's split mark (its row): waiting, being split, or split while the app runs.
+    pub fn split_mark(&self, key: &str) -> SplitMark {
+        self.shared.view(|v| {
+            if v.splits.now.as_ref().is_some_and(|(t, _)| t.key() == key) || v.splits.two_now.as_ref().is_some_and(|t| t.key() == key) {
+                return SplitMark::Splitting;
+            }
+            if let Some(i) = v.splits.waiting.iter().chain(v.splits.two_waiting.iter()).position(|t| t.key() == key) {
+                return SplitMark::Waiting(i + 1);
+            }
+            v.split_done.get(key).copied().unwrap_or(SplitMark::None)
+        })
+    }
+
     pub fn quit(&self) {
         if !self.running.swap(false, Ordering::SeqCst) {
             return;
@@ -838,6 +901,12 @@ struct Engine {
     quality: RefCell<String>,
     /// The song picked hasn't started yet (NowState::loading).
     loading: Cell<bool>,
+    /// Splitting (stage 3): the four-part queue, the fast lane (song, asked by hand) and the song in it,
+    /// and the songs asked for by hand (a failure says so).
+    split_q: RefCell<SplitQueue>,
+    two_q: RefCell<VecDeque<(Track, bool)>>,
+    splitting_two: RefCell<Option<Track>>,
+    split_asked: RefCell<HashSet<String>>,
 }
 
 /// A music video's streams, as found (through the relay).
@@ -897,6 +966,10 @@ impl Engine {
             swapchain: Cell::new(0),
             quality: RefCell::default(),
             loading: Cell::new(false),
+            split_q: RefCell::default(),
+            two_q: RefCell::default(),
+            splitting_two: RefCell::default(),
+            split_asked: RefCell::default(),
         }
     }
 
@@ -937,6 +1010,10 @@ impl Engine {
         // likes that weren't saved yet (offline, or the app closed while saving)
         let unsaved: Vec<Track> = self.liked.borrow().iter().filter(|t| t.file.is_none() && crate::library::saves(t)).cloned().collect();
         unsaved.into_iter().for_each(|t| self.save_liked(t));
+        // liked songs split by themselves, one after another, a while after the start (the GTK app's)
+        let after = std::env::var("RADIANCE_AUTO_SPLIT_S").ok().and_then(|s| s.parse().ok()).unwrap_or(split_queue::AUTO_AFTER_S);
+        self.bg(move || std::thread::sleep(Duration::from_secs(after)), |e, ()| e.auto_split_liked());
+        self.publish_splits();
         // five times a second: where the song is, the lines lit, and (every 5 s) where you are
         let me = Rc::downgrade(self);
         glib::timeout_add_local(Duration::from_millis(200), move || {
@@ -1645,6 +1722,223 @@ impl Engine {
         }
     }
 
+    // ------------------------------------------------------------------ splitting (stage 3)
+
+    /// Split as picked on the song's menu (the GTK app's split_as): in two, a few seconds; or in four,
+    /// first in line, a few minutes.
+    fn split_by_hand(self: &Rc<Self>, key: &str, two: bool) {
+        let Some(t) = self.find_track(key) else { return };
+        if t.video {
+            return;
+        }
+        split::ask_two(&t, two);
+        if two {
+            self.split_fast(&t, true);
+            self.toast(words::split_two_toast(&t.title));
+        } else {
+            self.split_asked.borrow_mut().insert(t.key());
+            self.queue_split(&t, true);
+            self.toast(words::split_four_toast(&t.title));
+        }
+    }
+
+    /// In line for four parts (`first`: asked for by hand, or it's playing); asked for in two, the fast lane.
+    fn queue_split(self: &Rc<Self>, t: &Track, first: bool) {
+        if t.video || split::done(t) {
+            return;
+        }
+        if split::wants_two(t) {
+            self.split_fast(t, first);
+            return;
+        }
+        if !self.shared.sources.can_split() {
+            return;
+        }
+        if self.split_q.borrow_mut().ask(t.clone(), first) {
+            self.run_splits();
+        }
+        self.publish_splits();
+    }
+
+    /// The fast lane (Music + Vocals inside the app): asked for by hand goes first.
+    fn split_fast(self: &Rc<Self>, t: &Track, asked: bool) {
+        if t.video || split::has_halves(t) || !self.can_split_two() {
+            return;
+        }
+        let key = t.key();
+        if self.splitting_two.borrow().as_ref().is_some_and(|x| x.key() == key) {
+            return;
+        }
+        {
+            let mut q = self.two_q.borrow_mut();
+            let was_asked = q.iter().any(|(x, a)| x.key() == key && *a);
+            q.retain(|(x, _)| x.key() != key);
+            if asked {
+                q.push_front((t.clone(), true));
+            } else {
+                q.push_back((t.clone(), was_asked));
+            }
+        }
+        self.run_fast();
+        self.publish_splits();
+    }
+
+    fn can_split_two(&self) -> bool {
+        self.shared.sources.can_split_two() || self.shared.view(|v| v.online)
+    }
+
+    /// Splitting waits while ~/.config/radiance-music/split-paused exists (the GTK app's flag, shared).
+    fn split_paused() -> bool {
+        glib::user_config_dir().join("radiance-music/split-paused").exists()
+    }
+
+    /// Pauses or resumes splitting (the song being split finishes first).
+    fn set_split_paused(self: &Rc<Self>, on: bool) {
+        let flag = glib::user_config_dir().join("radiance-music/split-paused");
+        if on {
+            if let Some(dir) = flag.parent() {
+                let _ = std::fs::create_dir_all(dir);
+            }
+            let _ = std::fs::write(&flag, b"");
+        } else {
+            let _ = std::fs::remove_file(&flag);
+        }
+        self.publish_splits();
+        if !on {
+            self.run_splits();
+            self.run_fast();
+        }
+    }
+
+    /// The song's address for a splitter: its file, else its stream through the relay.
+    fn split_uri(&self, t: &Track) -> Option<String> {
+        use gio::prelude::*;
+        if let Some(f) = t.file.as_deref().filter(|f| std::path::Path::new(f).exists()) {
+            return Some(gio::File::for_path(f).uri().to_string());
+        }
+        None
+    }
+
+    /// The next four-part split, one at a time (the GTK app's run_splits).
+    fn run_splits(self: &Rc<Self>) {
+        if self.split_q.borrow().now().is_some() || self.split_q.borrow().waiting().is_empty() {
+            self.publish_splits();
+            return;
+        }
+        if Self::split_paused() {
+            self.publish_splits();
+            self.bg(|| std::thread::sleep(Duration::from_secs(30)), |e, ()| e.run_splits()); // once the pause is over
+            return;
+        }
+        let Some(t) = self.split_q.borrow_mut().take_next() else { return };
+        self.publish_splits();
+        let (plain, relay, sources, shared) = (self.split_uri(&t), self.relay.clone(), self.shared.sources.clone(), self.shared.clone());
+        let song = t.clone();
+        let report: Arc<dyn Fn(Phase) + Send + Sync> = Arc::new(move |p| {
+            shared.view(|v| {
+                if let Some(now) = v.splits.now.as_mut() {
+                    now.1 = p;
+                }
+            });
+            shared.tell(Change::Splits);
+        });
+        self.bg(
+            move || {
+                let uri = plain.or_else(|| sources.stream(&song.id).ok().zip(relay).map(|(s, r)| r.add(s.url, s.size, s.mime))).unwrap_or_default();
+                sources.split(&song, false, &uri, report)
+            },
+            move |e, result: Result<(), String>| {
+                e.split_q.borrow_mut().finish();
+                let asked = e.split_asked.borrow_mut().remove(&t.key());
+                match result {
+                    Ok(()) => e.split_landed(&t, SplitMark::Four),
+                    Err(why) => {
+                        crate::log::note(&format!("split {}: {why}", t.title));
+                        if asked {
+                            e.toast(words::split_failed(&t.title));
+                        }
+                    }
+                }
+                e.publish_splits();
+                e.run_splits();
+            },
+        );
+    }
+
+    /// The fast lane's next song (the GTK app's run_fast). While paused, only what was asked for by hand.
+    fn run_fast(self: &Rc<Self>) {
+        if self.splitting_two.borrow().is_some() {
+            return;
+        }
+        let Some((t, asked)) = self.two_q.borrow_mut().pop_front() else {
+            self.publish_splits();
+            return;
+        };
+        if !asked && Self::split_paused() {
+            self.run_fast();
+            return;
+        }
+        self.splitting_two.replace(Some(t.clone()));
+        self.publish_splits();
+        let (plain, relay, sources) = (self.split_uri(&t), self.relay.clone(), self.shared.sources.clone());
+        let song = t.clone();
+        self.bg(
+            move || {
+                let uri = plain.or_else(|| sources.stream(&song.id).ok().zip(relay).map(|(s, r)| r.add(s.url, s.size, s.mime))).unwrap_or_default();
+                sources.split(&song, true, &uri, Arc::new(|_| {}))
+            },
+            move |e, result: Result<(), String>| {
+                e.splitting_two.replace(None);
+                match result {
+                    Ok(()) => e.split_landed(&t, SplitMark::Two),
+                    Err(why) => {
+                        crate::log::note(&format!("fast split {}: {why}", t.title));
+                        if asked {
+                            e.toast(words::split_failed(&t.title));
+                        }
+                    }
+                }
+                e.publish_splits();
+                e.run_fast();
+            },
+        );
+    }
+
+    /// A song's split is done: its mark (the playing song switches to its parts: Task 6).
+    fn split_landed(self: &Rc<Self>, t: &Track, mark: SplitMark) {
+        crate::log::note(&format!("“{}” split ({})", t.title, if mark == SplitMark::Two { "in two" } else { "in four" }));
+        self.shared.view(|v| {
+            v.split_done.insert(t.key(), mark);
+        });
+    }
+
+    /// Every liked (saved) song gets split, one after another, in the background.
+    fn auto_split_liked(self: &Rc<Self>) {
+        if std::env::var_os("RADIANCE_SHOT").is_some() {
+            return; // a screenshot copy splits nothing
+        }
+        let liked = split_queue::auto_list(&self.liked.borrow(), split::done);
+        for t in liked {
+            self.queue_split(&t, false);
+        }
+    }
+
+    fn publish_splits(&self) {
+        let (can_split, can_split_two) = (self.shared.sources.can_split(), self.can_split_two());
+        let paused = Self::split_paused();
+        let q = self.split_q.borrow();
+        let now = q.now().cloned();
+        let waiting = q.waiting().to_vec();
+        drop(q);
+        let two_now = self.splitting_two.borrow().clone();
+        let two_waiting: Vec<Track> = self.two_q.borrow().iter().map(|(t, _)| t.clone()).collect();
+        self.shared.view(|v| {
+            let phase = v.splits.now.as_ref().filter(|(t, _)| now.as_ref().is_some_and(|n| n.key() == t.key())).map(|(_, p)| *p).unwrap_or(Phase::Splitting(0.0));
+            v.splits = SplitsState { now: now.map(|t| (t, phase)), waiting, two_now, two_waiting, paused, can_split, can_split_two };
+        });
+        self.shared.tell(Change::Splits);
+    }
+
     /// What's really playing, in the Linux app's words (core's quality): the video's, or the
     /// song's as decoded once its sound flows (before that, what it is).
     fn update_quality(&self) {
@@ -1703,6 +1997,11 @@ impl Engine {
                         if kept {
                             crate::library::store(&e.liked.borrow());
                             e.toast(words::saved_toast(&t.title));
+                            // liked songs get split too (the GTK app's, once saved)
+                            let saved = e.liked.borrow().iter().find(|x| x.key() == key).cloned();
+                            if let Some(saved) = saved {
+                                e.queue_split(&saved, false);
+                            }
                         } else {
                             t.file = Some(path);
                             crate::library::unsave(&t);
