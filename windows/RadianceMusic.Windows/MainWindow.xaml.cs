@@ -45,6 +45,16 @@ public sealed partial class MainWindow : Window
         BarHost.Content = new Controls.PlayerBar(hub);
         // the side panel (Queue | Lyrics): beside the page from 1300 px, over it below (as the GTK app's)
         side = new Controls.QueuePanel(hub);
+        // Now Playing's lyrics column decides the panel's Lyrics tab (as the GTK app's)
+        Pages.Navigated += (_, e) =>
+        {
+            if (e.Content is NowPlayingPage np)
+            {
+                np.ShowsLyricsChanged -= SyncLyricsTab;
+                np.ShowsLyricsChanged += SyncLyricsTab;
+            }
+            SyncLyricsTab();
+        };
         SideHost.Content = side;
         Root.SizeChanged += (_, e) => Side.DisplayMode = e.NewSize.Width >= 1300 ? SplitViewDisplayMode.Inline : SplitViewDisplayMode.Overlay;
         // closing while music plays: it plays on (the tray icon brings the window back); else it quits
@@ -144,6 +154,7 @@ public sealed partial class MainWindow : Window
     /// <summary>The player bar's Queue and Lyrics buttons: the side panel on that tab, or closed when it's showing it.</summary>
     public void ToggleSide(string tab)
     {
+        if (tab == "lyrics" && !side.HasLyrics) return; // Now Playing shows them already (SyncLyricsTab)
         if (Side.IsPaneOpen && side.Tab == tab)
         {
             Side.IsPaneOpen = false;
@@ -151,6 +162,13 @@ public sealed partial class MainWindow : Window
         }
         side.Tab = tab;
         Side.IsPaneOpen = true;
+    }
+
+    /// <summary>The side panel's Lyrics tab comes and goes with Now Playing's own lyrics column.</summary>
+    private void SyncLyricsTab()
+    {
+        var playing = Pages.Content as NowPlayingPage;
+        side.HasLyrics = SideTabs.HasLyrics(playing != null, playing?.ShowsLyrics ?? false);
     }
 
     public void BringToFront()

@@ -14,6 +14,10 @@ public sealed partial class NowPlayingPage : Page
     private EngineHub? hub;
     private string songKey = "";
 
+    /// <summary>Whether the page shows its lyrics column (not under Snug), and when that changes.</summary>
+    public bool ShowsLyrics { get; private set; } = true;
+    public event Action? ShowsLyricsChanged;
+
     public NowPlayingPage()
     {
         InitializeComponent();
@@ -40,6 +44,11 @@ public sealed partial class NowPlayingPage : Page
     {
         var lyrics = width >= Snug;
         Right.Visibility = lyrics ? Visibility.Visible : Visibility.Collapsed;
+        if (lyrics != ShowsLyrics)
+        {
+            ShowsLyrics = lyrics;
+            ShowsLyricsChanged?.Invoke();
+        }
         Left.HorizontalAlignment = lyrics ? HorizontalAlignment.Left : HorizontalAlignment.Center;
         Grid.SetColumnSpan(Left, lyrics ? 1 : 2);
         var side = width < Narrow ? Math.Max(160, Math.Min(340, width - 96)) : 340;

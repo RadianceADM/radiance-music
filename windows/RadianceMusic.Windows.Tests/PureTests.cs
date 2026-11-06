@@ -148,3 +148,23 @@ public class LensScaleTests
         Assert.Contains("0.7", LensScale.Expression);
     }
 }
+
+/// <summary>The side panel's Lyrics tab only where Now Playing doesn't show the lyrics itself (the GTK app's sync_lyrics_tab).</summary>
+public class SideTabsTests
+{
+    [Fact]
+    public void NowPlayingWithItsLyricsColumnLeavesThePanelNoLyricsTab()
+    {
+        Assert.False(SideTabs.HasLyrics(onNowPlaying: true, pageShowsLyrics: true));
+        Assert.True(SideTabs.HasLyrics(onNowPlaying: true, pageShowsLyrics: false)); // a narrow window: no column, the tab stays
+        Assert.True(SideTabs.HasLyrics(onNowPlaying: false, pageShowsLyrics: false));
+    }
+
+    [Fact]
+    public void APanelOnLyricsGoesToTheQueueWhenTheTabGoes()
+    {
+        Assert.Equal("queue", SideTabs.Tab("lyrics", hasLyrics: false));
+        Assert.Equal("lyrics", SideTabs.Tab("lyrics", hasLyrics: true));
+        Assert.Equal("queue", SideTabs.Tab("queue", hasLyrics: false));
+    }
+}
