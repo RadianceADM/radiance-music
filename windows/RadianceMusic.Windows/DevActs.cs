@@ -50,7 +50,7 @@ internal static class DevActs
             "report" => window.Content?.XamlRoot is { } rx && Do(() => _ = Dialogs.ReportDialog.Show(App.Hub, rx)),
             "rating" => window.Content?.XamlRoot is { } fx && Do(() => _ = Dialogs.RatingDialog.Show(App.Hub, fx, false)),
             "storage-move" => window.Page is Pages.SettingsPage mp && Do(() => _ = mp.ConfirmMove(App.Hub.Engine.Storage().Folder, arg)),
-            "suggest" => window.Page is Pages.SearchPage spg && Do(() => { spg.FocusBox(); App.Hub.Engine.Suggest(arg); }),
+            "suggest" => window.Page is Pages.SearchPage spg && Do(() => spg.Typed(arg)),
             _ => false,
         };
         Crash.Note($"act: {act}: {(done ? "done" : "not found")}");

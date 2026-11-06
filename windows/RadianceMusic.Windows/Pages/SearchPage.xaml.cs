@@ -57,13 +57,24 @@ public sealed partial class SearchPage : Page
 
     public void FocusBox() => Box.Focus(FocusState.Programmatic);
 
+    /// <summary>`q` in the box and its suggestions asked for, as typing it would (screenshots).</summary>
+    public void Typed(string q)
+    {
+        Box.Text = q;
+        FocusBox();
+        hub?.Engine.Suggest(q);
+    }
+
     /// <summary>A suggestion from your liked songs is marked so (a heart before it).</summary>
     private const string Mine = "\u2665  ";
 
     private void ShowSuggestions()
     {
         if (hub == null) return;
-        Box.ItemsSource = hub.Engine.Suggestions().Select(c => c.Mine ? Mine + c.Text : c.Text).ToList();
+        var items = hub.Engine.Suggestions().Select(c => c.Mine ? Mine + c.Text : c.Text).ToList();
+        Box.ItemsSource = items;
+        // (the box opens its list by itself only as you type: your songs on an empty box's focus open it too)
+        Box.IsSuggestionListOpen = items.Count > 0 && Box.FocusState != FocusState.Unfocused;
     }
 
     private Button Tile(BrowseTile t)

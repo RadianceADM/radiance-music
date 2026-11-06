@@ -71,7 +71,7 @@ internal static class RatingDialog
             PrimaryButtonText = w.Send,
             SecondaryButtonText = w.DontAsk,
             CloseButtonText = w.NotNow,
-            DefaultButton = ContentDialogButton.None,
+            DefaultButton = ContentDialogButton.Primary, // (Send is the main one, as the Linux app's)
             CornerRadius = new CornerRadius(16),
         };
         string? opened = null;

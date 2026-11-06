@@ -211,6 +211,8 @@ public partial class App : Application
 
     private static DispatcherQueueTimer? popTimer;
 
+    private static bool popWaitsForLoad;
+
     /// <summary>
     /// The update pop-up or the rating, when one wants to show by itself: only with the window seen, the sunrise
     /// gone, the guide neither up nor unseen, and no other dialog open (UpdateGate, the GTK app's
@@ -218,9 +220,26 @@ public partial class App : Application
     /// </summary>
     internal static void PopUps()
     {
-        if (Window?.Content?.XamlRoot is not { } root) return;
+        if (Window?.Content is not FrameworkElement content) return;
+        if (content.XamlRoot is not { } root)
+        {
+            // (before the window's first layout there is nowhere to show it: once it has loaded)
+            if (popWaitsForLoad) return;
+            popWaitsForLoad = true;
+            RoutedEventHandler? loaded = null;
+            loaded = (_, _) =>
+            {
+                content.Loaded -= loaded;
+                popWaitsForLoad = false;
+                PopUps();
+            };
+            content.Loaded += loaded;
+            return;
+        }
         var u = Hub.Engine.Update();
-        var wantsUpdate = u.Asks && u.Step is UpdateStepView.Out or UpdateStepView.Ready or UpdateStepView.Failed && !Dialogs.UpdateDialog.Up;
+        // (--update-shot: the pop-up at whatever step it was asked for, Downloading too)
+        var step = u.Step is UpdateStepView.Out or UpdateStepView.Ready or UpdateStepView.Failed || Program.Dev.UpdateShot != null;
+        var wantsUpdate = u.Asks && step && !Dialogs.UpdateDialog.Up;
         var wantsRating = Hub.Engine.Rating().Due && !Dialogs.RatingDialog.Up;
         if (!wantsUpdate && !wantsRating) return;
         var dialogOpen = Dialogs.UpdateDialog.Up || Dialogs.RatingDialog.Up || Microsoft.UI.Xaml.Media.VisualTreeHelper.GetOpenPopupsForXamlRoot(root).Any(p => p.Child is ContentDialog);

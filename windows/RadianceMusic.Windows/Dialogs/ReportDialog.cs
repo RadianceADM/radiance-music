@@ -33,7 +33,7 @@ internal static class ReportDialog
             PrimaryButtonText = w.Send,
             CloseButtonText = w.Cancel,
             IsPrimaryButtonEnabled = false,
-            DefaultButton = ContentDialogButton.None,
+            DefaultButton = ContentDialogButton.Primary, // (Send is the main one, as the Linux app's)
             CornerRadius = new CornerRadius(16),
         };
         dialog.Resources["ContentDialogMaxWidth"] = 640.0;
