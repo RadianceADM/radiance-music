@@ -16,7 +16,7 @@ namespace RadianceMusic;
 ///   switch:video|song the music video or the song (the art's button); fullscreen: the video fullscreen
 ///   wait:N        N seconds more before the next step (Shot)
 ///   liked-search:TEXT  typed into Liked Songs' own search; queue-move:FROM:TO  the queue's drop
-///   (rows of its list); queue-menu:N  that queue row's menu
+///   (rows of its list); queue-menu:N  that queue row's menu; lyric-tap:N  a tap on lyric line N
 /// </summary>
 internal static class DevActs
 {
@@ -34,6 +34,7 @@ internal static class DevActs
             "liked-search" => window.Page is Pages.LikedPage liked && Do(() => liked.SearchFor(arg)),
             "queue-move" => arg.Split(':') is [var a, var b] && int.TryParse(a, out var from) && int.TryParse(b, out var to) && window.SidePanel.Drop(from, to),
             "queue-menu" => int.TryParse(arg, out var row) && window.SidePanel.OpenMenu(row),
+            "lyric-tap" => window.Page is Pages.NowPlayingPage np && int.TryParse(arg, out var line) && np.TapLyric(line),
             "fullscreen" => Fullscreen(window),
             _ => false,
         };

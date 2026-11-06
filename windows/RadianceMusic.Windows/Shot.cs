@@ -39,6 +39,7 @@ internal static class Shot
         await Task.Delay(TimeSpan.FromSeconds(dev.Wait));
         var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(window);
         if (dev.Acts.Count > 0) Crash.Note("shot: queue after the steps: " + window.SidePanel.Titles());
+        if (dev.Acts.Count > 0) Crash.Note($"shot: playing at {App.Hub.Engine.Now().At:F1} s");
         Win32.SetForegroundWindow(hwnd);
         await Task.Delay(300);
         // opened in front, as a click on the bar's button does (over the page, the panel closes when the window loses focus)

@@ -37,6 +37,8 @@ internal sealed class LyricsColumn : Grid
         /// touching a line's text lays the column out again (a Run's Foreground is never null).</summary>
         public int Chars;
         public bool Faded;
+        /// <summary>Where the line starts (a tap goes there).</summary>
+        public double Start;
     }
 
     private const double Grow = 2.5, Least = 1.5, Room = 0.6;
@@ -48,6 +50,14 @@ internal sealed class LyricsColumn : Grid
     {
         var ms = (System.Diagnostics.Stopwatch.GetTimestamp() - started) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
         Spent[what] = Spent.TryGetValue(what, out var s) ? (s.Calls + 1, s.Ms + ms) : (1, ms);
+    }
+
+    /// <summary>What a tap on line `i` does (DevActs: the screenshots).</summary>
+    internal bool TapLine(int i)
+    {
+        if (i < 0 || i >= lines.Count) return false;
+        hub.Engine.Seek(lines[i].Start);
+        return true;
     }
 
     public static string Stats() => string.Join(", ", Spent.Select(kv => $"{kv.Key} {kv.Value.Calls}x {kv.Value.Ms:F0} ms"));
@@ -169,7 +179,7 @@ internal sealed class LyricsColumn : Grid
         var frame = new Grid();
         frame.Children.Add(box);
         panel.Children.Add(frame);
-        lines.Add(new Shown { Box = box, Frame = frame, Text = text, Lit = lit, Rest = rest, Words = v.Text });
+        lines.Add(new Shown { Box = box, Frame = frame, Text = text, Lit = lit, Rest = rest, Words = v.Text, Start = start });
         if (view != null) Lens(lines[^1]);
     }
 

@@ -17,6 +17,9 @@ public sealed partial class NowPlayingPage : Page
     private nint shown;
     private bool full;
 
+    /// <summary>A tap on lyric line `i` (DevActs: the screenshots).</summary>
+    internal bool TapLyric(int i) => Right.Children.Count > 0 && Right.Children[0] is Controls.LyricsColumn c && c.TapLine(i);
+
     /// <summary>A music video is on the panel (F11 and double-click make it fullscreen).</summary>
     public bool HasVideo => shown != 0;
 
