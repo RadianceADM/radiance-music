@@ -8,7 +8,8 @@
 # -Page NAME (beta): that page instead of Now Playing; -NoPlay: nothing played (the app idle).
 # The beta runs hidden (--behind: behind everything, no focus, never minimised over or restored in front of
 # the owner's work; his rule, 2026-11-06); -Front: in front, as before (only when he's away).
-param([ValidateSet('beta', 'gtk')][string]$App = 'beta', [int]$Seconds = 60, [switch]$Short, [string]$Video = '', [string]$PlayTitle = '', [string]$Page = 'playing', [switch]$NoPlay, [switch]$Front)
+# -Settle N: seconds before measuring (default 15; 45 lets a stream's one-time pulse decode finish first).
+param([ValidateSet('beta', 'gtk')][string]$App = 'beta', [int]$Seconds = 60, [switch]$Short, [string]$Video = '', [string]$PlayTitle = '', [string]$Page = 'playing', [switch]$NoPlay, [switch]$Front, [int]$Settle = 15)
 $ErrorActionPreference = 'Stop'
 Add-Type @'
 using System; using System.Runtime.InteropServices; using System.Collections.Generic;
@@ -70,7 +71,7 @@ try {
     schtasks /run /tn RadianceMusicTest | Out-Null
     # -Short: as today's app is measured (4 s to start, 12 s measured, in front only), to compare the two
     if ($Short) { $Seconds = 12 }
-    Start-Sleep -Seconds $(if ($App -eq 'gtk' -or $Short) { 4 } else { 15 })
+    Start-Sleep -Seconds $(if ($App -eq 'gtk' -or $Short) { 4 } else { $Settle })
     # (the new one with the most memory: the app's window, not a short-lived helper of the same name)
     $p = Get-Process $name -ErrorAction SilentlyContinue | Where-Object { $before -notcontains $_.Id } | Sort-Object WorkingSet64 -Descending | Select-Object -First 1
     Write-Output "measuring $name, process $($p.Id), $([math]::Round($p.WorkingSet64 / 1MB)) MB"

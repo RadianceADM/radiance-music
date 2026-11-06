@@ -95,6 +95,8 @@ public partial class App : Application
             };
         }
         if (Program.Dev.Shot != null) _ = Shot.TakeAsync(Window, Program.Dev);
+        // --page without a screenshot (measure-cpu.ps1): that page at once (it only reached shots before)
+        else if (Program.Dev.Page != "home") Window.Show(Program.Dev.Page);
         if (Program.Dev.PlayTest && Hub.Engine.Home().Recent is { Length: > 0 } recent)
         {
             var i = Program.Dev.PlayTitle is { } title ? Math.Max(0, Array.FindIndex(recent, s => s.Title.Contains(title, StringComparison.OrdinalIgnoreCase))) : 0;
