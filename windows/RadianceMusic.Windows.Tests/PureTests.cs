@@ -425,3 +425,65 @@ public class TapTimingTests
         Assert.Equal(7.0, times[1]);
     }
 }
+
+/// <summary>Now Playing's background follows the beat (#56), as backdrop.rs's tick: a kick swells the art at
+/// once and pushes the flow ahead for a moment; strong bass flows it faster.</summary>
+public class BeatFollowerTests
+{
+    private const double Frame = 1.0 / 60;
+
+    private static void For(BeatFollower beat, double seconds, float hit, float bass)
+    {
+        for (var t = 0.0; t < seconds - 1e-9; t += Frame) beat.Step(Frame, hit, bass);
+    }
+
+    [Fact]
+    public void AKickSwellsAtOnceAndFadesWithinAThirdOfASecond()
+    {
+        var beat = new BeatFollower();
+        beat.Step(Frame, 0, 0);
+        beat.Step(Frame, 1, 0);
+        Assert.Equal(BeatFollower.SwellSize, beat.Swell, 6);
+        For(beat, 1.0 / 3, 0, 0);
+        Assert.Equal(0, beat.Swell, 9);
+    }
+
+    [Fact]
+    public void ARiseOfAFifthOrLessIsNoKick()
+    {
+        var beat = new BeatFollower();
+        beat.Step(Frame, 0.1f, 0);
+        beat.Step(Frame, 0.25f, 0);
+        Assert.Equal(1, beat.Speed, 9);
+        beat.Step(Frame, 0.55f, 0); // a rise of 0.3: a kick
+        Assert.True(beat.Speed > 10, $"pushed: {beat.Speed}");
+    }
+
+    [Fact]
+    public void StrongBassSpeedsTheFlow()
+    {
+        var beat = new BeatFollower();
+        For(beat, 1, 0, 1);
+        Assert.InRange(beat.Speed, 4 * 0.99, 4);
+    }
+
+    [Fact]
+    public void ThePushSettles()
+    {
+        var beat = new BeatFollower();
+        beat.Step(Frame, 1, 0);
+        var pushed = beat.Speed - 1;
+        Assert.Equal(BeatFollower.Push, pushed, 6);
+        For(beat, 0.36, 1, 0); // (the beat held: no new kick)
+        Assert.True(beat.Speed - 1 < 0.05 * pushed, $"left: {beat.Speed - 1}");
+    }
+
+    [Fact]
+    public void ThePulseIsReadAtTheSongsMoment()
+    {
+        float[] level = { 0.1f, 0.5f, 0.9f };
+        Assert.Equal(0.5f, BeatFollower.Sample(level, 10, 0.05, 0.16));
+        Assert.Equal(0f, BeatFollower.Sample(level, 10, 0.05, 0.0)); // before its first value
+        Assert.Equal(0f, BeatFollower.Sample(level, 10, 0.05, 9.0)); // past its end
+    }
+}

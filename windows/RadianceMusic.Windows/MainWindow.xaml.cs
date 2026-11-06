@@ -17,6 +17,19 @@ public sealed partial class MainWindow : Window
     private readonly Controls.QueuePanel side;
     private object? what;
 
+    /// <summary>The window can be seen (not minimised, not in the tray), and when that changes.</summary>
+    internal bool Seen { get; private set; } = true;
+    internal event Action? SeenChanged;
+
+    private void Look()
+    {
+        var seen = AppWindow.IsVisible && AppWindow.Presenter is not Microsoft.UI.Windowing.OverlappedPresenter { State: Microsoft.UI.Windowing.OverlappedPresenterState.Minimized };
+        if (seen == Seen) return;
+        Seen = seen;
+        App.Trace($"window seen: {seen}");
+        SeenChanged?.Invoke();
+    }
+
     internal MainWindow(EngineHub hub)
     {
         this.hub = hub;
@@ -45,6 +58,9 @@ public sealed partial class MainWindow : Window
             if (e.InvokedItemContainer is NavigationViewItem { Tag: "splitting" }) { var opened = Dialogs.SplittingDialog.Open(hub, Content.XamlRoot); }
         };
         hub.Change += OnChange;
+        // minimised or in the tray: nothing per frame (Now Playing's beat stops, as GTK's tick behind other apps)
+        AppWindow.Changed += (_, _) => Look();
+        VisibilityChanged += (_, _) => Look();
         Bar = new Controls.PlayerBar(hub);
         BarHost.Content = Bar;
         // the side panel (Queue | Lyrics): beside the page from 1300 px, over it below (as the GTK app's)

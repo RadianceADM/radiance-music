@@ -16,6 +16,10 @@ public sealed partial class NowPlayingPage : Page
     /// <summary>The music video's swapchain on the panel (0: none, the cover shows), and fullscreen.</summary>
     private nint shown;
     private bool full;
+    /// <summary>The playing moment as last read (the beat's clock counts on from it, as the lyrics').</summary>
+    private double engineAt;
+    private ulong since;
+    private bool playing;
 
     /// <summary>A tap on lyric line `i` (DevActs: the screenshots).</summary>
     internal bool TapLyric(int i) => Right.Children.Count > 0 && Right.Children[0] is Controls.LyricsColumn c && c.TapLine(i);
@@ -50,9 +54,39 @@ public sealed partial class NowPlayingPage : Page
             hub.Change += kind =>
             {
                 if (kind == ChangeKind.Now) RenderNow();
+                else if (kind == ChangeKind.Position) Moment();
+                else if (kind == ChangeKind.Pulse) Pulse();
             };
+            // the background follows the beat while the page is shown, the window seen and the song plays (#56)
+            Loaded += (_, _) => FollowBeat();
+            Unloaded += (_, _) => Back.Follow(null);
+            if (App.Window is { } window) window.SeenChanged += FollowBeat;
         }
         RenderNow();
+        Pulse();
+    }
+
+    private void Moment()
+    {
+        if (hub == null) return;
+        var now = hub.Engine.Now();
+        (engineAt, since) = (now.At, now.Since);
+    }
+
+    /// <summary>The playing song's pulse (worked out once it starts): the background's beat.</summary>
+    private void Pulse()
+    {
+        if (hub == null) return;
+        var p = hub.Engine.Pulse();
+        Back.SetPulse(p != null && p.Key == songKey ? p : null);
+        FollowBeat();
+    }
+
+    private void FollowBeat()
+    {
+        var on = IsLoaded && playing && App.Window?.Seen != false;
+        Func<double?>? moment = on ? () => playing ? LyricClock.At(engineAt, since, Native.Native.ClockMs(), true) : (double?)null : null;
+        Back.Follow(moment);
     }
 
     private void Fit(double width)
@@ -162,6 +196,12 @@ public sealed partial class NowPlayingPage : Page
         if (hub == null) return;
         var now = hub.Engine.Now();
         var song = now.Song;
+        (engineAt, since) = (now.At, now.Since);
+        if (now.Playing != playing)
+        {
+            playing = now.Playing;
+            FollowBeat();
+        }
         if (song == null)
         {
             SongTitle.Text = "Nothing playing";
@@ -193,6 +233,7 @@ public sealed partial class NowPlayingPage : Page
         {
             songKey = song.Key;
             _ = LoadArt(song.Art);
+            Pulse(); // (the last song's is no use: this one's comes once it's worked out)
         }
     }
 
