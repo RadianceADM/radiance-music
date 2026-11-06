@@ -91,7 +91,7 @@ pub fn this_use() -> Use {
         plays,
         asked: s["asked"].as_u64(),
         never: s["never"].as_bool().unwrap_or(false),
-        sent_here: s["sent_version"].as_str() == Some(env!("CARGO_PKG_VERSION")),
+        sent_here: s["sent_version"].as_str() == Some(crate::update::version_here().as_str()),
     }
 }
 
@@ -103,7 +103,7 @@ pub fn time_to_ask() -> bool {
 /// An answer went in: not again for this version, nor for 30 days.
 pub fn sent() {
     let mut s = load();
-    s["sent_version"] = json!(env!("CARGO_PKG_VERSION"));
+    s["sent_version"] = json!(crate::update::version_here());
     s["asked"] = json!(now());
     save(&s);
 }
@@ -416,9 +416,23 @@ pub fn send(token: &str, a: &Answer) -> Result<bool, Failure> {
         agent()
             .post(&format!("{}/api/music/feedback", base()))
             .header("Authorization", &format!("Bearer {token}"))
-            .send_json(body(a, env!("CARGO_PKG_VERSION"), platform())),
+            .send_json(body(a, &crate::update::version_here(), platform())),
     )?;
     Ok(v["share"].as_bool().unwrap_or(false))
+}
+
+/// The whole Google sign-in, as the GTK app's rate_sign_in → rate_browser (the beta's, in one
+/// call on a worker): the loopback, the admin's sign-in checked, `open` given the address for
+/// the browser, then the code waited for (stopped by `stop`), exchanged and kept.
+pub fn sign_in(stop: &AtomicBool, open: &dyn Fn(&str)) -> Result<Account, Failure> {
+    let lb = loopback().map_err(|e| Failure::Other(format!("Couldn't start the sign-in on this computer ({e}).")))?;
+    sign_in_ready(lb.port)?;
+    let p = pkce();
+    open(&sign_in_url(&p, lb.port));
+    let code = lb.wait(&p.state, stop, SIGN_IN_WAIT)?;
+    let account = exchange(&code, &p.verifier)?;
+    keep(&account);
+    Ok(account)
 }
 
 /// Signs this computer out there too (best effort: it's forgotten here either way).

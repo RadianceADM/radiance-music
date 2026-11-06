@@ -66,6 +66,43 @@ pub enum Change {
     Pulse,
     /// An update found, downloading, ready, or what happened (stage 4a).
     Update,
+    /// Report a Problem: what will be sent is read, or how sending went.
+    Report,
+    /// The rating pop-up: due at a free moment, signing in, or how sending went.
+    Rating,
+}
+
+/// Report a Problem as its dialog shows it.
+#[derive(Clone, Debug, Default)]
+pub struct ReportState {
+    /// What will be sent (read on a worker; None: reading the app's log…).
+    pub gathered: Option<crate::report::Report>,
+    pub sending: bool,
+    /// Sent: its code to quote; or why not.
+    pub outcome: Option<Result<String, String>>,
+}
+
+/// How a rating went.
+#[derive(Clone, Debug, PartialEq)]
+pub enum RateOutcome {
+    /// Sent; `share`: 4–5 stars, the thanks offers Share Radiance Music.
+    Sent { share: bool },
+    /// Why not, in the GTK app's words (Failure::words).
+    Failed(String),
+}
+
+/// The rating pop-up's state.
+#[derive(Clone, Debug, Default)]
+pub struct RatingState {
+    /// A free moment came and this one asks (the app shows it when it's free, then says so).
+    pub due: bool,
+    /// Signed in as (name, email).
+    pub account: Option<(String, String)>,
+    /// What it's doing ("Finish signing in with Google in your browser…"), or nothing.
+    pub busy: String,
+    /// The browser's sign-in address, for the app to open (once).
+    pub sign_in_url: Option<String>,
+    pub outcome: Option<RateOutcome>,
 }
 
 /// Where an update is (the GTK app's pop-up steps, src/ui/update.rs).
@@ -371,6 +408,8 @@ struct View {
     /// Songs split while the app runs, and how (their rows' marks; the files tell the rest).
     split_done: HashMap<String, SplitMark>,
     update: UpdateState,
+    report: ReportState,
+    rating: RatingState,
 }
 
 /// Between the app's threads and the engine's.
@@ -473,6 +512,8 @@ impl Controller {
                 pulse: None,
                 split_done: HashMap::new(),
                 update: UpdateState::default(),
+                report: ReportState::default(),
+                rating: RatingState::default(),
             }),
             liked_q: Mutex::new(String::new()),
         });
@@ -965,6 +1006,52 @@ impl Controller {
         self.post(move |e| e.set_split_paused(on));
     }
 
+    /// Report a Problem: what will be sent and how sending went.
+    pub fn report(&self) -> ReportState {
+        self.shared.view(|v| v.report.clone())
+    }
+
+    /// Reads what will be sent (the app's log, scrubbed; the system; the install), on a worker.
+    pub fn report_gather(&self) {
+        self.post(|e| e.report_gather());
+    }
+
+    /// Sends it with your note.
+    pub fn report_send(&self, note: &str) {
+        let note = note.to_string();
+        self.post(move |e| e.report_send(note));
+    }
+
+    /// The rating pop-up's state.
+    pub fn rating(&self) -> RatingState {
+        self.shared.view(|v| v.rating.clone())
+    }
+
+    /// It showed by itself (not again for 30 days, whatever is pressed).
+    pub fn rating_shown(&self) {
+        self.post(|e| e.rating_shown());
+    }
+
+    /// Don't Ask Again.
+    pub fn rating_never(&self) {
+        self.post(|_| crate::feedback::never_again());
+    }
+
+    /// Sends the answers: signed in, at once; else Google's sign-in in the browser first.
+    pub fn rate(&self, answer: crate::feedback::Answer) {
+        self.post(move |e| e.rate(answer));
+    }
+
+    /// Cancel Sign-In.
+    pub fn cancel_sign_in(&self) {
+        self.post(|e| e.rating_stop.store(true, Ordering::SeqCst));
+    }
+
+    /// Sign Out (here and there).
+    pub fn sign_out(&self) {
+        self.post(|e| e.sign_out());
+    }
+
     /// The update: found, downloading, ready (stage 4a).
     pub fn update(&self) -> UpdateState {
         self.shared.view(|v| v.update.clone())
@@ -1149,6 +1236,8 @@ struct Engine {
     /// How this copy updates (from Sources at the start), and the download's stop.
     install: RefCell<crate::update::Install>,
     update_stop: Arc<AtomicBool>,
+    /// Cancel Sign-In.
+    rating_stop: Arc<AtomicBool>,
     two_q: RefCell<VecDeque<(Track, bool)>>,
     splitting_two: RefCell<Option<Track>>,
     split_asked: RefCell<HashSet<String>>,
@@ -1224,6 +1313,7 @@ impl Engine {
             pause_looking: Cell::new(false),
             install: RefCell::new(crate::update::Install::Other),
             update_stop: Arc::new(AtomicBool::new(false)),
+            rating_stop: Arc::new(AtomicBool::new(false)),
             two_q: RefCell::default(),
             splitting_two: RefCell::default(),
             split_asked: RefCell::default(),
@@ -1677,7 +1767,10 @@ impl Engine {
                 self.publish_now();
             }
             Event::Ended if self.queue.borrow().repeat() == Repeat::One => self.play_current(),
-            Event::Ended => self.skip(1),
+            Event::Ended => {
+                self.skip(1);
+                self.rating_moment(); // a free moment (GTK's feedback_moment)
+            }
             Event::Error(e) if trouble::sound_device_gone(&e) && self.sound_tries.get() < 3 => self.carry_on(),
             Event::Error(e) => {
                 if !self.back_from_video(&e) {
@@ -2495,6 +2588,124 @@ impl Engine {
         );
     }
 
+    // ------------------------------------------------------------------ report and rating (stage 4a)
+
+    fn set_report(&self, f: impl FnOnce(&mut ReportState)) {
+        self.shared.view(|v| f(&mut v.report));
+        self.shared.tell(Change::Report);
+    }
+
+    fn report_gather(self: &Rc<Self>) {
+        self.set_report(|r| *r = ReportState::default());
+        self.bg(crate::report::Report::gather, |e, r| e.set_report(|s| s.gathered = Some(r)));
+    }
+
+    fn report_send(self: &Rc<Self>, note: String) {
+        let Some(report) = self.shared.view(|v| v.report.gathered.clone()) else { return };
+        self.set_report(|r| {
+            r.sending = true;
+            r.outcome = None;
+        });
+        let sources = self.shared.sources.clone();
+        self.bg(
+            move || sources.send_report(&report, &note).map_err(|f| f.words()),
+            |e, sent| {
+                e.set_report(|r| {
+                    r.sending = false;
+                    r.outcome = Some(sent);
+                });
+            },
+        );
+    }
+
+    fn set_rating(&self, f: impl FnOnce(&mut RatingState)) {
+        self.shared.view(|v| f(&mut v.rating));
+        self.shared.tell(Change::Rating);
+    }
+
+    /// A free moment (a song's end, a pause): does the rating ask now? The app shows it when it's
+    /// free (never first open, never over a dialog) and then says rating_shown.
+    fn rating_moment(&self) {
+        if self.shared.view(|v| v.rating.due) || std::env::var_os("RADIANCE_SHOT").is_some() {
+            return;
+        }
+        if self.shared.sources.rating_due() {
+            crate::log::note("feedback: asking (a free moment, at random)");
+            self.set_rating(|r| r.due = true);
+        }
+    }
+
+    fn rating_shown(&self) {
+        crate::feedback::asked_now();
+        let account = self.shared.sources.account().map(|a| (a.name, a.email));
+        self.set_rating(|r| {
+            r.due = false;
+            r.account = account;
+            r.outcome = None;
+        });
+    }
+
+    /// Sends the answers (signed in), or signs in first: the browser's address goes to the app.
+    fn rate(self: &Rc<Self>, answer: crate::feedback::Answer) {
+        self.rating_stop.store(false, Ordering::SeqCst);
+        self.set_rating(|r| {
+            r.outcome = None;
+            r.sign_in_url = None;
+            r.busy = radiance_core::words::SENDING.into();
+        });
+        let (sources, shared, stop) = (self.shared.sources.clone(), self.shared.clone(), self.rating_stop.clone());
+        self.bg(
+            move || {
+                let account = match sources.account() {
+                    Some(a) => a,
+                    None => {
+                        shared.view(|v| v.rating.busy = radiance_core::words::RATE_GETTING_READY.into());
+                        shared.tell(Change::Rating);
+                        let open = |url: &str| {
+                            shared.view(|v| {
+                                v.rating.sign_in_url = Some(url.to_string());
+                                v.rating.busy = radiance_core::words::RATE_IN_BROWSER.into();
+                            });
+                            shared.tell(Change::Rating);
+                        };
+                        sources.sign_in(&stop, &open)?
+                    }
+                };
+                shared.view(|v| {
+                    v.rating.account = Some((account.name.clone(), account.email.clone()));
+                    v.rating.busy = radiance_core::words::SENDING.into();
+                });
+                shared.tell(Change::Rating);
+                sources.send_feedback(&account.token, &answer)
+            },
+            |e, sent: Result<bool, crate::feedback::Failure>| {
+                if matches!(sent, Err(crate::feedback::Failure::SignInAgain)) {
+                    crate::feedback::forget(); // its sign-in ended: asked for again next time
+                }
+                if sent.is_ok() {
+                    crate::feedback::sent();
+                    crate::log::note("feedback: sent");
+                }
+                e.set_rating(|r| {
+                    r.busy.clear();
+                    r.outcome = Some(match sent {
+                        Ok(share) => RateOutcome::Sent { share },
+                        Err(f) => RateOutcome::Failed(f.words()),
+                    });
+                });
+            },
+        );
+    }
+
+    fn sign_out(self: &Rc<Self>) {
+        let account = self.shared.sources.account();
+        crate::feedback::forget();
+        self.set_rating(|r| r.account = None);
+        if let Some(a) = account {
+            self.bg(move || crate::feedback::sign_out_there(&a.token), |_, ()| {});
+        }
+    }
+
     // ------------------------------------------------------------------ updates (stage 4a)
 
     fn set_update(&self, f: impl FnOnce(&mut UpdateState)) {
@@ -2930,11 +3141,17 @@ impl Engine {
             self.play_current(); // last time's song, from where it was
             return;
         }
-        if let Some(p) = self.player.borrow().as_ref() {
+        let paused = if let Some(p) = self.player.borrow().as_ref() {
             let was = p.playing();
             p.set_playing(!was);
-        }
+            was
+        } else {
+            false
+        };
         self.publish_now();
+        if paused {
+            self.rating_moment(); // a pause is a free moment (GTK's toggle_play)
+        }
     }
 
     /// The song playing, left early (before 70 % and with more than 30 s to go): a skip.

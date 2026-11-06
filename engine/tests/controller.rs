@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex, Once};
 use std::time::{Duration, Instant};
 
 use radiance_core::library::GroupKind;
-use radiance_engine::controller::{Change, Controller, ListRef, Listener, SetupState, SplitMark, UpdateStep};
+use radiance_engine::controller::{Change, Controller, ListRef, Listener, RateOutcome, SetupState, SplitMark, UpdateStep};
 use radiance_engine::lyrics::Lyrics;
 use radiance_engine::sources::Sources;
 use radiance_engine::track::{Source, Track};
@@ -79,6 +79,12 @@ pub struct Fake {
     /// Updates (stage 4a): the newest release found, and a download that waits until it's stopped.
     pub release: Mutex<Option<radiance_engine::update::Release>>,
     pub download_waits: std::sync::atomic::AtomicBool,
+    /// Report a Problem and the rating (stage 4a): notes sent, whether a free moment asks, the
+    /// account (none: a sign-in first), the answers sent.
+    pub reports: Mutex<Vec<String>>,
+    pub rating_due: std::sync::atomic::AtomicBool,
+    pub account: Mutex<Option<radiance_engine::feedback::Account>>,
+    pub answers: Mutex<Vec<radiance_engine::feedback::Answer>>,
 }
 
 fn kind_name(k: Kind) -> &'static str {
@@ -160,6 +166,27 @@ impl Sources for Fake {
         Ok(std::env::temp_dir().join(format!("{}-{}", r.version, radiance_engine::update::BETA_ASSET)))
     }
     fn count_update(&self, _: &radiance_engine::update::Release, _: &radiance_engine::update::Install) {}
+    fn send_report(&self, _: &radiance_engine::report::Report, note: &str) -> Result<String, radiance_engine::feedback::Failure> {
+        self.reports.lock().unwrap().push(note.to_string());
+        Ok("RM-0042".into())
+    }
+    fn rating_due(&self) -> bool {
+        self.rating_due.load(Ordering::SeqCst)
+    }
+    fn account(&self) -> Option<radiance_engine::feedback::Account> {
+        self.account.lock().unwrap().clone()
+    }
+    fn sign_in(&self, _: &std::sync::atomic::AtomicBool, open: &dyn Fn(&str)) -> Result<radiance_engine::feedback::Account, radiance_engine::feedback::Failure> {
+        open("https://admin.example/music/sign-in?state=x");
+        std::thread::sleep(Duration::from_millis(200));
+        let a = radiance_engine::feedback::Account { token: "t".into(), name: "Bassi".into(), email: "b@example.com".into() };
+        *self.account.lock().unwrap() = Some(a.clone());
+        Ok(a)
+    }
+    fn send_feedback(&self, _: &str, a: &radiance_engine::feedback::Answer) -> Result<bool, radiance_engine::feedback::Failure> {
+        self.answers.lock().unwrap().push(a.clone());
+        Ok(a.ratings[0] >= 4)
+    }
     fn setup_problems(&self) -> Vec<String> {
         self.setup_problems.lock().unwrap().clone()
     }
@@ -1329,6 +1356,51 @@ fn update_cancel_goes_back_to_out() {
     assert!(until(2.0, || c.update().step == UpdateStep::Out), "{:?}", c.update().step);
     fake.download_waits.store(false, Ordering::SeqCst);
     radiance_engine::update::forget();
+    c.quit();
+}
+
+// ------------------------------------------------------------------ report and rating (stage 4a)
+
+#[test]
+fn a_report_is_sent_with_its_note() {
+    let _l = setup();
+    let (c, fake, _rx) = with_songs("report", vec![]);
+    c.report_gather();
+    assert!(until(3.0, || c.report().gathered.is_some()), "never gathered");
+    c.report_send("it stopped after a song");
+    assert!(until(2.0, || c.report().outcome == Some(Ok("RM-0042".into()))), "{:?}", c.report().outcome);
+    assert_eq!(*fake.reports.lock().unwrap(), ["it stopped after a song"]);
+    c.quit();
+}
+
+/// Final plan Review Focus 5: the rating is due only at a free moment (a song's end, a pause),
+/// never at the start or mid-song; shown, it isn't due any more.
+#[test]
+fn the_rating_waits_for_a_free_moment() {
+    let _l = setup();
+    let t = wav("rating-moment", 2.0);
+    let (c, fake, _rx, list) = with_list("rating moment", vec![t.clone()]);
+    fake.rating_due.store(true, Ordering::SeqCst);
+    c.play_from(list, 0, &t.key());
+    assert!(until(2.0, || c.now().playing), "never got going");
+    assert!(!c.rating().due, "asked mid-song");
+    c.toggle_play();
+    assert!(until(2.0, || c.rating().due), "a pause is a free moment");
+    c.rating_shown();
+    assert!(until(1.0, || !c.rating().due));
+    c.quit();
+}
+
+#[test]
+fn a_rating_without_sign_in_asks_for_one_then_sends() {
+    let _l = setup();
+    let (c, fake, _rx) = with_songs("rating send", vec![]);
+    let answer = radiance_engine::feedback::Answer { enjoying: true, ratings: [5, 4, 5, 4, 3], comment: "nice".into() };
+    c.rate(answer.clone());
+    assert!(until(2.0, || c.rating().sign_in_url.is_some()), "the browser's sign-in never asked for");
+    assert!(until(3.0, || c.rating().outcome == Some(RateOutcome::Sent { share: true })), "{:?}", c.rating().outcome);
+    assert_eq!(c.rating().account, Some(("Bassi".into(), "b@example.com".into())));
+    assert_eq!(*fake.answers.lock().unwrap(), [answer]);
     c.quit();
 }
 

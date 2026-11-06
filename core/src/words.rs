@@ -188,6 +188,10 @@ pub const HOW_TO_FIX: &str = "How to Fix It";
 
 /// A song's menu: splitting and lyrics.
 pub const SPLIT_TWO: &str = "Split: Music + Vocals (Fast)";
+/// The rating pop-up's busy line (GTK's src/ui/feedback.rs).
+pub const RATE_GETTING_READY: &str = "Getting the sign-in ready…";
+pub const RATE_IN_BROWSER: &str = "Finish signing in with Google in your browser…";
+pub const SENDING: &str = "Sending…";
 /// The Mixer's note while a voice waits for the song's split (GTK's voice status).
 pub const FULL_UNTIL_SPLIT: &str = "Plays as the full song until it's split.";
 pub const SPLIT_FOUR: &str = "Split: Four Parts";

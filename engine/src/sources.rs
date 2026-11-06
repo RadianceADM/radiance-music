@@ -67,6 +67,26 @@ pub trait Sources: Send + Sync + 'static {
     fn count_update(&self, r: &crate::update::Release, install: &crate::update::Install) {
         crate::update::counted(r, install)
     }
+    /// Report a Problem: sends it (worker thread; the admin site).
+    fn send_report(&self, report: &crate::report::Report, note: &str) -> Result<String, crate::feedback::Failure> {
+        crate::report::send(report, note)
+    }
+    /// The rating pop-up: is this free moment the one (the timing, then the roll)?
+    fn rating_due(&self) -> bool {
+        crate::feedback::time_to_ask()
+    }
+    /// The account the rating is sent as (none: a sign-in first).
+    fn account(&self) -> Option<crate::feedback::Account> {
+        crate::feedback::signed_in()
+    }
+    /// Signs in with Google in the browser (worker thread; minutes): `open` gets the address.
+    fn sign_in(&self, stop: &std::sync::atomic::AtomicBool, open: &dyn Fn(&str)) -> Result<crate::feedback::Account, crate::feedback::Failure> {
+        crate::feedback::sign_in(stop, open)
+    }
+    /// Sends the rating (worker thread): whether to offer sharing (4–5 stars).
+    fn send_feedback(&self, token: &str, answer: &crate::feedback::Answer) -> Result<bool, crate::feedback::Failure> {
+        crate::feedback::send(token, answer)
+    }
     /// What stops splitting being set up on this computer (cores, memory, free disk), in plain words; empty: it can.
     fn setup_problems(&self) -> Vec<String> {
         crate::setup::check().problems()

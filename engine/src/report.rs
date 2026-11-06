@@ -30,7 +30,18 @@ pub struct Report {
 impl Report {
     /// Everything but the note, gathered now (worker thread: it reads the log).
     pub fn gather() -> Report {
-        Report { platform: feedback::platform(), version: env!("CARGO_PKG_VERSION").into(), system: system(), install: install_id(), log: recent_log() }
+        let dir = glib::user_cache_dir().join("radiance-music");
+        let mut raw = String::new();
+        for name in ["app.log.1", "app.log"] {
+            if let Ok(t) = std::fs::read_to_string(dir.join(name)) {
+                raw.push_str(&t);
+            }
+        }
+        // the Windows beta's own log (beta-crash.log, beside its data) goes along, after the engine's
+        let beta = crate::update::is_beta().then(|| glib::user_data_dir().join("radiance-music").join("beta-crash.log"));
+        let home = glib::home_dir().to_string_lossy().to_string();
+        let user = glib::user_name().to_string_lossy().to_string();
+        gather_with(&crate::update::version_here(), &raw, beta.as_deref(), &home, &user)
     }
 
     /// The body of POST /api/music/reports (an empty note left out).
@@ -44,6 +55,24 @@ impl Report {
         }
         v
     }
+}
+
+/// Where the beta's own log starts in what's sent.
+pub const BETA_LOG_HEAD: &str = "--- the beta's own log ---";
+
+/// A report of `version`, with `engine_log` (and the beta's own log after it), scrubbed and
+/// cut to its newest MOST_LOG bytes.
+pub fn gather_with(version: &str, engine_log: &str, beta_log: Option<&std::path::Path>, home: &str, user: &str) -> Report {
+    let mut text = engine_log.to_string();
+    if let Some(t) = beta_log.and_then(|p| std::fs::read_to_string(p).ok()) {
+        if !text.is_empty() && !text.ends_with('\n') {
+            text.push('\n');
+        }
+        text.push_str(BETA_LOG_HEAD);
+        text.push('\n');
+        text.push_str(&t);
+    }
+    Report { platform: feedback::platform(), version: version.into(), system: system(), install: install_id(), log: newest(&scrub(&text, home, user), MOST_LOG) }
 }
 
 /// Sends it: the report's code ("RM-0123") to quote, or why not (worker thread).
@@ -125,9 +154,15 @@ pub fn recent_log() -> String {
 /// Home folder → "~", the user's name → "you", email addresses → "(email)".
 pub fn scrub(text: &str, home: &str, user: &str) -> String {
     let mut out = if home.len() > 1 { text.replace(home, "~") } else { text.to_string() };
-    // the same folder as a file:// address (spaces and all written %20)
+    // the same folder as a file:// address (spaces and all written %20), and on Windows written
+    // with forward slashes too (C:/Users/…, as GStreamer's file:///C:/Users/… addresses have it)
     if home.len() > 1 {
-        out = out.replace(&home.replace(' ', "%20"), "~");
+        let forward = home.replace('\\', "/");
+        for form in [home.replace(' ', "%20"), forward.clone(), forward.replace(' ', "%20")] {
+            if form != home {
+                out = out.replace(&form, "~");
+            }
+        }
     }
     if user.len() >= 3 {
         out = out.replace(user, "you");
@@ -161,6 +196,34 @@ fn newest(text: &str, most: usize) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
+    /// Final plan Review Focus 4: on Windows the home folder is written both ways (C:\\Users\\… in
+    /// paths, file:///C:/Users/… in GStreamer's addresses, spaces as %20): neither leaves.
+    #[test]
+    fn windows_paths_are_scrubbed_both_ways() {
+        let log = "load file:///C:/Users/Bassi%20Saba/Music/Radiance%20Music/a.flac\nsaved C:\\Users\\Bassi Saba\\Music\\x.flac\nC:/Users/Bassi Saba/AppData/y\n";
+        let out = scrub(log, "C:\\Users\\Bassi Saba", "Bassi Saba");
+        assert!(!out.contains("Bassi"), "{out}");
+        assert!(out.contains("file:///~/Music/Radiance%20Music/a.flac"), "{out}");
+        assert!(out.contains("saved ~\\Music\\x.flac") && out.contains("~/AppData/y"), "{out}");
+    }
+
+    /// The beta's report: its own version, and its own log (beta-crash.log) after the engine's, scrubbed.
+    #[test]
+    fn the_beta_report_carries_its_version_and_its_log() {
+        let dir = std::env::temp_dir().join(format!("rm-report-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let crash: PathBuf = dir.join("beta-crash.log");
+        std::fs::write(&crash, "2026-11-07 shot: C:\\Users\\Bassi Saba\\x\nmail me at a@b.co\n").unwrap();
+        let r = gather_with("0.8.0-beta.4", "engine line\n", Some(&crash), "C:\\Users\\Bassi Saba", "Bassi Saba");
+        assert_eq!(r.version, "0.8.0-beta.4");
+        assert!(r.log.starts_with("engine line\n"), "{}", r.log);
+        assert!(r.log.contains(BETA_LOG_HEAD) && r.log.contains("~\\x") && r.log.contains("(email)"), "{}", r.log);
+        assert!(!r.log.contains("Bassi"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     use super::*;
 
     #[test]

@@ -72,6 +72,11 @@ fn beta() -> Option<String> {
     BETA.read().unwrap().clone()
 }
 
+/// This process is the Windows beta (its report and rating say so, its log goes along).
+pub fn is_beta() -> bool {
+    beta().is_some()
+}
+
 /// The version this app is: the beta's own, or this build's.
 pub fn version_here() -> String {
     beta().unwrap_or_else(|| current().to_string())
