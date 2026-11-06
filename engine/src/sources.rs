@@ -36,6 +36,19 @@ pub trait Sources: Send + Sync + 'static {
     fn can_split_two(&self) -> bool {
         crate::two_part::ready().is_some()
     }
+    /// Every word of a split song timed to its Vocals (MMS, worker thread; minutes) where a splitter or
+    /// split server is set up; nothing to do without one.
+    fn time_words(&self, t: &Track) -> Result<(), String> {
+        match crate::word_times::Aligner::of(&crate::settings::load()) {
+            Some(a) => crate::word_times::time_words(t, &a),
+            None => Ok(()),
+        }
+    }
+    /// Find Lyrics Again (worker thread): the kept ones to the Trash, the ones found in their place.
+    /// Ok(true): every word timed too.
+    fn find_lyrics_again(&self, t: &Track) -> Result<bool, String> {
+        crate::word_times::relook_lyrics(t, crate::word_times::Aligner::of(&crate::settings::load()).as_ref())
+    }
     /// Splitting set up on this computer at its first start (worker thread; minutes: the Windows pack's
     /// download), saying each step and how far along (0..1).
     fn install_splitter(&self, threads: u32, say: &(dyn Fn(&str, f64) + Send + Sync)) -> Result<crate::settings::LocalSplitter, String> {

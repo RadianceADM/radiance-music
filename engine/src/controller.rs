@@ -850,6 +850,44 @@ impl Controller {
         rx.recv_timeout(Duration::from_millis(500)).unwrap_or_default()
     }
 
+    /// Find Lyrics Again (the song's menu).
+    pub fn find_lyrics_again(&self, key: &str) {
+        let key = key.to_string();
+        self.post(move |e| e.find_lyrics_again(&key));
+    }
+
+    /// The lyrics editor's Save: its rows (start, text, singer).
+    pub fn save_lyrics(&self, key: &str, rows: Vec<(Option<f64>, String, Option<String>)>) {
+        let key = key.to_string();
+        self.post(move |e| e.save_lyrics(&key, rows));
+    }
+
+    /// The lyrics editor's rows for a song (start, text, singer) and who can sing a line (its artists,
+    /// and anyone already named), as the GTK app's editor opens. Looked up when needed: call it off the
+    /// app's own thread.
+    pub fn lyrics_text(&self, key: &str) -> Option<(Vec<(Option<f64>, String, Option<String>)>, Vec<String>)> {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let key = key.to_string();
+        self.post(move |e| {
+            let _ = tx.send(e.find_track(&key).map(|t| playing::saved_copy(&e.liked.borrow(), &t)));
+        });
+        let t = rx.recv_timeout(Duration::from_secs(2)).ok().flatten()?;
+        let sources = self.shared.sources.clone();
+        let l = crate::lyrics::lyrics_and_source_with(&t, |x| sources.lyrics(x)).0;
+        let rows: Vec<(Option<f64>, String, Option<String>)> = match l {
+            Lyrics::Timed { lines, .. } => lines.into_iter().map(|x| (Some(x.start), x.text, x.singer)).collect(),
+            Lyrics::Plain(p) => p.lines().map(str::trim).filter(|x| !x.is_empty() && !(x.starts_with('[') && x.ends_with(']'))).map(|x| (None, x.to_string(), None)).collect(),
+            Lyrics::None => vec![],
+        };
+        let mut names: Vec<String> = t.artists();
+        for who in rows.iter().filter_map(|r| r.2.clone()) {
+            if !names.contains(&who) {
+                names.push(who);
+            }
+        }
+        Some((rows, names))
+    }
+
     /// Split a song by hand: first in line (stage 3). `two`: the fast split (Music + Vocals), else four parts.
     pub fn split(&self, key: &str, two: bool) {
         let key = key.to_string();
@@ -997,6 +1035,8 @@ struct Engine {
     /// The Mixer's sliders for this run (not kept, as the GTK app's), and the voice button.
     part_gains: RefCell<HashMap<String, f64>>,
     voice: Cell<Voice>,
+    /// The song's lyrics couldn't be looked up offline: looked up again once online (the GTK app's).
+    lyrics_offline: Cell<bool>,
 }
 
 /// A music video's streams, as found (through the relay).
@@ -1062,6 +1102,7 @@ impl Engine {
             split_asked: RefCell::default(),
             part_gains: RefCell::default(),
             voice: Cell::new(Voice::Song),
+            lyrics_offline: Cell::new(false),
         }
     }
 
@@ -2104,7 +2145,10 @@ impl Engine {
             move |e, result: Result<(), String>| {
                 e.splitting_two.replace(None);
                 match result {
-                    Ok(()) => e.split_landed(&t, SplitMark::Two),
+                    Ok(()) => {
+                        e.split_landed(&t, SplitMark::Two);
+                        e.time_words_later(&t);
+                    }
                     Err(why) => {
                         crate::log::note(&format!("fast split {}: {why}", t.title));
                         if asked {
@@ -2116,6 +2160,76 @@ impl Engine {
                 e.run_fast();
             },
         );
+    }
+
+    // ------------------------------------------------------------------ lyrics: editing, finding again (stage 3)
+
+    /// After a fast split, while its halves already play: every word timed to its Vocals (on the split
+    /// server, or this computer's splitter), then the lyrics again if it's still playing.
+    fn time_words_later(self: &Rc<Self>, t: &Track) {
+        if crate::word_times::aligned_by_mms(t) {
+            return;
+        }
+        let (sources, song, key) = (self.shared.sources.clone(), t.clone(), t.key());
+        self.bg(
+            move || sources.time_words(&song),
+            move |e, r: Result<(), String>| {
+                if let Err(why) = r {
+                    crate::log::note(&format!("word times after the fast split: {why}"));
+                }
+                let cur = e.current.borrow().clone();
+                if let Some(cur) = cur.filter(|c| c.key() == key) {
+                    e.load_lyrics(&cur, e.play_gen.get());
+                }
+            },
+        );
+    }
+
+    /// Find Lyrics Again (the GTK app's): the kept ones go, the ones found take their place.
+    fn find_lyrics_again(self: &Rc<Self>, key: &str) {
+        let Some(t) = self.find_track(key) else { return };
+        let t = playing::saved_copy(&self.liked.borrow(), &t);
+        let timed = crate::word_times::Aligner::of(&self.settings.borrow()).is_some() && split::has_parts(&t);
+        self.toast(words::finding_lyrics_again(&t.title, timed));
+        let (sources, song) = (self.shared.sources.clone(), t.clone());
+        self.bg(
+            move || sources.find_lyrics_again(&song),
+            move |e, r| {
+                match r {
+                    Ok(timed) => e.toast(words::found_lyrics_again(timed).to_string()),
+                    Err(why) => e.toast(why),
+                }
+                let cur = e.current.borrow().clone();
+                if let Some(cur) = cur.filter(|c| c.key() == t.key()) {
+                    e.load_lyrics(&cur, e.play_gen.get());
+                }
+            },
+        );
+    }
+
+    /// The lyrics editor's Save: kept for the song (by hand: never replaced), the lyrics again if it's
+    /// playing, then every word timed when it's split.
+    fn save_lyrics(self: &Rc<Self>, key: &str, rows: Vec<(Option<f64>, String, Option<String>)>) {
+        let Some(t) = self.find_track(key) else { return };
+        let t = playing::saved_copy(&self.liked.borrow(), &t);
+        let l = radiance_core::lyrics::from_edited(&rows);
+        if crate::word_times::save_edited(&t, &l).is_err() {
+            self.toast(words::LYRICS_NOT_SAVED.to_string());
+            return;
+        }
+        self.toast(words::LYRICS_SAVED.to_string());
+        let cur = self.current.borrow().clone();
+        if let Some(cur) = cur.filter(|c| c.key() == t.key()) {
+            self.load_lyrics(&cur, self.play_gen.get());
+        }
+        if split::has_parts(&t) {
+            let (sources, song) = (self.shared.sources.clone(), t.clone());
+            self.bg(move || sources.time_words(&song), |_, r: Result<(), String>| {
+                if let Err(why) = r {
+                    crate::log::note(&format!("word times for edited lyrics: {why}"));
+                }
+            });
+        }
     }
 
     // ------------------------------------------------------------------ the first start's setup (stage 3)
@@ -2207,8 +2321,12 @@ impl Engine {
         self.shared.view(|v| {
             v.split_done.insert(t.key(), mark);
         });
-        // the song playing: on with its parts from where it's got to (fading over)
+        // the song playing: on with its parts from where it's got to (fading over), its lyrics again
+        // (its words may be timed now)
         let cur = self.current.borrow().clone();
+        if cur.as_ref().is_some_and(|c| c.key() == t.key()) {
+            self.load_lyrics(t, self.play_gen.get());
+        }
         if let Some(cur) = cur.filter(|c| c.key() == t.key() && !c.video) {
             let at = self.player.borrow().as_ref().and_then(|p| p.position()).unwrap_or(0.0);
             if self.play_parts(&cur, at, true) {
@@ -2597,6 +2715,7 @@ impl Engine {
                     Lyrics::Plain(text) => LyricsState::Plain(text),
                     Lyrics::None => LyricsState::None,
                 };
+                e.lyrics_offline.set(matches!(state, LyricsState::None) && !e.shared.view(|v| v.online));
                 e.shared.view(|v| v.lyrics = state);
                 e.shared.tell(Change::Lyrics);
             },
@@ -2760,6 +2879,12 @@ impl Engine {
         let changed = self.shared.view(|v| std::mem::replace(&mut v.online, on) != on);
         if changed {
             self.shared.tell(Change::Online);
+        }
+        // back online: the song's lyrics looked up again (none came offline), as the GTK app's
+        if changed && on && self.lyrics_offline.replace(false) {
+            if let Some(t) = self.current.borrow().clone() {
+                self.load_lyrics(&t, self.play_gen.get());
+            }
         }
         // back online: splitting's first-start download starts now (it waited for the internet)
         if changed && on && self.shared.view(|v| v.setup == SetupState::Offline) {

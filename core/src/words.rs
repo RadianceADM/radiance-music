@@ -193,6 +193,18 @@ pub const FIND_LYRICS_AGAIN: &str = "Find Lyrics Again";
 pub const LYRICS_SAVED: &str = "Lyrics saved";
 pub const LYRICS_NOT_SAVED: &str = "Couldn't save the lyrics";
 
+/// Find Lyrics Again (the song's menu): looking, then what was found.
+pub fn finding_lyrics_again(title: &str, timed: bool) -> String {
+    if timed {
+        format!("Finding “{title}”'s lyrics again, then timing every word (a few minutes)…")
+    } else {
+        format!("Finding “{title}”'s lyrics again…")
+    }
+}
+pub fn found_lyrics_again(timed: bool) -> &'static str {
+    if timed { "New lyrics, every word timed to the singing" } else { "New lyrics found" }
+}
+
 /// Split by hand (the menu): what's happening, and how long it takes.
 pub fn split_two_toast(title: &str) -> String {
     format!("Splitting “{title}” into Music and Vocals: a few seconds")

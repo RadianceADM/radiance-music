@@ -69,6 +69,8 @@ pub struct Fake {
     pub splits_started: Mutex<Vec<(String, bool)>>,
     /// A split lays the song's four parts down (short FLACs), as a real one would.
     pub split_makes_parts: std::sync::atomic::AtomicBool,
+    /// MMS word timing asked for (stage 3, Task 7).
+    pub time_words_calls: AtomicUsize,
 }
 
 fn kind_name(k: Kind) -> &'static str {
@@ -147,6 +149,22 @@ impl Sources for Fake {
             std::fs::write(f, b"").map_err(|e| e.to_string())?;
         }
         Ok(radiance_engine::settings::LocalSplitter { python: python.display().to_string(), script: script.display().to_string(), threads })
+    }
+    fn time_words(&self, _t: &Track) -> Result<(), String> {
+        self.time_words_calls.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    }
+    fn find_lyrics_again(&self, t: &Track) -> Result<bool, String> {
+        // as relook_lyrics: the ones found take the kept ones' place
+        let found = self.lyrics.lock().unwrap().clone();
+        match found {
+            Some(l @ Lyrics::Timed { .. }) => {
+                let (_, text) = radiance_engine::lyrics::to_file(&l, Some(t), &[]).ok_or("nothing to keep")?;
+                std::fs::write(radiance_engine::lyrics::lyrics_file(t), text).map_err(|e| e.to_string())?;
+                Ok(false)
+            }
+            _ => Err("No other lyrics found for this song: yours stay. Edit Lyrics… to type them in.".into()),
+        }
     }
     fn split(&self, t: &Track, two: bool, _uri: &str, report: std::sync::Arc<dyn Fn(radiance_engine::splitting::Phase) + Send + Sync>) -> Result<(), String> {
         self.splits_started.lock().unwrap().push((t.id.clone(), two));
@@ -1411,3 +1429,85 @@ fn reset_puts_every_part_back_at_full() {
 }
 
 const HIGH: f64 = radiance_engine::effects::HIGH_CUT.1;
+
+// ---------------------------------------------------------------------------------- lyrics: editing, finding again, timing (Task 7)
+
+fn timed(texts: &[&str]) -> Lyrics {
+    let lines = texts
+        .iter()
+        .enumerate()
+        .map(|(i, t)| {
+            let (start, end) = (i as f64 * 1.5, i as f64 * 1.5 + 1.5);
+            Line { start, end, text: t.to_string(), words: radiance_engine::lyrics::spread(t, start, end), singer: None }
+        })
+        .collect();
+    Lyrics::Timed { lines, exact: false }
+}
+
+fn shown_lines(c: &Controller) -> Vec<String> {
+    match c.lyrics() {
+        LyricsState::Lines(l) => l.iter().map(|x| x.line.text.clone()).collect(),
+        _ => vec![],
+    }
+}
+
+#[test]
+fn edited_lyrics_are_kept_and_never_replaced() {
+    let _l = setup();
+    let t = wav("edited-kept", 4.0);
+    let (c, fake, rx, list) = with_list("edited kept", vec![t.clone()]);
+    *fake.lyrics.lock().unwrap() = Some(timed(&["someone else's", "lines"]));
+    c.save_lyrics(&t.key(), vec![(Some(0.5), "mine one".into(), None), (Some(1.5), "mine two".into(), Some("Nairud".into()))]);
+    assert!(toasts_for(&c, &rx, 2.0).iter().any(|x| x == "Lyrics saved"));
+    c.play_from(list, 0, &t.key());
+    assert!(until(4.0, || shown_lines(&c) == ["mine one", "mine two"]), "{:?}", shown_lines(&c));
+    let (rows, names) = c.lyrics_text(&t.key()).expect("the editor's rows");
+    assert_eq!(rows.iter().map(|r| r.1.as_str()).collect::<Vec<_>>(), ["mine one", "mine two"]);
+    assert!(names.contains(&"Nairud".to_string()) && names.contains(&"Test Artist".to_string()), "{names:?}");
+    c.quit();
+}
+
+#[test]
+fn found_again_lyrics_replace_the_kept_ones() {
+    let _l = setup();
+    let t = wav("found-again", 4.0);
+    let (c, fake, rx, list) = with_list("found again", vec![t.clone()]);
+    c.save_lyrics(&t.key(), vec![(Some(0.5), "old one".into(), None)]);
+    c.play_from(list, 0, &t.key());
+    assert!(until(4.0, || shown_lines(&c) == ["old one"]));
+    *fake.lyrics.lock().unwrap() = Some(timed(&["new one", "new two"]));
+    c.find_lyrics_again(&t.key());
+    let toasts = toasts_for(&c, &rx, 3.0);
+    assert!(toasts.iter().any(|x| x == "Finding “Song found-again”'s lyrics again…"), "{toasts:?}");
+    assert!(toasts.iter().any(|x| x == "New lyrics found"), "{toasts:?}");
+    assert!(until(3.0, || shown_lines(&c) == ["new one", "new two"]), "{:?}", shown_lines(&c));
+    c.quit();
+}
+
+#[test]
+fn lyrics_come_back_when_online_again() {
+    let _l = setup();
+    let t = wav("back-online", 6.0);
+    let (c, fake, _rx, list) = with_list("lyrics back", vec![t.clone()]);
+    fake.offline.store(true, Ordering::SeqCst);
+    c.search("nothing while offline");
+    assert!(until(2.0, || !c.online()), "never went offline");
+    c.play_from(list, 0, &t.key());
+    assert!(until(3.0, || matches!(c.lyrics(), LyricsState::None)), "lyrics while offline?");
+    fake.offline.store(false, Ordering::SeqCst);
+    *fake.lyrics.lock().unwrap() = Some(timed(&["back", "again"]));
+    c.search("online again");
+    assert!(until(4.0, || shown_lines(&c) == ["back", "again"]), "they didn't come back: {:?}", shown_lines(&c));
+    c.quit();
+}
+
+#[test]
+fn words_are_timed_after_a_split_lands() {
+    let _l = setup();
+    let (c, fake, _rx) = with_songs("timed after", vec![song(Source::YouTube, "tw", "Timed After")]);
+    c.split("yt:tw", true);
+    assert!(until(3.0, || fake.time_words_calls.load(Ordering::SeqCst) == 1), "the words weren't timed after the fast split");
+    std::thread::sleep(Duration::from_millis(300));
+    assert_eq!(fake.time_words_calls.load(Ordering::SeqCst), 1, "once");
+    c.quit();
+}
