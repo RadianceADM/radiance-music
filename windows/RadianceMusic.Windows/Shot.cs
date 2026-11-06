@@ -42,6 +42,7 @@ internal static class Shot
         {
             window.OpenSide(dev.Side);
             await Task.Delay(800);
+            Crash.Note($"shot: side panel open on {dev.Side}: {window.SideState}");
         }
         await Save(hwnd, dev.Shot!);
         Crash.Note("shot: saved " + dev.Shot);

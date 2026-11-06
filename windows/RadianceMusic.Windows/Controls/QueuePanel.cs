@@ -64,6 +64,7 @@ internal sealed class QueuePanel : Grid
         set
         {
             if (value == HasLyrics) return;
+            if (Program.Dev.Shot != null) Crash.Note($"side panel: Lyrics tab {(value ? "back" : "gone")}");
             var tab = SideTabs.Tab(Tab, value);
             if (value) tabs.Items.Add(lyricsTab);
             else tabs.Items.Remove(lyricsTab);

@@ -164,6 +164,9 @@ public sealed partial class MainWindow : Window
         Side.IsPaneOpen = true;
     }
 
+    /// <summary>For the screenshots' log: the panel's open state, mode and tabs.</summary>
+    public string SideState => $"open {Side.IsPaneOpen}, {Side.DisplayMode}, tab {side.Tab}, lyrics tab {side.HasLyrics}, page {Pages.Content?.GetType().Name}";
+
     /// <summary>The side panel open on `tab` (not toggled: the screenshots' --side).</summary>
     public void OpenSide(string tab)
     {
