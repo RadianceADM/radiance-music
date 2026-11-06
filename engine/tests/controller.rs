@@ -1448,8 +1448,10 @@ fn storage_counts_and_moves_the_songs() {
     let mut st = radiance_engine::settings::load();
     st.music_dir = None;
     radiance_engine::settings::save(&st);
-    radiance_engine::library::set_music_dir(None);
+    radiance_engine::library::set_music_dir(Some(from.clone())); // (the tests' own music folder again)
     let _ = std::fs::remove_dir_all(to.parent().unwrap());
+    // (saved files are liked songs to the other tests: none left behind)
+    let _ = std::fs::remove_file(from.join("Storage Song.opus"));
     c.quit();
 }
 
