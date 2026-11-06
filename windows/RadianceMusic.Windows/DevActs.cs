@@ -42,6 +42,15 @@ internal static class DevActs
             "mixer-open" => window.Bar?.OpenMixer() == true,
             "splitting" => window.Content?.XamlRoot is { } sx && Do(() => _ = Dialogs.SplittingDialog.Open(App.Hub, sx)),
             "part" => arg.Split(':') is [var name, var g] && double.TryParse(g, System.Globalization.CultureInfo.InvariantCulture, out var gain) && Do(() => App.Hub.Engine.SetPart(name, gain)),
+            // stage 4a: the Settings page's sections, the app's own pop-ups, a Storage move's confirm
+            "settings" => int.TryParse(arg, out var sect) && Do(() => { window.Show("settings"); if (window.Page is Pages.SettingsPage sp) sp.Section = sect; }),
+            "guide" => window.Content?.XamlRoot is { } gx && Do(() => _ = Dialogs.GuideDialog.Show(App.Hub, gx)),
+            "whats-new" => window.Content?.XamlRoot is { } nx && Do(() => _ = Dialogs.WhatsNewDialog.Show(nx)),
+            "update" => window.Content?.XamlRoot is { } ux && Do(() => _ = Dialogs.UpdateDialog.Show(App.Hub, ux)),
+            "report" => window.Content?.XamlRoot is { } rx && Do(() => _ = Dialogs.ReportDialog.Show(App.Hub, rx)),
+            "rating" => window.Content?.XamlRoot is { } fx && Do(() => _ = Dialogs.RatingDialog.Show(App.Hub, fx, false)),
+            "storage-move" => window.Page is Pages.SettingsPage mp && Do(() => _ = mp.ConfirmMove(App.Hub.Engine.Storage().Folder, arg)),
+            "suggest" => window.Page is Pages.SearchPage spg && Do(() => { spg.FocusBox(); App.Hub.Engine.Suggest(arg); }),
             _ => false,
         };
         Crash.Note($"act: {act}: {(done ? "done" : "not found")}");

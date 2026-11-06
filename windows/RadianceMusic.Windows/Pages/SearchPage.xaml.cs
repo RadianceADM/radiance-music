@@ -23,10 +23,26 @@ public sealed partial class SearchPage : Page
     {
         if (hub != null || e.Parameter is not EngineHub h) return;
         hub = h;
-        debounce = new Debounce(Debounce.SearchWait, q => hub.Engine.Search(q), new UiDelay());
+        debounce = new Debounce(Debounce.SearchWait, q =>
+        {
+            hub.Engine.Search(q);
+            hub.Engine.Suggest(q); // (the same 300 ms: suggestions with the results)
+        }, new UiDelay());
         hub.Change += kind =>
         {
             if (kind is ChangeKind.Results or ChangeKind.Online or ChangeKind.Liked) Render();
+            if (kind == ChangeKind.Suggestions) ShowSuggestions();
+        };
+        // the box's own list, Windows' way (the Linux app's chips): your artists before you type
+        Box.UpdateTextOnSelect = false;
+        Box.GotFocus += (_, _) =>
+        {
+            if (Box.Text.Trim().Length == 0) hub.Engine.Suggest("");
+        };
+        Box.SuggestionChosen += (_, e) =>
+        {
+            if (e.SelectedItem is not string chosen) return;
+            Search(chosen.StartsWith(Mine) ? chosen[Mine.Length..] : chosen);
         };
         Tiles.ItemsSource = Ffi.BrowseTiles().Select(Tile).ToList();
         Render();
@@ -40,6 +56,15 @@ public sealed partial class SearchPage : Page
     }
 
     public void FocusBox() => Box.Focus(FocusState.Programmatic);
+
+    /// <summary>A suggestion from your liked songs is marked so (a heart before it).</summary>
+    private const string Mine = "\u2665  ";
+
+    private void ShowSuggestions()
+    {
+        if (hub == null) return;
+        Box.ItemsSource = hub.Engine.Suggestions().Select(c => c.Mine ? Mine + c.Text : c.Text).ToList();
+    }
 
     private Button Tile(BrowseTile t)
     {

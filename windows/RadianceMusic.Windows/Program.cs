@@ -80,6 +80,10 @@ public sealed class Dev
     public double TrayAt { get; private set; }
     /// <summary>--no-beat: Now Playing's background flows without following the beat (to measure the beat's cost).</summary>
     public bool NoBeat { get; private set; }
+    /// <summary>--offline: the app takes it there's no internet (the Offline sign's screenshots).</summary>
+    public bool Offline { get; private set; }
+    /// <summary>--update-shot out|downloading|ready|failed: the update pop-up at that step (screenshots).</summary>
+    public string? UpdateShot { get; private set; }
     public bool Hidden => (Shot != null || Behind) && !Front;
     /// <summary>--splash-at 1.2,3.3: the start's sunrise in a --shot run too, drawn to FILE-splash-S.png at those seconds.</summary>
     public List<double> SplashAt { get; } = new();
@@ -105,6 +109,8 @@ public sealed class Dev
                 case "--minimize-at": d.MinimizeAt = double.TryParse(Next(), System.Globalization.CultureInfo.InvariantCulture, out var m) ? m : 0; break;
                 case "--tray-at": d.TrayAt = double.TryParse(Next(), System.Globalization.CultureInfo.InvariantCulture, out var tr) ? tr : 0; break;
                 case "--no-beat": d.NoBeat = true; break;
+                case "--offline": d.Offline = true; break;
+                case "--update-shot": d.UpdateShot = Next(); break;
                 case "--setup-act": d.SetupAct = true; break;
                 case "--splash-at":
                     foreach (var s in Next().Split(','))

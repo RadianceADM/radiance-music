@@ -61,6 +61,12 @@ public sealed partial class MainWindow : Window
             if (e.InvokedItemContainer is NavigationViewItem { Tag: "splitting" }) { var opened = Dialogs.SplittingDialog.Open(hub, Content.XamlRoot); }
         };
         hub.Change += OnChange;
+        {
+            var hw = Native.Native.HelpWords();
+            OfflineWord.Text = hw.Offline;
+            ToolTipService.SetToolTip(OfflinePill, hw.OfflineTip);
+            ShowOnline();
+        }
         // minimised or in the tray: nothing per frame (Now Playing's beat stops, as GTK's tick behind other apps)
         AppWindow.Changed += (_, _) => Look();
         VisibilityChanged += (_, _) => Look();
@@ -146,6 +152,7 @@ public sealed partial class MainWindow : Window
             "artists" => (typeof(LibraryPage), new PageArgs(hub, GroupKind.Artists)),
             "genres" => (typeof(LibraryPage), new PageArgs(hub, GroupKind.Genres)),
             "group" => (typeof(GroupPage), new PageArgs(hub, subject)),
+            "settings" => (typeof(SettingsPage), hub),
             _ when name.StartsWith("playlist:") && long.TryParse(name["playlist:".Length..], out var id) => (typeof(PlaylistPage), new PageArgs(hub, id)),
             _ => (typeof(HomePage), hub),
         };
@@ -179,6 +186,20 @@ public sealed partial class MainWindow : Window
         Nav.MenuItems.Add(new NavigationViewItem { Content = "New Playlist", Tag = "new-playlist", Icon = new FontIcon { Glyph = "\uE710" }, SelectsOnInvoked = false });
         foreach (var item in Nav.MenuItems.OfType<NavigationViewItem>())
             if ((string)item.Tag == page && !ReferenceEquals(Nav.SelectedItem, item)) Nav.SelectedItem = item;
+    }
+
+    /// <summary>The app's own note (a link copied, a code copied), in turn with the engine's.</summary>
+    internal void Say(string text)
+    {
+        toasts.Enqueue(text);
+        NextToast();
+    }
+
+    /// <summary>No internet: the Linux app's Offline pill, its tooltip saying what still works.</summary>
+    private void ShowOnline()
+    {
+        var offline = !hub.Engine.Online();
+        OfflinePill.Visibility = offline ? Visibility.Visible : Visibility.Collapsed;
     }
 
     /// <summary>The engine's notes ("Liked “X”", "Added to “Y”"), one at a time, 4 s each.</summary>
@@ -263,12 +284,14 @@ public sealed partial class MainWindow : Window
 
     private void OnNav(NavigationView sender, NavigationViewSelectionChangedEventArgs e)
     {
-        if (e.SelectedItem is NavigationViewItem { Tag: string name } && (name != page || what != null)) Show(name);
+        if (e.IsSettingsSelected) Show("settings");
+        else if (e.SelectedItem is NavigationViewItem { Tag: string name } && (name != page || what != null)) Show(name);
     }
 
     private void OnChange(ChangeKind what)
     {
         if (what == ChangeKind.Playlists) RenderPlaylists();
+        if (what == ChangeKind.Online) ShowOnline();
         if (what == ChangeKind.Toast)
         {
             while (hub.Engine.Toast() is { } t) toasts.Enqueue(t);

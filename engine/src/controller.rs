@@ -1473,7 +1473,9 @@ impl Engine {
                 v.update.current = crate::update::version_here();
             });
         }
-        if std::env::var_os("RADIANCE_SHOT").is_none() {
+        if let Ok(step) = std::env::var("RADIANCE_SHOT_UPDATE") {
+            self.shot_update(&step); // (the pop-up's screenshots, as the GTK app's RADIANCE_SHOT_UPDATE)
+        } else if std::env::var_os("RADIANCE_SHOT").is_none() {
             self.bg(|| std::thread::sleep(update_after()), |e, ()| e.look_for_updates(false));
         }
         self.publish_splits();
@@ -2985,6 +2987,30 @@ impl Engine {
                 Err(why) => e.set_update(|u| u.step = UpdateStep::Failed(format!("Couldn't update: {why}"))),
             },
         );
+    }
+
+    /// RADIANCE_SHOT_UPDATE=out|downloading|ready|failed: the pop-up at that step with a made-up beta
+    /// release (screenshots; nothing is fetched or put on).
+    fn shot_update(&self, step: &str) {
+        let r = crate::update::Release {
+            version: "0.8.0-beta.9".into(),
+            notes: "- **Settings**: Playing, Storage and Help\n- How to Use It and What's New\n- Report a Problem\n- Rate Radiance Music\n- (fifth)".into(),
+            page: "https://github.com/RadianceADM/radiance-music/releases/latest".into(),
+            url: "https://example.invalid/RadianceMusic-Beta-Setup.exe".into(),
+            size: 149_000_000,
+            sha256: String::new(),
+        };
+        let step = match step {
+            "downloading" => UpdateStep::Downloading(0.42),
+            "ready" => UpdateStep::Ready,
+            "failed" => UpdateStep::Failed("Couldn't update: couldn't reach GitHub (offline)".into()),
+            _ => UpdateStep::Out,
+        };
+        self.set_update(|u| {
+            u.step = step;
+            u.release = Some(r);
+            u.asks = true;
+        });
     }
 
     fn update_cancel(&self) {

@@ -62,6 +62,7 @@ public partial class App : Application
         Ffi.ListenForOthers(new Others(ui));
         // --setup-act: the first start's download acted out (screenshot checks of the sunrise's hold)
         if (Program.Dev.SetupAct) Environment.SetEnvironmentVariable("RADIANCE_SETUP_TEST", "act");
+        if (Program.Dev.UpdateShot is { } step) Environment.SetEnvironmentVariable("RADIANCE_SHOT_UPDATE", step);
         Hub = EngineHub.Start(ui);
         Trace("engine started");
         Window = new MainWindow(Hub);
@@ -101,6 +102,15 @@ public partial class App : Application
         Trace($"tray icon added: {tray.Added}; media keys: on");
         // ready: the engine runs on its own thread and the pages are built (the sun settles once it has shown)
         Window.Splash?.Ready();
+        // the app's own pop-ups (stage 4a): the update and the rating, each when the window is free
+        Hub.Change += kind =>
+        {
+            if (kind is ChangeKind.Update or ChangeKind.Rating) PopUps();
+        };
+        // --offline: no internet as far as the app knows (screenshots of the Offline sign)
+        if (Program.Dev.Offline) Hub.Engine.NetworkChanged(false);
+        // How to Use It, the first time (once the sunrise has gone; never in a developer run)
+        if (Program.Dev.Shot == null && !Program.Dev.Behind && !Hub.Engine.GuideSeen()) GuideWhenFree();
         // splitting getting ready at the first start: the sunrise holds, saying how far along (stage 3)
         if (Window.Splash != null)
         {
@@ -198,10 +208,52 @@ public partial class App : Application
 
     private static readonly List<DispatcherQueueTimer> devTimers = new();
 
-    /// <summary>A developer run's step `seconds` after the start (0: none).</summary>
-    private static void Later(double seconds, Action step, string what)
+    private static DispatcherQueueTimer? popTimer;
+
+    /// <summary>
+    /// The update pop-up or the rating, when one wants to show by itself: only with the window seen, the sunrise
+    /// gone, the guide neither up nor unseen, and no other dialog open (UpdateGate, the GTK app's
+    /// pop_up_when_free); else it looks again in 30 s. One at a time, the update first.
+    /// </summary>
+    internal static void PopUps()
     {
-        if (seconds <= 0) return;
+        if (Window?.Content?.XamlRoot is not { } root) return;
+        var u = Hub.Engine.Update();
+        var wantsUpdate = u.Asks && u.Step is UpdateStepView.Out or UpdateStepView.Ready or UpdateStepView.Failed && !Dialogs.UpdateDialog.Up;
+        var wantsRating = Hub.Engine.Rating().Due && !Dialogs.RatingDialog.Up;
+        if (!wantsUpdate && !wantsRating) return;
+        var dialogOpen = Dialogs.UpdateDialog.Up || Dialogs.RatingDialog.Up || Microsoft.UI.Xaml.Media.VisualTreeHelper.GetOpenPopupsForXamlRoot(root).Any(p => p.Child is ContentDialog);
+        var sunrise = Window.Splash is { Finished: false };
+        // (a developer run's data may never have seen the guide: it counts as seen there)
+        var seen = Hub.Engine.GuideSeen() || Program.Dev.Shot != null || Program.Dev.Behind;
+        if (!UpdateGate.MayShow(Window.Seen, sunrise, Dialogs.GuideDialog.Up, seen, dialogOpen))
+        {
+            popTimer ??= Later(UpdateGate.RetrySeconds, () => { popTimer = null; PopUps(); }, "looked again for a free moment");
+            return;
+        }
+        if (wantsUpdate) _ = Dialogs.UpdateDialog.Show(Hub, root);
+        else _ = Dialogs.RatingDialog.Show(Hub, root, true);
+    }
+
+    /// <summary>How to Use It once the sunrise has gone (and the setup's hold), the first time.</summary>
+    private static void GuideWhenFree()
+    {
+        var timer = DispatcherQueue.GetForCurrentThread().CreateTimer();
+        devTimers.Add(timer);
+        timer.Interval = TimeSpan.FromMilliseconds(500);
+        timer.Tick += (_, _) =>
+        {
+            if (Window is null || Window.Splash is { Finished: false } || Window.Content?.XamlRoot is not { } root) return;
+            timer.Stop();
+            _ = Dialogs.GuideDialog.Show(Hub, root);
+        };
+        timer.Start();
+    }
+
+    /// <summary>A developer run's step `seconds` after the start (0: none).</summary>
+    private static DispatcherQueueTimer? Later(double seconds, Action step, string what)
+    {
+        if (seconds <= 0) return null;
         var timer = DispatcherQueue.GetForCurrentThread().CreateTimer();
         devTimers.Add(timer); // (kept: a timer nothing holds is collected and never fires)
         timer.Interval = TimeSpan.FromSeconds(seconds);
@@ -212,6 +264,7 @@ public partial class App : Application
             Trace($"dev: {what}");
         };
         timer.Start();
+        return timer;
     }
 
     /// <summary>Developer runs (--shot, --play-test): each step of the start in the crash note.</summary>

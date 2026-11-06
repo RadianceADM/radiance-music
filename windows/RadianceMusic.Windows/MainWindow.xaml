@@ -19,9 +19,17 @@
                 <TextBlock Text="Radiance Music" Style="{StaticResource CaptionTextBlockStyle}" VerticalAlignment="Center" />
                 <TextBlock Text="Beta" Style="{StaticResource CaptionTextBlockStyle}" VerticalAlignment="Center"
                            Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                <!-- no internet: the Linux app's Offline pill and its tooltip (stage 4a) -->
+                <Border x:Name="OfflinePill" CornerRadius="10" Padding="8,2,10,2" VerticalAlignment="Center" Visibility="Collapsed"
+                        Background="{ThemeResource SubtleFillColorSecondaryBrush}">
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                        <FontIcon Glyph="&#xF384;" FontSize="12" />
+                        <TextBlock x:Name="OfflineWord" Style="{StaticResource CaptionTextBlockStyle}" VerticalAlignment="Center" />
+                    </StackPanel>
+                </Border>
             </StackPanel>
         </Grid>
-        <NavigationView x:Name="Nav" Grid.Row="1" IsSettingsVisible="False" IsBackButtonVisible="Collapsed"
+        <NavigationView x:Name="Nav" Grid.Row="1" IsSettingsVisible="True" IsBackButtonVisible="Collapsed"
                         PaneDisplayMode="Auto" OpenPaneLength="240" IsTitleBarAutoPaddingEnabled="False"
                         SelectionChanged="OnNav">
             <NavigationView.MenuItems>

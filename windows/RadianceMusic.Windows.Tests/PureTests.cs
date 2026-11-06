@@ -487,3 +487,23 @@ public class BeatFollowerTests
         Assert.Equal(0f, BeatFollower.Sample(level, 10, 0.05, 9.0)); // past its end
     }
 }
+
+/// <summary>The app's own pop-ups (the update, the rating) wait for a free moment, as the GTK app's
+/// pop_up_when_free: never over the sunrise, the first-start guide, or another dialog; never hidden.</summary>
+public class UpdateGateTests
+{
+    [Fact]
+    public void ItShowsWhenAllIsFree() => Assert.True(UpdateGate.MayShow(windowSeen: true, sunriseUp: false, guideUp: false, guideSeen: true, dialogOpen: false));
+
+    [Fact]
+    public void NeverOverTheSunriseTheGuideOrADialog()
+    {
+        Assert.False(UpdateGate.MayShow(true, sunriseUp: true, false, true, false));
+        Assert.False(UpdateGate.MayShow(true, false, guideUp: true, true, false));
+        Assert.False(UpdateGate.MayShow(true, false, false, guideSeen: false, false));
+        Assert.False(UpdateGate.MayShow(true, false, false, true, dialogOpen: true));
+    }
+
+    [Fact]
+    public void ItWaitsWhileTheWindowIsHidden() => Assert.False(UpdateGate.MayShow(windowSeen: false, false, false, true, false));
+}
