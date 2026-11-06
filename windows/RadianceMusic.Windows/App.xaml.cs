@@ -67,7 +67,11 @@ public partial class App : Application
         keys = new MediaKeys(Hub, WinRT.Interop.WindowNative.GetWindowHandle(Window));
         Trace($"tray icon added: {tray.Added}; media keys: on");
         if (Program.Dev.Shot != null) _ = Shot.TakeAsync(Window, Program.Dev);
-        if (Program.Dev.PlayTest && Hub.Engine.Home().Recent is { Length: > 0 } recent) Hub.Engine.PlayFrom(ListKind.Recent, 0, recent[0].Key);
+        if (Program.Dev.PlayTest && Hub.Engine.Home().Recent is { Length: > 0 } recent)
+        {
+            var i = Math.Min(Program.Dev.PlayIndex, recent.Length - 1);
+            Hub.Engine.PlayFrom(ListKind.Recent, (uint)i, recent[i].Key);
+        }
     }
 
     /// <summary>Developer runs (--shot, --play-test): each step of the start in the crash note.</summary>

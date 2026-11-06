@@ -9,7 +9,7 @@ namespace RadianceMusic;
 ///   RadianceMusicBeta.exe --self-check FILE   the self-check, no window (over SSH on ribs03)
 ///   RadianceMusicBeta.exe --probe-video VIDEO FILE   a video played the app's way, no window: the report
 ///   RadianceMusicBeta.exe [developer switches] the app (Dev: --shot, --page, --size, --search, --wait,
-///                                                   --play-test, --side TAB, --video-probe VIDEO)
+///                                                   --play-test, --play-recent N, --side TAB, --video-probe VIDEO)
 /// </summary>
 public static class Program
 {
@@ -58,6 +58,8 @@ public sealed class Dev
     public double Again { get; private set; }
     /// <summary>--play-test: plays the first of Home's recent songs after start.</summary>
     public bool PlayTest { get; private set; }
+    /// <summary>--play-recent N: as --play-test, Home's Nth recent song (0 first).</summary>
+    public int PlayIndex { get; private set; }
     /// <summary>--side queue|lyrics: the side panel open on that tab.</summary>
     public string? Side { get; private set; }
     /// <summary>--video-probe VIDEO: only VIDEO, playing in a window of its own (VideoProbeWindow).</summary>
@@ -76,6 +78,7 @@ public sealed class Dev
                 case "--search": d.Search = Next(); break;
                 case "--wait": d.Wait = double.TryParse(Next(), System.Globalization.CultureInfo.InvariantCulture, out var w) ? w : 8; break;
                 case "--play-test": d.PlayTest = true; break;
+                case "--play-recent": d.PlayTest = true; d.PlayIndex = int.TryParse(Next(), out var n) ? Math.Max(0, n) : 0; break;
                 case "--video-probe": d.VideoProbe = Next(); break;
                 case "--side": d.Side = Next(); break;
                 case "--again": d.Again = double.TryParse(Next(), System.Globalization.CultureInfo.InvariantCulture, out var a) ? a : 0; break;
