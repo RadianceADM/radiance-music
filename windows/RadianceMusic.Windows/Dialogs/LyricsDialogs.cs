@@ -54,7 +54,12 @@ internal static class LyricsDialogs
         ToolTipService.SetToolTip(tap, W.TapTip);
 
         string Clock(double? at) => at is { } a ? TimeSpan.FromSeconds(a).ToString(a >= 3600 ? @"h\:mm\:ss\.f" : @"m\:ss\.f") : "—";
-        double PlayingAt() => hub.Engine.Now().At;
+        // (where the song is now, counted on from the engine's last reading as the lyrics are: #61 M5)
+        double PlayingAt()
+        {
+            var n = hub.Engine.Now();
+            return LyricClock.At(n.At, n.Since, Ffi.ClockMs(), n.Playing);
+        }
         void Choose(int i)
         {
             chosen = i;

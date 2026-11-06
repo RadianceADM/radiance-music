@@ -62,6 +62,13 @@ public partial class App : Application
         Ffi.ListenForOthers(new Others(ui));
         // --setup-act: the first start's download acted out (screenshot checks of the sunrise's hold)
         if (Program.Dev.SetupAct) Environment.SetEnvironmentVariable("RADIANCE_SETUP_TEST", "act");
+        // developer runs split nothing by themselves and download no splitter onto the test computer (#61 M7;
+        // a run that wants either sets the variable itself)
+        if (Program.Dev.Shot != null || Program.Dev.PlayTest || Program.Dev.Behind)
+        {
+            Environment.SetEnvironmentVariable("RADIANCE_AUTO_SPLIT_S", Environment.GetEnvironmentVariable("RADIANCE_AUTO_SPLIT_S") ?? "off");
+            Environment.SetEnvironmentVariable("RADIANCE_SETUP", Environment.GetEnvironmentVariable("RADIANCE_SETUP") ?? "off");
+        }
         if (Program.Dev.UpdateShot is { } step) Environment.SetEnvironmentVariable("RADIANCE_SHOT_UPDATE", step);
         Hub = EngineHub.Start(ui);
         Trace("engine started");

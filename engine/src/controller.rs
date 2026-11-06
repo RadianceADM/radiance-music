@@ -1460,8 +1460,9 @@ impl Engine {
         let unsaved: Vec<Track> = self.liked.borrow().iter().filter(|t| t.file.is_none() && crate::library::saves(t)).cloned().collect();
         unsaved.into_iter().for_each(|t| self.save_liked(t));
         // liked songs split by themselves, one after another, a while after the start (the GTK app's)
-        let after = std::env::var("RADIANCE_AUTO_SPLIT_S").ok().and_then(|s| s.parse().ok()).unwrap_or(split_queue::AUTO_AFTER_S);
-        self.bg(move || std::thread::sleep(Duration::from_secs(after)), |e, ()| e.auto_split_liked());
+        if let Some(after) = split_queue::auto_after(std::env::var("RADIANCE_AUTO_SPLIT_S").ok().as_deref()) {
+            self.bg(move || std::thread::sleep(Duration::from_secs(after)), |e, ()| e.auto_split_liked());
+        }
         self.get_splitter_ready();
         // a look for updates a little after the start (the GTK app's 8 s), quietly
         *self.install.borrow_mut() = self.shared.sources.install();
@@ -2402,6 +2403,7 @@ impl Engine {
         } else {
             let _ = std::fs::remove_file(&flag);
         }
+        self.toast((if on { words::SPLITTING_PAUSED } else { words::SPLITTING_RESUMED }).to_string());
         self.publish_splits();
         if !on {
             self.run_splits();
@@ -2589,6 +2591,10 @@ impl Engine {
         // RADIANCE_SETUP_TEST=act: the download acted out for screenshot checks (even with a splitter here)
         if acted_setup() {
             self.set_splitter_up();
+            return;
+        }
+        // RADIANCE_SETUP=off: the beta's developer runs download nothing onto the test computer (#61 M7)
+        if std::env::var("RADIANCE_SETUP").as_deref() == Ok("off") {
             return;
         }
         {
@@ -3124,9 +3130,8 @@ impl Engine {
             return;
         };
         let player = self.player.borrow();
-        if player.as_ref().is_some_and(|p| p.hears_parts()) {
-            let two = player.as_ref().is_some_and(|p| p.two_parts());
-            *self.quality.borrow_mut() = quality::text(Heard::Parts { two });
+        if let Some(heard) = player.as_ref().and_then(|p| p.heard_parts()) {
+            *self.quality.borrow_mut() = quality::text(heard);
             return;
         }
         let text = if player.as_ref().is_some_and(|p| p.is_video()) || (t.video && t.file.is_none()) {

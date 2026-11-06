@@ -1036,6 +1036,11 @@ impl Player {
         self.stems.borrow().as_ref().is_some_and(|m| !m.whole_on.get())
     }
 
+    /// What's heard when it's the parts: two (Music and Vocals) or four; both apps' quality words (#61 M1).
+    pub fn heard_parts(&self) -> Option<radiance_core::quality::Heard<'static>> {
+        self.hears_parts().then(|| radiance_core::quality::Heard::Parts { two: self.two_parts() })
+    }
+
     /// Cues the next song with its parts at hand (a crossfade into it).
     pub fn cue_parts(&self, whole: &str, parts: &[(String, String)], at: f64, gains: &std::collections::HashMap<String, f64>, rate: Option<u32>) {
         if self.mixing() || self.is_video() || self.switch.borrow().is_some() {

@@ -6,6 +6,16 @@ use crate::track::Track;
 /// Liked songs start splitting by themselves this long after the app opens.
 pub const AUTO_AFTER_S: u64 = 20;
 
+/// When liked songs start splitting by themselves, from RADIANCE_AUTO_SPLIT_S: its seconds, never
+/// for "off" (the beta's developer runs, #61 M7), else AUTO_AFTER_S.
+pub fn auto_after(setting: Option<&str>) -> Option<u64> {
+    match setting {
+        Some("off") => None,
+        Some(s) => Some(s.parse().unwrap_or(AUTO_AFTER_S)),
+        None => Some(AUTO_AFTER_S),
+    }
+}
+
 /// The songs waiting to be split, in turn, and the one being split now.
 #[derive(Clone, Debug, Default)]
 pub struct SplitQueue {
@@ -120,5 +130,14 @@ mod tests {
         let got = auto_list(&[saved.clone(), video, stream, done], |t| t.id == "done");
         assert_eq!(got.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(), ["saved"]);
         assert_eq!(AUTO_AFTER_S, 20);
+    }
+
+    /// #61 M7: RADIANCE_AUTO_SPLIT_S says when (seconds) or "off" (the beta's developer runs).
+    #[test]
+    fn auto_split_can_be_put_off_or_turned_off() {
+        assert_eq!(auto_after(None), Some(AUTO_AFTER_S));
+        assert_eq!(auto_after(Some("0")), Some(0));
+        assert_eq!(auto_after(Some("off")), None);
+        assert_eq!(auto_after(Some("soon")), Some(AUTO_AFTER_S));
     }
 }

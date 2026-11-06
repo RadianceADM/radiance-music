@@ -3119,7 +3119,7 @@ impl Ui {
         if let Some(a) = self.window.lookup_action("split-pause").and_downcast::<gio::SimpleAction>() {
             a.set_state(&on.to_variant());
         }
-        self.toast(if on { "Splitting paused: the song being split finishes, the rest wait" } else { "Splitting resumed" });
+        self.toast(if on { radiance_core::words::SPLITTING_PAUSED } else { radiance_core::words::SPLITTING_RESUMED });
         self.update_voice_status();
         if !on {
             self.run_splits();
@@ -5092,8 +5092,9 @@ impl Ui {
     /// What's really playing, once sound flows: "Lossless · FLAC · 24-bit · 96 kHz".
     fn update_quality(&self) {
         let Some(t) = self.current.borrow().clone() else { return };
-        if self.player.borrow().as_ref().is_some_and(|p| p.hears_parts()) {
-            self.set_quality(Some(&quality::text(Heard::Parts { two: false })), false);
+        let parts = self.player.borrow().as_ref().and_then(|p| p.heard_parts());
+        if let Some(heard) = parts {
+            self.set_quality(Some(&quality::text(heard)), false);
             if let Some(d) = self.player.borrow().as_ref().and_then(|p| p.duration()) {
                 self.seek.set_range(0.0, d.max(1.0));
                 self.len.set_label(&clock(d));

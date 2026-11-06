@@ -253,6 +253,8 @@ pub fn in_line(n: usize, byline: &str) -> String {
     format!("Number {n} in line · {byline}")
 }
 pub const PAUSE_SPLITTING: &str = "Pause Splitting";
+pub const SPLITTING_PAUSED: &str = "Splitting paused: the song being split finishes, the rest wait";
+pub const SPLITTING_RESUMED: &str = "Splitting resumed";
 pub const SPLITTING_DIALOG: &str = "Splitting…";
 pub const TRY_AGAIN: &str = "Try Again";
 

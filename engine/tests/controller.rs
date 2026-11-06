@@ -1288,6 +1288,25 @@ fn pausing_finishes_the_song_being_split_then_waits() {
     c.quit();
 }
 
+/// #61 M3: pausing and resuming splitting say so, as the Linux app's toasts do.
+#[test]
+fn pausing_and_resuming_splitting_say_so() {
+    let _l = setup();
+    let (c, _fake, _rx) = with_songs("split pause words", vec![song(Source::YouTube, "pw", "Pause words")]);
+    let said = std::cell::RefCell::new(Vec::<String>::new());
+    let heard = |want: &str| {
+        while let Some(t) = c.toast() {
+            said.borrow_mut().push(t);
+        }
+        said.borrow().iter().any(|t| t == want)
+    };
+    c.set_split_paused(true);
+    assert!(until(1.0, || heard("Splitting paused: the song being split finishes, the rest wait")), "{:?}", said.borrow());
+    c.set_split_paused(false);
+    assert!(until(1.0, || heard("Splitting resumed")), "{:?}", said.borrow());
+    c.quit();
+}
+
 /// Final review I5: while splitting is paused, the queue looks again once in a while, once, however
 /// many songs wait (each queued song started a sleeper thread of its own before).
 #[test]
@@ -1588,6 +1607,20 @@ fn first_start(fake: Arc<Fake>) -> Controller {
     c
 }
 
+/// #61 M7: a developer run (the beta's screenshots and measures) downloads no splitter at a first start.
+#[test]
+fn a_developer_run_downloads_no_splitter() {
+    let _l = setup();
+    std::env::set_var("RADIANCE_SETUP", "off");
+    let fake = Arc::new(Fake::default());
+    let c = first_start(fake.clone());
+    std::thread::sleep(Duration::from_millis(800));
+    std::env::remove_var("RADIANCE_SETUP");
+    assert_eq!(fake.installs.load(Ordering::SeqCst), 0, "it downloaded a splitter");
+    assert_eq!(c.setup(), SetupState::NotNeeded, "it held the start for a splitter");
+    c.quit();
+}
+
 /// Final review I3: a computer that can't split (too little disk, memory or cores) goes on without it,
 /// as GTK's get_splitter_ready: no hold, no endless retry.
 #[test]
@@ -1737,6 +1770,20 @@ fn a_split_song_plays_its_parts() {
     // all up, it's the song's own file that's heard (its quality); a part down, the Mixer's
     c.set_part("vocals", 0.5);
     assert!(until(2.0, || c.now().quality == "Mixer · its four parts"), "{}", c.now().quality);
+    c.quit();
+}
+
+/// #61 M1: a song split in two says so in the Mixer's quality words (the Linux app said "its four parts").
+#[test]
+fn a_song_split_in_two_says_music_and_vocals() {
+    let _l = setup();
+    let t = wav("parts-two", 4.0);
+    make_parts(&t, &["music", "vocals"], 4);
+    let (c, _f, _rx, list) = with_list("parts two", vec![t.clone()]);
+    c.play_from(list, 0, &t.key());
+    assert!(until(4.0, || c.now().playing && c.now().mix.plays_parts), "it didn't play its parts");
+    c.set_part("vocals", 0.5);
+    assert!(until(2.0, || c.now().quality == "Mixer · Music and Vocals"), "{}", c.now().quality);
     c.quit();
 }
 
@@ -1960,7 +2007,7 @@ fn a_playing_song_gets_its_pulse() {
     let (c, _f, rx, list) = with_list("pulse", vec![beat.clone(), next.clone()]);
     c.play_from(list.clone(), 0, &beat.key());
     assert!(until(9.0, || c.pulse().is_some_and(|(k, p)| k == beat.key() && p.fps > 0.0 && !p.level.is_empty())), "no pulse for the song");
-    assert!(wait_for(&rx, Change::Pulse, 0.1) || true);
+    assert!(wait_for(&rx, Change::Pulse, 1.0), "the pulse was never told (Now Playing waits for it)");
     c.play_from(list, 1, &next.key());
     assert!(until(2.0, || c.pulse().is_none_or(|(k, _)| k != beat.key())), "the last song's pulse stayed");
     c.quit();
