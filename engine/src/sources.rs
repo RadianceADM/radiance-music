@@ -51,6 +51,22 @@ pub trait Sources: Send + Sync + 'static {
     }
     /// Splitting set up on this computer at its first start (worker thread; minutes: the Windows pack's
     /// download), saying each step and how far along (0..1).
+    /// How this copy was installed, so how it updates (the tests: a beta in a folder of their own).
+    fn install(&self) -> crate::update::Install {
+        crate::update::Install::here()
+    }
+    /// The newest release for this install (worker thread; GitHub).
+    fn latest_release(&self, install: &crate::update::Install) -> Result<crate::update::Release, String> {
+        crate::update::latest(install)
+    }
+    /// Its file downloaded and checked (worker thread; minutes), saying how far along; stops when `stop` is set.
+    fn download_update(&self, r: &crate::update::Release, install: &crate::update::Install, stop: &std::sync::atomic::AtomicBool, progress: &mut dyn FnMut(u64, u64)) -> Result<std::path::PathBuf, String> {
+        crate::update::download(r, install, stop, |have, of| progress(have, of))
+    }
+    /// The update counted on Radiance Music's site (worker thread).
+    fn count_update(&self, r: &crate::update::Release, install: &crate::update::Install) {
+        crate::update::counted(r, install)
+    }
     /// What stops splitting being set up on this computer (cores, memory, free disk), in plain words; empty: it can.
     fn setup_problems(&self) -> Vec<String> {
         crate::setup::check().problems()

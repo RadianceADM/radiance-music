@@ -64,6 +64,46 @@ pub enum Change {
     Setup,
     /// The song's beat for Now Playing's background, worked out (or cleared for a new song) (#56).
     Pulse,
+    /// An update found, downloading, ready, or what happened (stage 4a).
+    Update,
+}
+
+/// Where an update is (the GTK app's pop-up steps, src/ui/update.rs).
+#[derive(Clone, Debug, PartialEq)]
+pub enum UpdateStep {
+    /// Nothing newer (or not looked yet).
+    None,
+    /// A newer version is out.
+    Out,
+    /// Downloading it, how far (0..1).
+    Downloading(f64),
+    /// Downloaded and checked: Restart to Update.
+    Ready,
+    /// Closing for the installer (the app quits now).
+    Restarting,
+    /// It didn't work: why ("Couldn't update: …").
+    Failed(String),
+}
+
+/// The update as the pop-up shows it.
+#[derive(Clone, Debug)]
+pub struct UpdateState {
+    pub step: UpdateStep,
+    pub release: Option<crate::update::Release>,
+    /// It asks now (not within a day of Remind Me Later, not the skipped version; or asked for by hand).
+    pub asks: bool,
+    /// This copy can't put it on itself: the release page instead (a copy run from elsewhere).
+    pub page_only: bool,
+    /// Windows' installer puts it on (Ready's words).
+    pub installer: bool,
+    /// The version on now.
+    pub current: String,
+}
+
+impl Default for UpdateState {
+    fn default() -> Self {
+        UpdateState { step: UpdateStep::None, release: None, asks: false, page_only: false, installer: false, current: crate::update::version_here() }
+    }
 }
 
 /// Liked Songs as a page: the songs shown (A to Z, the search applied), the words under it,
@@ -330,6 +370,7 @@ struct View {
     pulse: Option<(String, Arc<crate::beat::Pulse>)>,
     /// Songs split while the app runs, and how (their rows' marks; the files tell the rest).
     split_done: HashMap<String, SplitMark>,
+    update: UpdateState,
 }
 
 /// Between the app's threads and the engine's.
@@ -431,6 +472,7 @@ impl Controller {
                 setup: SetupState::default(),
                 pulse: None,
                 split_done: HashMap::new(),
+                update: UpdateState::default(),
             }),
             liked_q: Mutex::new(String::new()),
         });
@@ -923,6 +965,41 @@ impl Controller {
         self.post(move |e| e.set_split_paused(on));
     }
 
+    /// The update: found, downloading, ready (stage 4a).
+    pub fn update(&self) -> UpdateState {
+        self.shared.view(|v| v.update.clone())
+    }
+
+    /// Looks for a newer version (`asked`: Look for Updates, by hand: it says so either way).
+    pub fn look_for_updates(&self, asked: bool) {
+        self.post(move |e| e.look_for_updates(asked));
+    }
+
+    /// Update Now: downloads it while the music plays.
+    pub fn update_now(&self) {
+        self.post(|e| e.update_now());
+    }
+
+    /// Restart to Update: the installer puts it on once this app has closed (the app quits on Restarting).
+    pub fn update_restart(&self) {
+        self.post(|e| e.update_restart());
+    }
+
+    /// Remind Me Later: not asked again for a day.
+    pub fn update_later(&self) {
+        self.post(|e| e.update_later());
+    }
+
+    /// Skip This Version: never asked about it again.
+    pub fn update_skip(&self) {
+        self.post(|e| e.update_skip());
+    }
+
+    /// Cancel the Download.
+    pub fn update_cancel(&self) {
+        self.post(|e| e.update_cancel());
+    }
+
     /// Getting splitting ready at the first start (the beta's sunrise holds while it's Getting).
     pub fn setup(&self) -> SetupState {
         self.shared.view(|v| v.setup.clone())
@@ -1069,6 +1146,9 @@ struct Engine {
     split_q: RefCell<SplitQueue>,
     /// A paused queue's one look-again pending (final review I5: one per waiting song before).
     pause_looking: Cell<bool>,
+    /// How this copy updates (from Sources at the start), and the download's stop.
+    install: RefCell<crate::update::Install>,
+    update_stop: Arc<AtomicBool>,
     two_q: RefCell<VecDeque<(Track, bool)>>,
     splitting_two: RefCell<Option<Track>>,
     split_asked: RefCell<HashSet<String>>,
@@ -1142,6 +1222,8 @@ impl Engine {
             loading: Cell::new(false),
             split_q: RefCell::default(),
             pause_looking: Cell::new(false),
+            install: RefCell::new(crate::update::Install::Other),
+            update_stop: Arc::new(AtomicBool::new(false)),
             two_q: RefCell::default(),
             splitting_two: RefCell::default(),
             split_asked: RefCell::default(),
@@ -1205,6 +1287,19 @@ impl Engine {
         let after = std::env::var("RADIANCE_AUTO_SPLIT_S").ok().and_then(|s| s.parse().ok()).unwrap_or(split_queue::AUTO_AFTER_S);
         self.bg(move || std::thread::sleep(Duration::from_secs(after)), |e, ()| e.auto_split_liked());
         self.get_splitter_ready();
+        // a look for updates a little after the start (the GTK app's 8 s), quietly
+        *self.install.borrow_mut() = self.shared.sources.install();
+        {
+            let install = self.install.borrow().clone();
+            self.shared.view(|v| {
+                v.update.page_only = matches!(install, crate::update::Install::Other | crate::update::Install::Snap);
+                v.update.installer = matches!(install, crate::update::Install::Windows(_) | crate::update::Install::Beta(_));
+                v.update.current = crate::update::version_here();
+            });
+        }
+        if std::env::var_os("RADIANCE_SHOT").is_none() {
+            self.bg(|| std::thread::sleep(update_after()), |e, ()| e.look_for_updates(false));
+        }
         self.publish_splits();
         // five times a second: where the song is, the lines lit, and (every 5 s) where you are
         let me = Rc::downgrade(self);
@@ -2400,6 +2495,144 @@ impl Engine {
         );
     }
 
+    // ------------------------------------------------------------------ updates (stage 4a)
+
+    fn set_update(&self, f: impl FnOnce(&mut UpdateState)) {
+        self.shared.view(|v| f(&mut v.update));
+        self.shared.tell(Change::Update);
+    }
+
+    /// Looks for a newer version, as the GTK app's look_for_updates: old downloads cleared (not
+    /// when asked), the newest release read; offline, the last one found is offered again.
+    fn look_for_updates(self: &Rc<Self>, asked: bool) {
+        if matches!(self.shared.view(|v| v.update.step.clone()), UpdateStep::Downloading(_) | UpdateStep::Restarting) {
+            return;
+        }
+        let (sources, install) = (self.shared.sources.clone(), self.install.borrow().clone());
+        self.bg(
+            move || {
+                if !asked {
+                    crate::update::clean();
+                }
+                sources.latest_release(&install)
+            },
+            move |e, found: Result<crate::update::Release, String>| {
+                let here = crate::update::version_here();
+                match found {
+                    Ok(r) => {
+                        crate::update::looked(&r);
+                        if crate::update::newer(&r.version, &here) {
+                            e.offer(r, asked);
+                        } else {
+                            e.set_update(|u| {
+                                u.step = UpdateStep::None;
+                                u.release = None;
+                                u.asks = false;
+                            });
+                            if asked {
+                                e.toast(radiance_core::update_words::newest(&here));
+                            }
+                        }
+                    }
+                    Err(why) => {
+                        crate::log::note(&format!("looking for updates: {why}"));
+                        if asked {
+                            e.toast(radiance_core::update_words::couldnt_look(&why));
+                        } else if let Some(r) = crate::update::remembered().filter(|r| crate::update::newer(&r.version, &here)) {
+                            e.offer(r, false);
+                        }
+                    }
+                }
+            },
+        );
+    }
+
+    fn offer(&self, r: crate::update::Release, asked: bool) {
+        let ready = crate::update::ready(&r, &self.install.borrow());
+        let asks = asked || crate::update::asks(&r.version);
+        self.set_update(|u| {
+            u.step = if ready { UpdateStep::Ready } else { UpdateStep::Out };
+            u.release = Some(r);
+            u.asks = asks;
+        });
+    }
+
+    /// Update Now: downloads it on a worker (the music plays on), how far along as it goes.
+    fn update_now(self: &Rc<Self>) {
+        let Some(r) = self.shared.view(|v| v.update.release.clone()) else { return };
+        let install = self.install.borrow().clone();
+        if matches!(install, crate::update::Install::Other | crate::update::Install::Snap) {
+            return; // (the app opens the release's page)
+        }
+        self.update_stop.store(false, Ordering::SeqCst);
+        self.set_update(|u| {
+            u.step = UpdateStep::Downloading(0.0);
+            u.asks = true;
+        });
+        let (sources, shared, stop) = (self.shared.sources.clone(), self.shared.clone(), self.update_stop.clone());
+        self.bg(
+            move || {
+                let mut said = -1i64;
+                let mut progress = |have: u64, of: u64| {
+                    let done = if of > 0 { have as f64 / of as f64 } else { 0.0 };
+                    if (done * 100.0) as i64 != said {
+                        said = (done * 100.0) as i64;
+                        shared.view(|v| {
+                            if matches!(v.update.step, UpdateStep::Downloading(_)) {
+                                v.update.step = UpdateStep::Downloading(done);
+                            }
+                        });
+                        shared.tell(Change::Update);
+                    }
+                };
+                let got = sources.download_update(&r, &install, &stop, &mut progress);
+                if got.is_ok() {
+                    sources.count_update(&r, &install);
+                }
+                got
+            },
+            |e, got: Result<std::path::PathBuf, String>| match got {
+                Ok(_) => e.set_update(|u| u.step = UpdateStep::Ready),
+                Err(_) if e.update_stop.load(Ordering::SeqCst) => e.set_update(|u| u.step = UpdateStep::Out),
+                Err(why) => e.set_update(|u| u.step = UpdateStep::Failed(format!("Couldn't update: {why}"))),
+            },
+        );
+    }
+
+    fn update_cancel(&self) {
+        self.update_stop.store(true, Ordering::SeqCst);
+        self.set_update(|u| u.step = UpdateStep::Out);
+    }
+
+    fn update_later(&self) {
+        crate::update::remind_later();
+        self.set_update(|u| u.asks = false);
+    }
+
+    fn update_skip(&self) {
+        if let Some(r) = self.shared.view(|v| v.update.release.clone()) {
+            crate::update::skip(&r.version);
+        }
+        self.set_update(|u| u.asks = false);
+    }
+
+    /// Restart to Update: where you are saved, then the installer arranged for once this app has
+    /// closed (the app quits on Restarting); a download gone since is fetched again.
+    fn update_restart(self: &Rc<Self>) {
+        let Some(r) = self.shared.view(|v| v.update.release.clone()) else { return };
+        let install = self.install.borrow().clone();
+        let file = crate::update::file(&r, &install);
+        if !file.exists() {
+            return self.update_now();
+        }
+        self.set_update(|u| u.step = UpdateStep::Restarting);
+        self.save_session();
+        match crate::update::put_on(&install, &file) {
+            Ok(()) => crate::log::note(&format!("update: {} goes on once this app has closed", r.version)),
+            Err(why) => self.set_update(|u| u.step = UpdateStep::Failed(format!("Couldn't update: {why}"))),
+        }
+    }
+
     fn retry_setup(self: &Rc<Self>) {
         if matches!(self.shared.view(|v| v.setup.clone()), SetupState::Failed { .. } | SetupState::Offline) {
             self.set_splitter_up();
@@ -3100,6 +3333,11 @@ mod tests {
 /// RADIANCE_SPLIT_PAUSE_POLL_MS in the tests).
 fn pause_poll() -> Duration {
     std::env::var("RADIANCE_SPLIT_PAUSE_POLL_MS").ok().and_then(|v| v.parse().ok()).map(Duration::from_millis).unwrap_or(Duration::from_secs(30))
+}
+
+/// How long after the start updates are looked for (the GTK app's 8 s; RADIANCE_UPDATE_AFTER_MS: tests).
+fn update_after() -> Duration {
+    std::env::var("RADIANCE_UPDATE_AFTER_MS").ok().and_then(|v| v.parse().ok()).map(Duration::from_millis).unwrap_or(Duration::from_secs(8))
 }
 
 /// How long getting splitting ready waits before trying again (GTK's 30 s; RADIANCE_SETUP_RETRY_MS: the tests').

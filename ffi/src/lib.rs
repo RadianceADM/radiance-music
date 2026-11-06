@@ -36,6 +36,7 @@ pub enum ChangeKind {
     Setup,
     /// The song's beat for Now Playing's background (#56).
     Pulse,
+    Update,
 }
 
 impl From<Change> for ChangeKind {
@@ -57,6 +58,7 @@ impl From<Change> for ChangeKind {
             Change::Splits => ChangeKind::Splits,
             Change::Setup => ChangeKind::Setup,
             Change::Pulse => ChangeKind::Pulse,
+            Change::Update => ChangeKind::Update,
         }
     }
 }

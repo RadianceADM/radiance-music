@@ -48,6 +48,42 @@ pub enum Install {
     Snap,
     /// A build from source, or a copy somewhere else: updated where it came from.
     Other,
+    /// The Windows beta's per-user copy (RadianceMusic-Beta-Setup.exe): its folder, with
+    /// RadianceMusicBeta.exe and Uninstall.exe side by side (stage 4a, #45).
+    Beta(PathBuf),
+}
+
+/// The Windows beta's installer, a file of each computer release (the spec: the beta's pop-up
+/// offers only beta installers), labelled with its version when uploaded:
+/// `gh release upload vX 'RadianceMusic-Beta-Setup.exe#Radiance Music (beta) 0.8.0-beta.N'`.
+pub const BETA_ASSET: &str = "RadianceMusic-Beta-Setup.exe";
+pub const BETA_LABEL: &str = "Radiance Music (beta) ";
+
+/// The beta's version, once its app says it is the beta (`set_beta`): its update state, its
+/// installer and its version are then its own; the GTK app's process never sets it.
+static BETA: std::sync::RwLock<Option<String>> = std::sync::RwLock::new(None);
+
+/// This process is the Windows beta, at `version` (its ffi says so at its start).
+pub fn set_beta(version: &str) {
+    *BETA.write().unwrap() = Some(version.to_string());
+}
+
+fn beta() -> Option<String> {
+    BETA.read().unwrap().clone()
+}
+
+/// The version this app is: the beta's own, or this build's.
+pub fn version_here() -> String {
+    beta().unwrap_or_else(|| current().to_string())
+}
+
+/// The beta's install from where its exe is: its folder when the installer's Uninstall.exe is
+/// beside it, else a copy run from somewhere else.
+pub fn beta_install(exe: &Path) -> Install {
+    match exe.parent() {
+        Some(root) if root.join("Uninstall.exe").exists() => Install::Beta(root.to_path_buf()),
+        _ => Install::Other,
+    }
 }
 
 impl Install {
@@ -68,6 +104,9 @@ impl Install {
             return Install::Snap;
         }
         let Ok(exe) = std::env::current_exe() else { return Install::Other };
+        if beta().is_some() {
+            return beta_install(&exe);
+        }
         if cfg!(windows) {
             // <folder>\bin\radiance-music.exe, the installer's Uninstall.exe in <folder>
             if let Some(root) = exe.parent().and_then(|b| b.parent()) {
@@ -89,6 +128,7 @@ impl Install {
             Install::Windows(_) => Some("RadianceMusic-Setup.exe"),
             Install::Tarball => Some("RadianceMusic-linux-x86_64.tar.gz"),
             Install::Flatpak => Some("RadianceMusic.flatpak"),
+            Install::Beta(_) => Some(BETA_ASSET),
             Install::Snap | Install::Other => None,
         }
     }
@@ -96,7 +136,7 @@ impl Install {
     /// For the count of updates.
     fn platform(&self) -> &'static str {
         match self {
-            Install::Windows(_) => "windows",
+            Install::Windows(_) | Install::Beta(_) => "windows",
             Install::Tarball => "linux",
             Install::Flatpak => "flatpak",
             Install::Snap => "snap",
@@ -173,6 +213,9 @@ pub fn latest(install: &Install) -> Result<Release, String> {
 }
 
 fn release_from(j: &Value, install: &Install) -> Option<Release> {
+    if beta().is_some() {
+        return release_from_beta(j);
+    }
     let version = j["tag_name"].as_str()?.trim_start_matches('v').to_string();
     let asset = install.asset().and_then(|name| j["assets"].as_array()?.iter().find(|a| a["name"].as_str() == Some(name)));
     Some(Release {
@@ -185,10 +228,30 @@ fn release_from(j: &Value, install: &Install) -> Option<Release> {
     })
 }
 
-// ---- what it remembers (update.json beside settings.json) ----
+/// The beta's release: the computer release's beta installer, its version from its label;
+/// none without the installer or its label (nothing is offered then).
+fn release_from_beta(j: &Value) -> Option<Release> {
+    let asset = j["assets"].as_array()?.iter().find(|a| a["name"].as_str() == Some(BETA_ASSET))?;
+    let version = asset["label"].as_str()?.strip_prefix(BETA_LABEL)?.trim().to_string();
+    if version.is_empty() {
+        return None;
+    }
+    Some(Release {
+        version,
+        notes: j["body"].as_str().unwrap_or_default().to_string(),
+        page: j["html_url"].as_str().unwrap_or_default().to_string(),
+        url: asset["browser_download_url"].as_str().unwrap_or_default().to_string(),
+        size: asset["size"].as_u64().unwrap_or(0),
+        sha256: asset["digest"].as_str().and_then(|d| d.strip_prefix("sha256:")).unwrap_or_default().to_string(),
+    })
+}
+
+// ---- what it remembers (update.json beside settings.json; the beta's own update-beta.json:
+// the two apps share the folder, and the GTK app must never be offered the beta's installer) ----
 
 fn state_path() -> PathBuf {
-    glib::user_config_dir().join("radiance-music").join("update.json")
+    let name = if beta().is_some() { "update-beta.json" } else { "update.json" };
+    glib::user_config_dir().join("radiance-music").join(name)
 }
 
 fn load() -> Value {
@@ -208,6 +271,12 @@ fn save(v: &Value) {
 
 fn now() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
+}
+
+/// Forgets what the looks found and what was decided (Remind Me Later, Skip This Version): a
+/// fresh start for the tests (each starts from nothing).
+pub fn forget() {
+    let _ = fs::remove_file(state_path());
 }
 
 /// What the last look found (shown at once at the next start, before looking again).
@@ -269,10 +338,11 @@ pub fn file(r: &Release, install: &Install) -> PathBuf {
 pub fn clean() {
     let Ok(dir) = fs::read_dir(folder()) else { return };
     let newest = remembered().map(|r| r.version);
+    let asset = Install::here().asset().unwrap_or("download");
+    let here = version_here();
     for f in dir.flatten() {
         let name = f.file_name().to_string_lossy().to_string();
-        let version = name.split('-').next().unwrap_or_default();
-        if !newer(version, current()) || newest.as_deref().is_some_and(|n| newer(n, version)) {
+        if stale(&name, asset, &here, newest.as_deref()) {
             if f.path().is_dir() {
                 let _ = fs::remove_dir_all(f.path());
             } else {
@@ -280,6 +350,15 @@ pub fn clean() {
             }
         }
     }
+}
+
+/// A download that isn't needed any more: this app's own (its installer's name, or what's
+/// made from it), of the version on now or older, or older than the newest found. The other
+/// app's (the GTK app and the beta share the folder) is never touched.
+fn stale(name: &str, asset: &str, here: &str, newest: Option<&str>) -> bool {
+    let Some(at) = name.find(&format!("-{asset}")) else { return false };
+    let version = &name[..at];
+    !newer(version, here) || newest.is_some_and(|n| newer(n, version))
 }
 
 /// Already downloaded and checked (from an earlier "Update now").
@@ -405,7 +484,8 @@ pub const AFTER_UPDATE: &str = "RADIANCE_AFTER_UPDATE";
 /// (Window thread is fine: it only starts things.)
 pub fn put_on(install: &Install, file: &Path) -> Result<(), String> {
     match install {
-        Install::Windows(root) => windows_put_on(root, file, &version_of(file)),
+        Install::Windows(root) => windows_put_on(root, file, &version_of(file, "RadianceMusic-Setup.exe"), false),
+        Install::Beta(root) => windows_put_on(root, file, &version_of(file, BETA_ASSET), true),
         Install::Tarball => tarball_put_on(file),
         Install::Flatpak => flatpak_open_newest(),
         Install::Snap => Err("the Snap Store updates this copy by itself".into()),
@@ -417,14 +497,19 @@ pub fn put_on(install: &Install, file: &Path) -> Result<(), String> {
 /// folder: the splitter, yt-dlp; given 30 s, then stopped: an interrupted split
 /// runs again later) has closed; then the app again. PowerShell,
 /// which every Windows 10 and 11 has, waits and runs it, hidden.
-/// The version a download is of (its name starts with it).
-fn version_of(file: &Path) -> String {
+/// The version a download is of: its name is "{version}-{asset}" (a beta's version has its own
+/// hyphens: "0.8.0-beta.4-RadianceMusic-Beta-Setup.exe").
+fn version_of(file: &Path, asset: &str) -> String {
     let name = file.to_string_lossy();
-    name.rsplit(['\\', '/']).next().unwrap_or_default().split('-').next().unwrap_or_default().to_string()
+    let name = name.rsplit(['\\', '/']).next().unwrap_or_default();
+    match name.strip_suffix(&format!("-{asset}")) {
+        Some(v) => v.to_string(),
+        None => name.split('-').next().unwrap_or_default().to_string(),
+    }
 }
 
-fn windows_put_on(root: &Path, setup: &Path, version: &str) -> Result<(), String> {
-    let script = windows_script(std::process::id(), root, setup, version);
+fn windows_put_on(root: &Path, setup: &Path, version: &str, beta: bool) -> Result<(), String> {
+    let script = windows_script(std::process::id(), root, setup, version, beta);
     let mut cmd = std::process::Command::new("powershell.exe");
     cmd.args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden", "-Command", &script]);
     #[cfg(windows)]
@@ -435,10 +520,12 @@ fn windows_put_on(root: &Path, setup: &Path, version: &str) -> Result<(), String
     cmd.spawn().map(|_| ()).map_err(|e| format!("couldn't start the installer ({e})"))
 }
 
-fn windows_script(pid: u32, root: &Path, setup: &Path, version: &str) -> String {
+fn windows_script(pid: u32, root: &Path, setup: &Path, version: &str, beta: bool) -> String {
     let q = |p: &str| p.replace('\'', "''");
     let root = root.display().to_string();
-    let exe = format!("{root}\\bin\\radiance-music.exe");
+    // the beta: its exe in its folder, its own uninstall key (its folder is where it reinstalls:
+    // D:\Apps\Radiance Music (beta) stays there, never the installer's default on C:)
+    let (exe, key) = if beta { (format!("{root}\\RadianceMusicBeta.exe"), "RadianceMusicBeta") } else { (format!("{root}\\bin\\radiance-music.exe"), "RadianceMusic") };
     let log = setup.with_extension("log").display().to_string();
     // The installer starts straight (CreateProcess, not the shell: no "unknown publisher" check),
     // its /D= last and unquoted, spaces and all, in one argument string as is. It's done when its
@@ -451,7 +538,7 @@ fn windows_script(pid: u32, root: &Path, setup: &Path, version: &str) -> String 
          $t=0; while ((& $mine) -and $t -lt 60) {{ Start-Sleep -Milliseconds 500; $t++ }}; & $mine | Stop-Process -Force; Start-Sleep 1; \
          L 'installing'; $si = New-Object System.Diagnostics.ProcessStartInfo; $si.FileName = '{setup}'; $si.Arguments = '/S /D={root}'; $si.UseShellExecute = $false; \
          $p = [System.Diagnostics.Process]::Start($si); $p.WaitForExit(); L ('installer done: ' + $p.ExitCode); \
-         $k = 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\RadianceMusic'; $t=0; \
+         $k = 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{key}'; $t=0; \
          while (((Get-ItemProperty $k).DisplayVersion -ne '{version}') -and $t -lt 300) {{ Start-Sleep 1; $t++ }}; L ('installed: ' + (Get-ItemProperty $k).DisplayVersion); \
          Start-Process -FilePath '{exe}'; L 'opened the app'",
         log = q(&log),
@@ -459,6 +546,7 @@ fn windows_script(pid: u32, root: &Path, setup: &Path, version: &str) -> String 
         setup = q(&setup.display().to_string()),
         exe = q(&exe),
         version = q(version),
+        key = key,
     )
 }
 
@@ -675,6 +763,57 @@ pub fn probe(apply: bool) -> glib::ExitCode {
 mod tests {
     use super::*;
 
+    // ---- the Windows beta's updates (stage 4a, #45)
+
+    #[test]
+    fn version_of_reads_hyphenated_versions() {
+        assert_eq!(version_of(Path::new("C:/x/update/0.8.0-beta.4-RadianceMusic-Beta-Setup.exe"), BETA_ASSET), "0.8.0-beta.4");
+        assert_eq!(version_of(Path::new("/x/update/0.7.21-RadianceMusic-Setup.exe"), "RadianceMusic-Setup.exe"), "0.7.21");
+    }
+
+    #[test]
+    fn the_beta_install_is_found_beside_its_uninstaller() {
+        let dir = std::env::temp_dir().join(format!("rm-beta-install-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let exe = dir.join("RadianceMusicBeta.exe");
+        fs::write(&exe, b"").unwrap();
+        assert_eq!(beta_install(&exe), Install::Other, "no uninstaller: a copy run from elsewhere");
+        fs::write(dir.join("Uninstall.exe"), b"").unwrap();
+        assert_eq!(beta_install(&exe), Install::Beta(dir.clone()));
+        assert_eq!(Install::Beta(dir.clone()).asset(), Some(BETA_ASSET));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_beta_puts_its_update_where_it_runs() {
+        let script = windows_script(42, Path::new("D:\\Apps\\Radiance Music (beta)"), Path::new("C:\\u\\0.8.0-beta.4-RadianceMusic-Beta-Setup.exe"), "0.8.0-beta.4", true);
+        assert!(script.contains("$si.Arguments = '/S /D=D:\\Apps\\Radiance Music (beta)'"), "{script}");
+        assert!(script.contains("Uninstall\\RadianceMusicBeta'"), "its own uninstall key");
+        assert!(script.contains("Radiance Music (beta)\\RadianceMusicBeta.exe"), "it opens the beta again");
+        assert!(!script.contains("bin\\radiance-music.exe"));
+        let gtk = windows_script(42, Path::new("C:\\Radiance Music"), Path::new("C:\\u\\0.7.21-RadianceMusic-Setup.exe"), "0.7.21", false);
+        assert!(gtk.contains("Uninstall\\RadianceMusic'") && gtk.contains("bin\\radiance-music.exe"), "the GTK app's as before");
+    }
+
+    #[test]
+    fn a_release_without_the_beta_label_offers_nothing() {
+        let asset = |label: &str| serde_json::json!({ "name": BETA_ASSET, "label": label, "browser_download_url": "https://x/b.exe", "size": 149, "digest": "sha256:abc" });
+        let release = |assets: Vec<Value>| serde_json::json!({ "tag_name": "v0.7.21", "body": "- one", "html_url": "https://x/r", "assets": assets });
+        assert!(release_from_beta(&release(vec![])).is_none(), "no beta installer");
+        assert!(release_from_beta(&release(vec![asset("")])).is_none(), "no label");
+        let r = release_from_beta(&release(vec![asset("Radiance Music (beta) 0.8.0-beta.4")])).unwrap();
+        assert_eq!((r.version.as_str(), r.url.as_str(), r.size, r.sha256.as_str()), ("0.8.0-beta.4", "https://x/b.exe", 149, "abc"));
+    }
+
+    #[test]
+    fn each_app_cleans_only_its_own_downloads() {
+        // the beta (0.8.0-beta.3) never removes the GTK app's waiting installer, nor the GTK app the beta's
+        assert!(!stale("0.7.21-RadianceMusic-Setup.exe", BETA_ASSET, "0.8.0-beta.3", None));
+        assert!(stale("0.8.0-beta.3-RadianceMusic-Beta-Setup.exe", BETA_ASSET, "0.8.0-beta.3", None), "the one now on");
+        assert!(!stale("0.8.0-beta.4-RadianceMusic-Beta-Setup.exe", BETA_ASSET, "0.8.0-beta.3", Some("0.8.0-beta.4")));
+        assert!(!stale("0.8.0-beta.4-RadianceMusic-Beta-Setup.exe", "RadianceMusic-Setup.exe", "0.7.20", None));
+    }
+
     #[test]
     fn versions_compare_as_numbers() {
         assert!(newer("0.7.13", "0.7.12"));
@@ -719,7 +858,7 @@ mod tests {
     #[test]
     fn windows_runs_the_installer_quietly_into_the_same_folder_after_the_app_closes() {
         let root = PathBuf::from(r"C:\Users\Ana's PC\AppData\Local\Programs\Radiance Music");
-        let s = windows_script(4242, &root, Path::new(r"C:\cache\0.7.13-RadianceMusic-Setup.exe"), "0.7.13");
+        let s = windows_script(4242, &root, Path::new(r"C:\cache\0.7.13-RadianceMusic-Setup.exe"), "0.7.13", false);
         assert!(s.contains("Wait-Process -Id 4242 -Timeout 60"));
         assert!(s.contains(r"$log='C:\cache\0.7.13-RadianceMusic-Setup.log'"));
         // NSIS: /D= last and unquoted (spaces and all); a ' doubled inside PowerShell's '...'
@@ -728,7 +867,7 @@ mod tests {
         assert!(!s.contains("Start-Process -FilePath 'C:\\cache"));
         // done when its uninstall entry says the new version
         assert!(s.contains("DisplayVersion -ne '0.7.13'"));
-        assert_eq!(version_of(Path::new(r"C:\cache\0.7.13-RadianceMusic-Setup.exe")), "0.7.13");
+        assert_eq!(version_of(Path::new(r"C:\cache\0.7.13-RadianceMusic-Setup.exe"), "RadianceMusic-Setup.exe"), "0.7.13");
         assert!(s.contains(r"Start-Process -FilePath 'C:\Users\Ana''s PC\AppData\Local\Programs\Radiance Music\bin\radiance-music.exe'; L 'opened the app'"));
         assert!(!s.contains('"'));
     }

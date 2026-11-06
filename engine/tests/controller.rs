@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex, Once};
 use std::time::{Duration, Instant};
 
 use radiance_core::library::GroupKind;
-use radiance_engine::controller::{Change, Controller, ListRef, Listener, SetupState, SplitMark};
+use radiance_engine::controller::{Change, Controller, ListRef, Listener, SetupState, SplitMark, UpdateStep};
 use radiance_engine::lyrics::Lyrics;
 use radiance_engine::sources::Sources;
 use radiance_engine::track::{Source, Track};
@@ -76,6 +76,9 @@ pub struct Fake {
     pub installs: AtomicUsize,
     /// How often the split queue was drawn (publish_splits asks can_split each time).
     pub can_split_calls: AtomicUsize,
+    /// Updates (stage 4a): the newest release found, and a download that waits until it's stopped.
+    pub release: Mutex<Option<radiance_engine::update::Release>>,
+    pub download_waits: std::sync::atomic::AtomicBool,
 }
 
 fn kind_name(k: Kind) -> &'static str {
@@ -139,6 +142,24 @@ impl Sources for Fake {
     fn can_split_two(&self) -> bool {
         true
     }
+    fn install(&self) -> radiance_engine::update::Install {
+        radiance_engine::update::Install::Beta(std::env::temp_dir().join("rm-fake-beta"))
+    }
+    fn latest_release(&self, _: &radiance_engine::update::Install) -> Result<radiance_engine::update::Release, String> {
+        self.release.lock().unwrap().clone().ok_or_else(|| "couldn't reach GitHub (offline)".into())
+    }
+    fn download_update(&self, r: &radiance_engine::update::Release, _: &radiance_engine::update::Install, stop: &std::sync::atomic::AtomicBool, progress: &mut dyn FnMut(u64, u64)) -> Result<std::path::PathBuf, String> {
+        progress(r.size / 2, r.size);
+        while self.download_waits.load(Ordering::SeqCst) {
+            if stop.load(Ordering::SeqCst) {
+                return Err("stopped".into());
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        progress(r.size, r.size);
+        Ok(std::env::temp_dir().join(format!("{}-{}", r.version, radiance_engine::update::BETA_ASSET)))
+    }
+    fn count_update(&self, _: &radiance_engine::update::Release, _: &radiance_engine::update::Install) {}
     fn setup_problems(&self) -> Vec<String> {
         self.setup_problems.lock().unwrap().clone()
     }
@@ -1242,6 +1263,72 @@ fn a_paused_queue_looks_again_once_however_many_wait() {
     assert!(looks <= 14, "{looks} looks in a second at 100 ms: one sleeper per waiting song");
     c.set_split_paused(false);
     std::env::remove_var("RADIANCE_SPLIT_PAUSE_POLL_MS");
+    c.quit();
+}
+
+// ------------------------------------------------------------------ updates (stage 4a)
+
+fn newer_release() -> radiance_engine::update::Release {
+    radiance_engine::update::Release { version: "9.0.0-beta.1".into(), notes: "- **One** thing\n- two".into(), page: "https://x/r".into(), url: "https://x/b.exe".into(), size: 150_000_000, sha256: "abc".into() }
+}
+
+/// An update found is offered (asked about); Remind Me Later waits a day and Skip This Version
+/// never asks about that version again (the pop-up's own moment is the app's: Task 8).
+#[test]
+fn the_update_waits_for_a_free_moment() {
+    let _l = setup();
+    radiance_engine::update::forget();
+    let (c, fake, _rx) = with_songs("update offered", vec![]);
+    *fake.release.lock().unwrap() = Some(newer_release());
+    c.look_for_updates(false);
+    assert!(until(2.0, || c.update().step == UpdateStep::Out), "{:?}", c.update().step);
+    assert!(c.update().asks);
+    assert_eq!(c.update().release.unwrap().version, "9.0.0-beta.1");
+    c.update_later();
+    assert!(until(1.0, || !c.update().asks));
+    c.look_for_updates(false);
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(!c.update().asks, "asked again within the day");
+    radiance_engine::update::forget();
+    c.update_skip();
+    c.look_for_updates(false);
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(!c.update().asks, "the skipped version asked again");
+    c.look_for_updates(true);
+    assert!(until(1.0, || c.update().asks), "asked for by hand, it shows");
+    radiance_engine::update::forget();
+    c.quit();
+}
+
+#[test]
+fn update_now_downloads_then_ready() {
+    let _l = setup();
+    radiance_engine::update::forget();
+    let (c, fake, _rx) = with_songs("update download", vec![]);
+    *fake.release.lock().unwrap() = Some(newer_release());
+    c.look_for_updates(true);
+    assert!(until(2.0, || c.update().step == UpdateStep::Out));
+    c.update_now();
+    assert!(until(2.0, || c.update().step == UpdateStep::Ready), "{:?}", c.update().step);
+    radiance_engine::update::forget();
+    c.quit();
+}
+
+#[test]
+fn update_cancel_goes_back_to_out() {
+    let _l = setup();
+    radiance_engine::update::forget();
+    let (c, fake, _rx) = with_songs("update cancel", vec![]);
+    *fake.release.lock().unwrap() = Some(newer_release());
+    fake.download_waits.store(true, Ordering::SeqCst);
+    c.look_for_updates(true);
+    assert!(until(2.0, || c.update().step == UpdateStep::Out));
+    c.update_now();
+    assert!(until(2.0, || matches!(c.update().step, UpdateStep::Downloading(f) if f > 0.4)), "{:?}", c.update().step);
+    c.update_cancel();
+    assert!(until(2.0, || c.update().step == UpdateStep::Out), "{:?}", c.update().step);
+    fake.download_waits.store(false, Ordering::SeqCst);
+    radiance_engine::update::forget();
     c.quit();
 }
 
