@@ -12,7 +12,7 @@ namespace RadianceMusic.Pages;
 /// History, as the GTK app's: the plays by day ("Today", "Yesterday", the weekday, the date),
 /// each with when; a click plays on through the history from that play.
 /// </summary>
-internal sealed class HistoryPage : Page
+public sealed partial class HistoryPage : Page
 {
     private EngineHub? hub;
     private readonly StackPanel body = new() { Padding = new Thickness(36, 20, 36, 36), Spacing = 8, MaxWidth = 1400 };
@@ -20,6 +20,7 @@ internal sealed class HistoryPage : Page
 
     public HistoryPage()
     {
+        InitializeComponent();
         NavigationCacheMode = NavigationCacheMode.Required;
         Content = new ScrollViewer { Content = body };
     }

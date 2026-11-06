@@ -12,7 +12,7 @@ namespace RadianceMusic.Pages;
 /// grid (its name on the button), the art (round for an artist), the name, who / how many, Play /
 /// Shuffle, the songs.
 /// </summary>
-internal sealed class GroupPage : Page
+public sealed partial class GroupPage : Page
 {
     private EngineHub? hub;
     private GroupKind kind;
@@ -21,6 +21,7 @@ internal sealed class GroupPage : Page
 
     public GroupPage()
     {
+        InitializeComponent();
         NavigationCacheMode = NavigationCacheMode.Disabled;
         Content = new ScrollViewer { Content = body };
     }

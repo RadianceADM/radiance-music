@@ -12,7 +12,7 @@ namespace RadianceMusic.Pages;
 /// square art and who's on it, an artist's round art and "N songs", a genre's colours (its first
 /// song's wash) under its name. A click opens its songs.
 /// </summary>
-internal sealed class LibraryPage : Page
+public sealed partial class LibraryPage : Page
 {
     private EngineHub? hub;
     private GroupKind kind;
@@ -22,6 +22,7 @@ internal sealed class LibraryPage : Page
 
     public LibraryPage()
     {
+        InitializeComponent();
         NavigationCacheMode = NavigationCacheMode.Disabled;
         tiles.Layout = new UniformGridLayout { MinItemWidth = 180, MinColumnSpacing = 12, MinRowSpacing = 16, ItemsStretch = UniformGridLayoutItemsStretch.Fill };
         var body = new StackPanel { Padding = new Thickness(36, 20, 36, 36), Spacing = 16, MaxWidth = 1600 };
@@ -50,7 +51,7 @@ internal sealed class LibraryPage : Page
         if (what == ChangeKind.Library) Render();
     }
 
-    public static string KindName(GroupKind k) => k switch { GroupKind.Albums => "Albums", GroupKind.Artists => "Artists", _ => "Genres" };
+    internal static string KindName(GroupKind k) => k switch { GroupKind.Albums => "Albums", GroupKind.Artists => "Artists", _ => "Genres" };
 
     private void Render()
     {

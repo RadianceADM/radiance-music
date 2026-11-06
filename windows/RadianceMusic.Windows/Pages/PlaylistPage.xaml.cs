@@ -10,7 +10,7 @@ namespace RadianceMusic.Pages;
 /// A playlist, as the GTK app's open_playlist: its name, "N songs", Play / Shuffle / Rename /
 /// Delete, its songs (their menu has Remove from This Playlist), or the words when it's empty.
 /// </summary>
-internal sealed class PlaylistPage : Page
+public sealed partial class PlaylistPage : Page
 {
     private EngineHub? hub;
     private long id;
@@ -18,6 +18,7 @@ internal sealed class PlaylistPage : Page
 
     public PlaylistPage()
     {
+        InitializeComponent();
         NavigationCacheMode = NavigationCacheMode.Disabled;
         Content = new ScrollViewer { Content = body };
     }

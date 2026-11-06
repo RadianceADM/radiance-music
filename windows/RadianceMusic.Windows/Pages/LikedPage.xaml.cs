@@ -10,7 +10,7 @@ namespace RadianceMusic.Pages;
 /// Liked Songs, as the GTK app's: its own search ("Search your liked songs"), the words under it,
 /// Play / Shuffle / Fix missing, the songs A to Z with the rail beside them.
 /// </summary>
-internal sealed class LikedPage : Page
+public sealed partial class LikedPage : Page
 {
     private EngineHub? hub;
     private Debounce? debounce;
@@ -24,6 +24,7 @@ internal sealed class LikedPage : Page
 
     public LikedPage()
     {
+        InitializeComponent();
         NavigationCacheMode = NavigationCacheMode.Required;
         play = PageKit.IconButton("", "Play", () => { if (page is { Songs.Length: > 0 } p) hub?.Engine.PlayLiked(0, p.Songs[0].Key); }, accent: true);
         shuffle = PageKit.IconButton("", "Shuffle", () => hub?.Engine.ShuffleLiked());
