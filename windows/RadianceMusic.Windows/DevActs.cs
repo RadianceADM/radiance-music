@@ -54,25 +54,24 @@ internal static class DevActs
         var roots = VisualTreeHelper.GetOpenPopupsForXamlRoot(xr).Select(p => (DependencyObject)p.Child).Where(c => c != null).ToList();
         roots.Add(content);
         foreach (var root in roots)
-            if (Find(root, text) is { } peer)
+            if (Find(root, text) is { } element && FrameworkElementAutomationPeer.CreatePeerForElement(element) is { } peer)
             {
-                switch (peer)
-                {
-                    case IInvokeProvider i: i.Invoke(); break;
-                    case IExpandCollapseProvider e: e.Expand(); break;
-                }
+                // a submenu opens (Expand); a button or menu item is pressed (Invoke)
+                if (peer.GetPattern(PatternInterface.ExpandCollapse) is IExpandCollapseProvider e) e.Expand();
+                else if (peer.GetPattern(PatternInterface.Invoke) is IInvokeProvider i) i.Invoke();
+                else return false;
                 return true;
             }
         return false;
     }
 
-    private static object? Find(DependencyObject at, string text)
+    private static UIElement? Find(DependencyObject at, string text)
     {
         switch (at)
         {
-            case MenuFlyoutSubItem sub when sub.Text.StartsWith(text): return new MenuFlyoutSubItemAutomationPeer(sub);
-            case MenuFlyoutItem item when item.Text.StartsWith(text): return new MenuFlyoutItemAutomationPeer(item);
-            case Button b when Words(b).StartsWith(text): return new ButtonAutomationPeer(b);
+            case MenuFlyoutSubItem sub when sub.Text.StartsWith(text): return sub;
+            case MenuFlyoutItem item when item.Text.StartsWith(text): return item;
+            case Button b when Words(b).StartsWith(text): return b;
         }
         for (var i = 0; i < VisualTreeHelper.GetChildrenCount(at); i++)
             if (Find(VisualTreeHelper.GetChild(at, i), text) is { } found) return found;
