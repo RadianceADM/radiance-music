@@ -29,6 +29,8 @@ internal static class Shot
         window.Show(dev.Page);
         if (dev.Search != null) window.SearchFor(dev.Search);
         if (dev.Acts.Count > 0) Crash.Note("shot: queue before the steps: " + window.SidePanel.Titles());
+        // the side panel open for the steps too (a queue row's menu needs its row on screen)
+        if (dev.Side != null && dev.Acts.Count > 0) window.OpenSide(dev.Side);
         foreach (var act in dev.Acts)
         {
             await Task.Delay(1500);
