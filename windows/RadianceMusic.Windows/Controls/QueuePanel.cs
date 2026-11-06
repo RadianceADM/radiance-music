@@ -57,6 +57,19 @@ internal sealed class QueuePanel : Grid
         set => tabs.SelectedItem = value == "lyrics" ? lyricsTab : queueTab;
     }
 
+    /// <summary>The panel just opened: its tabs laid out again. Over the page (a narrow window) the
+    /// SelectorBar had laid them out while the closed pane was 0 px wide and drew only the first.</summary>
+    public void Opened()
+    {
+        var tab = Tab;
+        var has = HasLyrics;
+        tabs.Items.Clear();
+        tabs.Items.Add(queueTab);
+        if (has) tabs.Items.Add(lyricsTab);
+        Tab = tab;
+        ShowTab();
+    }
+
     /// <summary>Whether the Lyrics tab is there (not on Now Playing while its lyrics column shows: SideTabs).</summary>
     public bool HasLyrics
     {

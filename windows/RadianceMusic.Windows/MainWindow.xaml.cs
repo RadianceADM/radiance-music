@@ -56,6 +56,7 @@ public sealed partial class MainWindow : Window
             SyncLyricsTab();
         };
         SideHost.Content = side;
+        Side.PaneOpened += (_, _) => side.Opened();
         Root.SizeChanged += (_, e) => Side.DisplayMode = e.NewSize.Width >= 1300 ? SplitViewDisplayMode.Inline : SplitViewDisplayMode.Overlay;
         // closing while music plays: it plays on (the tray icon brings the window back); else it quits
         AppWindow.Closing += (_, e) =>
