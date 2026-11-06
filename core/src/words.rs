@@ -175,6 +175,9 @@ pub fn split_failed(title: &str) -> String {
 /// Getting splitting ready at the first start (under the sunrise).
 pub const SETUP_GETTING: &str = "Getting Radiance Music ready…";
 pub fn setup_step(step: &str) -> String {
+    // (its first letter small, after the colon: as the GTK app's say)
+    let mut c = step.chars();
+    let step = c.next().map(|f| f.to_lowercase().collect::<String>() + c.as_str()).unwrap_or_default();
     format!("Getting Radiance Music ready: {step}")
 }
 pub const SETUP_RETRY: &str = "Couldn't get splitting ready yet. Trying again in a moment…";
@@ -313,7 +316,7 @@ mod tests {
         assert_eq!(split_progress(0.95), "Bringing the parts back · 95%");
         assert_eq!(split_place(3), "Number 3 in line; liked songs are split one after another.");
         assert_eq!(split_failed("Tarot"), "Couldn't split “Tarot” right now");
-        assert_eq!(setup_step("Downloading Demucs…"), "Getting Radiance Music ready: Downloading Demucs…");
+        assert_eq!(setup_step("Downloading Demucs…"), "Getting Radiance Music ready: downloading Demucs…"); // (as the GTK app's say: its first letter small)
         assert_eq!(SPLIT_WAITING, "Waiting to be split");
         assert_eq!(SETUP_OFFLINE, "You're offline. Splitting songs needs a one-time download: it starts when you're back online.");
         assert_eq!((SPLIT_TWO, SPLIT_FOUR, SPLIT_FOUR_AFTER_TWO), ("Split: Music + Vocals (Fast)", "Split: Four Parts", "Split in Four Parts"));
