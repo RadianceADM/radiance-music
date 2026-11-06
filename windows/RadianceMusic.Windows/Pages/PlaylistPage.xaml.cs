@@ -14,13 +14,13 @@ public sealed partial class PlaylistPage : Page
 {
     private EngineHub? hub;
     private long id;
-    private readonly StackPanel body = new() { Padding = new Thickness(36, 20, 36, 36), Spacing = 12, MaxWidth = 1400 };
+    private readonly StackPanel body = new() { Spacing = 12 };
 
     public PlaylistPage()
     {
         InitializeComponent();
         NavigationCacheMode = NavigationCacheMode.Disabled;
-        Content = new ScrollViewer { Content = body };
+        Content = PageKit.Column(body);
     }
 
     protected override void OnNavigatedTo(NavigationEventArgs e)

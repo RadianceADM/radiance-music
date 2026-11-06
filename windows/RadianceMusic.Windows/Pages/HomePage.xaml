@@ -9,7 +9,7 @@
     <!-- (as Search's: the page-wide grid holds the column's width, no sideways scrolling) -->
     <ScrollViewer HorizontalScrollMode="Disabled" HorizontalScrollBarVisibility="Disabled">
         <Grid Padding="36,20,36,36">
-        <StackPanel MaxWidth="1600" HorizontalAlignment="Stretch" Spacing="32">
+        <StackPanel MaxWidth="1480" HorizontalAlignment="Stretch" Spacing="32">
             <StackPanel Spacing="6">
                 <TextBlock x:Name="Greeting" Style="{StaticResource TitleLargeTextBlockStyle}" TextWrapping="WrapWholeWords" />
                 <TextBlock x:Name="MixNote" Style="{StaticResource BodyTextBlockStyle}" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />

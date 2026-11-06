@@ -15,14 +15,14 @@ namespace RadianceMusic.Pages;
 public sealed partial class HistoryPage : Page
 {
     private EngineHub? hub;
-    private readonly StackPanel body = new() { Padding = new Thickness(36, 20, 36, 36), Spacing = 8, MaxWidth = 1400 };
+    private readonly StackPanel body = new() { Spacing = 8 };
     private string shown = "-";
 
     public HistoryPage()
     {
         InitializeComponent();
         NavigationCacheMode = NavigationCacheMode.Required;
-        Content = new ScrollViewer { Content = body };
+        Content = PageKit.Column(body);
     }
 
     /// <summary>On screen now: a kept page (NavigationCacheMode) that isn't is drawn when it comes back.</summary>

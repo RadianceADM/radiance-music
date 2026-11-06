@@ -10,6 +10,19 @@ internal sealed record PageArgs(EngineHub Hub, object? What);
 /// <summary>The library pages' parts, in Windows' own look (the type ramp, theme brushes).</summary>
 internal static class PageKit
 {
+    /// <summary>A page's one column, as the Linux app's adw::Clamp: `body` at most `max` px wide (1240: History,
+    /// Albums / Artists / Genres, a group's page, a playlist; Home 1480), centred, its margins round it, in a
+    /// scroller that never scrolls sideways (one that did let the page take its longest row's width and
+    /// drift off-centre or off the edge, #58, #60).</summary>
+    public static ScrollViewer Column(FrameworkElement body, double max = 1240)
+    {
+        body.MaxWidth = max;
+        body.HorizontalAlignment = HorizontalAlignment.Stretch;
+        var page = new Grid { Padding = new Thickness(36, 20, 36, 36) };
+        page.Children.Add(body);
+        return new ScrollViewer { HorizontalScrollMode = ScrollMode.Disabled, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, Content = page };
+    }
+
     public static TextBlock Title(string text) => new() { Text = text, Style = (Style)Application.Current.Resources["TitleLargeTextBlockStyle"], TextTrimming = TextTrimming.CharacterEllipsis };
 
     public static TextBlock Subtitle(string text) => new() { Text = text, Style = (Style)Application.Current.Resources["SubtitleTextBlockStyle"] };

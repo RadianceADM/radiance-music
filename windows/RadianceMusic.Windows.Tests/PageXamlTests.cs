@@ -25,4 +25,20 @@ public class PageXamlTests
             .ToHashSet();
         Assert.Equal(Array.Empty<string>(), pages.Where(p => !known.Contains(p)).ToArray());
     }
+
+    /// <summary>A page that may scroll sideways sizes to its longest row and drifts off-centre or off the edge in a
+    /// wide window (#58 Search, #60 History, Albums, Artists, Genres): every page's ScrollViewer has it off
+    /// (PageKit.Column does, as the Linux app's adw::Clamp).</summary>
+    [Fact]
+    public void NoPageScrollsSideways()
+    {
+        var loose = new List<string>();
+        foreach (var f in Directory.GetFiles(Pages(), "*.cs"))
+            foreach (Match m in Regex.Matches(File.ReadAllText(f), @"new ScrollViewer\s*\{[^}]*\}"))
+                if (!m.Value.Contains("HorizontalScrollMode")) loose.Add($"{Path.GetFileName(f)}: {m.Value}");
+        foreach (var f in Directory.GetFiles(Pages(), "*.xaml"))
+            foreach (Match m in Regex.Matches(File.ReadAllText(f), @"<ScrollViewer\b[^>]*>"))
+                if (!m.Value.Contains("HorizontalScrollMode=\"Disabled\"")) loose.Add($"{Path.GetFileName(f)}: {m.Value}");
+        Assert.Equal(Array.Empty<string>(), loose.ToArray());
+    }
 }

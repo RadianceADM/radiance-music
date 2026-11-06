@@ -25,10 +25,10 @@ public sealed partial class LibraryPage : Page
         InitializeComponent();
         NavigationCacheMode = NavigationCacheMode.Disabled;
         tiles.Layout = new UniformGridLayout { MinItemWidth = 180, MinColumnSpacing = 12, MinRowSpacing = 16, ItemsStretch = UniformGridLayoutItemsStretch.Fill };
-        var body = new StackPanel { Padding = new Thickness(36, 20, 36, 36), Spacing = 16, MaxWidth = 1600 };
+        var body = new StackPanel { Spacing = 16 };
         body.Children.Add(title);
         body.Children.Add(tiles);
-        Content = new ScrollViewer { Content = body };
+        Content = PageKit.Column(body);
     }
 
     protected override void OnNavigatedTo(NavigationEventArgs e)
