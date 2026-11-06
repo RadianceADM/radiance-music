@@ -28,6 +28,7 @@ internal static class Shot
         Crash.Note($"shot: {dev.Page} {dev.Width}x{dev.Height}, in {dev.Wait} s");
         window.Show(dev.Page);
         if (dev.Search != null) window.SearchFor(dev.Search);
+        if (dev.Side != null) window.ToggleSide(dev.Side);
         await Task.Delay(TimeSpan.FromSeconds(dev.Wait));
         var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(window);
         Win32.SetForegroundWindow(hwnd);
