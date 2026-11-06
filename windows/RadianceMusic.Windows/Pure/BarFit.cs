@@ -9,8 +9,8 @@ public static class BarFit
     public const double Slider = 120, MinSlider = 60, Middle = 640;
     /// <summary>The quality pill's widest ("Loading…", then what's playing, as the Linux bar's), and its gap.</summary>
     public const double Pill = 200, PillGap = 6;
-    /// <summary>The four buttons and their four gaps (the slider's own included).</summary>
-    public const double EndWithoutSlider = 4 * 36 + 4 * 6;
+    /// <summary>The five buttons (heart, mute, Mixer, Lyrics, Queue) and their five gaps (the slider's own included).</summary>
+    public const double EndWithoutSlider = 5 * 36 + 5 * 6;
 
     /// <summary>The end column's width in a bar `inner` px wide (columns 1* | 2*, at most 640 | 1*).</summary>
     public static double Side(double inner) => inner / 2 > Middle ? (inner - Middle) / 2 : inner / 4;

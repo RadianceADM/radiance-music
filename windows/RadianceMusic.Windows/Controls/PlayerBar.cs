@@ -21,7 +21,7 @@ internal sealed class PlayerBar : Grid
     private const double Phone = 600;
     private readonly EngineHub hub;
     private readonly SeekModel seek = new();
-    private readonly Border art = new() { Width = 56, Height = 56, CornerRadius = new CornerRadius(4) };
+    private readonly Border art = new() { Width = 56, Height = 56, CornerRadius = new CornerRadius(8) };
     private readonly TextBlock title = new() { Text = "Nothing playing", Style = (Style)Application.Current.Resources["BodyStrongTextBlockStyle"], TextTrimming = TextTrimming.CharacterEllipsis, TextWrapping = TextWrapping.NoWrap };
     private readonly TextBlock byline = new() { Style = (Style)Application.Current.Resources["CaptionTextBlockStyle"], Foreground = (Brush)Application.Current.Resources["TextFillColorSecondaryBrush"], TextTrimming = TextTrimming.CharacterEllipsis, TextWrapping = TextWrapping.NoWrap };
     private readonly Button shuffle, previous, play, next, repeat, mute, heart;
@@ -34,9 +34,11 @@ internal sealed class PlayerBar : Grid
     private readonly TextBlock at = new() { Style = (Style)Application.Current.Resources["CaptionTextBlockStyle"], Foreground = (Brush)Application.Current.Resources["TextFillColorSecondaryBrush"], VerticalAlignment = VerticalAlignment.Center, MinWidth = 36, TextAlignment = TextAlignment.Right };
     private readonly TextBlock length = new() { Style = (Style)Application.Current.Resources["CaptionTextBlockStyle"], Foreground = (Brush)Application.Current.Resources["TextFillColorSecondaryBrush"], VerticalAlignment = VerticalAlignment.Center, MinWidth = 36 };
     private readonly StackPanel songWords;
-    private readonly Border qualityPill = new() { CornerRadius = new CornerRadius(4), Padding = new Thickness(8, 2, 8, 2), VerticalAlignment = VerticalAlignment.Center, MaxWidth = BarFit.Pill, Visibility = Visibility.Collapsed };
+    private readonly Border qualityPill = new() { CornerRadius = new CornerRadius(12), Padding = new Thickness(8, 2, 8, 2), VerticalAlignment = VerticalAlignment.Center, MaxWidth = BarFit.Pill, Visibility = Visibility.Collapsed };
     private readonly TextBlock qualityText = new() { Style = (Style)Application.Current.Resources["CaptionTextBlockStyle"], TextTrimming = TextTrimming.CharacterEllipsis, TextWrapping = TextWrapping.NoWrap };
     private bool pillRoom;
+    private readonly Button mixerButton;
+    private readonly Flyout mixerPopup;
     private bool setting;
     private string artFor = "";
 
@@ -122,6 +124,18 @@ internal sealed class PlayerBar : Grid
             if (hub.Engine.Now().Song is { } s) hub.Engine.ToggleLike(s.Key);
         });
         mute = Round(muteIcon, "Mute", ToggleMute);
+        // the Mixer: a soft, rounded pop-up above the bar (owner, 2026-11-06), the sliders heard at once
+        var mixer = new Mixer(hub);
+        mixerPopup = new Flyout { Content = mixer, Placement = Microsoft.UI.Xaml.Controls.Primitives.FlyoutPlacementMode.Top };
+        var round = new Style(typeof(FlyoutPresenter));
+        round.Setters.Add(new Setter(Control.CornerRadiusProperty, new CornerRadius(16)));
+        round.Setters.Add(new Setter(Control.BorderThicknessProperty, new Thickness(0)));
+        round.Setters.Add(new Setter(Control.PaddingProperty, new Thickness(20, 16, 20, 18)));
+        round.Setters.Add(new Setter(FrameworkElement.MaxWidthProperty, 480.0));
+        mixerPopup.FlyoutPresenterStyle = round;
+        mixerPopup.Opened += (_, _) => mixer.Shown(true);
+        mixerPopup.Closed += (_, _) => mixer.Shown(false);
+        mixerButton = Round(new FontIcon { Glyph = "\uE9E9", FontSize = 15 }, "Mixer: the song's parts, No vocals, Low cut, High cut, Reverb", () => mixerPopup.ShowAt(mixerButton));
         var lyricsButton = Round(new FontIcon { Glyph = "\uE8D2", FontSize = 15 }, "Lyrics", () => App.Window?.ToggleSide("lyrics"));
         var queueButton = Round(new FontIcon { Glyph = "\uE8FD", FontSize = 15 }, "Queue: what plays next", () => App.Window?.ToggleSide("queue"));
         var end = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Center };
@@ -131,6 +145,7 @@ internal sealed class PlayerBar : Grid
         end.Children.Add(mute);
         end.Children.Add(volume);
         end.Children.Add(qualityPill);
+        end.Children.Add(mixerButton);
         end.Children.Add(lyricsButton);
         end.Children.Add(queueButton);
         SetColumn(end, 2);
@@ -148,6 +163,14 @@ internal sealed class PlayerBar : Grid
             else if (kind == ChangeKind.Position) Position();
         };
         Render();
+    }
+
+    /// <summary>The Mixer's pop-up opened (the screenshots' --act mixer-open).</summary>
+    internal bool OpenMixer()
+    {
+        if (!mixerButton.IsEnabled) return false;
+        mixerPopup.ShowAt(mixerButton);
+        return true;
     }
 
     private static Button Round(FontIcon icon, string tip, Action click, bool accent = false)
@@ -200,7 +223,7 @@ internal sealed class PlayerBar : Grid
         var song = now.Song;
         title.Text = song?.Title ?? "Nothing playing";
         ShowQuality();
-        foreach (var c in new Control[] { play, previous, bar, heart }) c.IsEnabled = song != null;
+        foreach (var c in new Control[] { play, previous, bar, heart, mixerButton }) c.IsEnabled = song != null;
         heartIcon.Glyph = now.Liked ? "\uEB52" : "\uEB51";
         heartIcon.Foreground = now.Liked ? (Brush)Application.Current.Resources["SystemFillColorCriticalBrush"] : (Brush)Application.Current.Resources["TextFillColorPrimaryBrush"];
         ToolTipService.SetToolTip(heart, now.Liked ? "Liked. Click to remove from Liked" : "Like: saves the song");

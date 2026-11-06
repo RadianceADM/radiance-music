@@ -42,7 +42,8 @@ public sealed partial class MainWindow : Window
             if (e.InvokedItemContainer is NavigationViewItem { Tag: "new-playlist" }) Show("new-playlist");
         };
         hub.Change += OnChange;
-        BarHost.Content = new Controls.PlayerBar(hub);
+        Bar = new Controls.PlayerBar(hub);
+        BarHost.Content = Bar;
         // the side panel (Queue | Lyrics): beside the page from 1300 px, over it below (as the GTK app's)
         side = new Controls.QueuePanel(hub);
         // Now Playing's lyrics column decides the panel's Lyrics tab (as the GTK app's)
@@ -97,6 +98,9 @@ public sealed partial class MainWindow : Window
 
     /// <summary>The start's sunrise over the whole window (#55; none with animations off, or for screenshots unless --splash-at).</summary>
     internal Controls.Splash? Splash { get; private set; }
+
+    /// <summary>The player bar (its Mixer pop-up: the screenshots' --act mixer-open).</summary>
+    internal Controls.PlayerBar? Bar { get; private set; }
 
     internal void CoverWithSplash(bool forShots) => Splash = Controls.Splash.Cover(Root, forShots);
 

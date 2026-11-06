@@ -45,8 +45,8 @@ public sealed partial class NowPlayingPage : Page
             // the lyrics column: word by word, growing toward the middle (Controls/LyricsColumn)
             Right.Children.Clear();
             Right.Children.Add(new Controls.LyricsColumn(hub, big: true));
-            // the Mixer under the song (stage 3)
-            MixerHost.Content = new Controls.Mixer(hub);
+            // soft corners on the art, the music video's too (it's the compositor's: clipped there)
+            Art.SizeChanged += (_, _) => RoundArt();
             hub.Change += kind =>
             {
                 if (kind == ChangeKind.Now) RenderNow();
@@ -93,12 +93,17 @@ public sealed partial class NowPlayingPage : Page
     private void OnVideoDoubleTapped(object sender, Microsoft.UI.Xaml.Input.DoubleTappedRoutedEventArgs e) => App.Window?.SetVideoFullscreen(!full);
 
     /// <summary>The window went fullscreen for the video, or came back (MainWindow.SetVideoFullscreen).</summary>
-    /// <summary>The Mixer opened (the screenshots' --act mixer-open).</summary>
-    public bool OpenMixer()
+    /// <summary>The art's corners rounded on the compositor (a music video's swapchain ignores CornerRadius);
+    /// square in fullscreen, where it fills the screen.</summary>
+    private void RoundArt()
     {
-        if (MixerHost.Content is not Controls.Mixer m) return false;
-        m.Open();
-        return true;
+        var visual = Microsoft.UI.Xaml.Hosting.ElementCompositionPreview.GetElementVisual(Art);
+        var c = visual.Compositor;
+        var shape = c.CreateRoundedRectangleGeometry();
+        shape.Size = new System.Numerics.Vector2((float)Art.ActualWidth, (float)Art.ActualHeight);
+        var r = full ? 0f : 16f;
+        shape.CornerRadius = new System.Numerics.Vector2(r, r);
+        visual.Clip = c.CreateGeometricClip(shape);
     }
 
     public void SetFullscreen(bool on)
@@ -107,7 +112,8 @@ public sealed partial class NowPlayingPage : Page
         Body.Padding = on ? new Thickness(0) : new Thickness(36, 24, 36, 24);
         Art.Margin = on ? new Thickness(0) : new Thickness(0, 0, 0, 8);
         var words = on ? Visibility.Collapsed : Visibility.Visible;
-        SongTitle.Visibility = Byline.Visibility = MixerHost.Visibility = words;
+        SongTitle.Visibility = Byline.Visibility = words;
+        RoundArt();
         if (on) Quality.Visibility = Visibility.Collapsed;
         Back.Visibility = words;
         Root.Background = on ? new SolidColorBrush(Microsoft.UI.Colors.Black) : null;

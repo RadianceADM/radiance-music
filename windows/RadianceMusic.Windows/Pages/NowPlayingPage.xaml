@@ -27,7 +27,7 @@
                 <!-- the cover, or the music video on the compositor (a SwapChainPanel the engine's
                      d3d12swapchainsink draws into), with its buttons on top -->
                 <Grid x:Name="Art" Width="340" Height="340" Margin="0,0,0,8">
-                    <Border x:Name="Cover" CornerRadius="8"
+                    <Border x:Name="Cover" CornerRadius="16"
                             Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
                             BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1" />
                     <SwapChainPanel x:Name="VideoPanel" Visibility="Collapsed" />
@@ -47,12 +47,10 @@
                            TextWrapping="WrapWholeWords" MaxLines="2" TextTrimming="CharacterEllipsis" />
                 <TextBlock x:Name="Byline" Style="{StaticResource BodyTextBlockStyle}" Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                            TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" />
-                <Border x:Name="Quality" HorizontalAlignment="Left" CornerRadius="4" Padding="8,2" Margin="0,4,0,0" Visibility="Collapsed"
+                <Border x:Name="Quality" HorizontalAlignment="Left" CornerRadius="12" Padding="8,2" Margin="0,4,0,0" Visibility="Collapsed"
                         Background="{ThemeResource ControlFillColorSecondaryBrush}">
                     <TextBlock x:Name="QualityText" Style="{StaticResource CaptionTextBlockStyle}" />
                 </Border>
-                <!-- the Mixer (stage 3), as the Linux app's: under the song, closed until opened -->
-                <ContentControl x:Name="MixerHost" HorizontalContentAlignment="Stretch" />
             </StackPanel>
             <Grid x:Name="Right" Grid.Column="1">
                 <ScrollViewer x:Name="LyricsScroll" VerticalScrollBarVisibility="Hidden" HorizontalScrollMode="Disabled">

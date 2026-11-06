@@ -176,16 +176,22 @@ public class BarFitTests
     [Fact]
     public void AWideBarKeepsTheWholeSlider() => Assert.Equal(120, BarFit.Volume(1336)); // a 1400 px window
 
+    // (five buttons since the Mixer's pop-up joined the bar: heart, mute, Mixer, Lyrics, Queue)
     [Fact]
     public void AMidSizeBarShrinksItSoTheHeartStays()
     {
-        var slider = BarFit.Volume(936); // a 1000 px window: its end column is 234 px
+        var slider = BarFit.Volume(1136); // a 1200 px window: its end column is 284 px
         Assert.InRange(slider, BarFit.MinSlider, 119);
-        Assert.True(BarFit.EndWithoutSlider + slider <= BarFit.Side(936));
+        Assert.True(BarFit.EndWithoutSlider + slider <= BarFit.Side(1136));
     }
 
     [Fact]
-    public void ANarrowBarLetsItGo() => Assert.Equal(0, BarFit.Volume(796)); // an 860 px window
+    public void ANarrowBarLetsItGo()
+    {
+        Assert.Equal(0, BarFit.Volume(936)); // a 1000 px window: the slider goes, mute stays
+        Assert.Equal(0, BarFit.Volume(796));
+        Assert.Equal(5 * 36 + 5 * 6, BarFit.EndWithoutSlider);
+    }
 
     // the quality pill ("Loading…", then what's playing, as the Linux bar's): only where the whole slider fits beside it
     [Fact]
