@@ -6,8 +6,10 @@
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     NavigationCacheMode="Required">
-    <ScrollViewer>
-        <StackPanel MaxWidth="1600" Padding="36,20,36,36" Spacing="32">
+    <!-- (as Search's: the page-wide grid holds the column's width, no sideways scrolling) -->
+    <ScrollViewer HorizontalScrollMode="Disabled" HorizontalScrollBarVisibility="Disabled">
+        <Grid Padding="36,20,36,36">
+        <StackPanel MaxWidth="1600" HorizontalAlignment="Stretch" Spacing="32">
             <StackPanel Spacing="6">
                 <TextBlock x:Name="Greeting" Style="{StaticResource TitleLargeTextBlockStyle}" TextWrapping="WrapWholeWords" />
                 <TextBlock x:Name="MixNote" Style="{StaticResource BodyTextBlockStyle}" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
@@ -15,5 +17,6 @@
             </StackPanel>
             <StackPanel x:Name="Rows" Spacing="32" />
         </StackPanel>
+        </Grid>
     </ScrollViewer>
 </Page>

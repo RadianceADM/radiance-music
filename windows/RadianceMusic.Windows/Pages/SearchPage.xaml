@@ -13,11 +13,14 @@
         </Grid.RowDefinitions>
         <StackPanel Padding="36,20,36,12" Spacing="12">
             <TextBlock Text="Search" Style="{StaticResource TitleLargeTextBlockStyle}" />
-            <AutoSuggestBox x:Name="Box" PlaceholderText="Search any song or artist" QueryIcon="Find" MaxWidth="640"
+            <AutoSuggestBox x:Name="Box" PlaceholderText="Search any song or artist" QueryIcon="Find" MaxWidth="1240"
                             HorizontalAlignment="Stretch" TextChanged="OnTyped" QuerySubmitted="OnSubmit" />
         </StackPanel>
-        <ScrollViewer Grid.Row="1">
-            <StackPanel MaxWidth="1400" Padding="36,8,36,36" Spacing="24">
+        <!-- one column with the box, as the Linux app's (a 1240 clamp): the page-wide grid holds its width,
+             so the lists never shrink to their longest row and drift as the results change -->
+        <ScrollViewer Grid.Row="1" HorizontalScrollMode="Disabled" HorizontalScrollBarVisibility="Disabled">
+            <Grid Padding="36,8,36,36">
+            <StackPanel MaxWidth="1240" HorizontalAlignment="Stretch" Spacing="24">
                 <StackPanel x:Name="BrowseArea" Spacing="12">
                     <TextBlock Text="Browse" Style="{StaticResource SubtitleTextBlockStyle}" />
                     <ItemsRepeater x:Name="Tiles">
@@ -50,6 +53,7 @@
                     </StackPanel>
                 </StackPanel>
             </StackPanel>
+            </Grid>
         </ScrollViewer>
     </Grid>
 </Page>
