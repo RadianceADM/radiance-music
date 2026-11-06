@@ -952,3 +952,28 @@ fn a_video_that_cant_play_leaves_the_song() {
     assert_eq!(c.queue().0[c.queue().1].id, "file-no-video");
     c.quit();
 }
+
+/// The folder picked in Storage (settings.json's music_dir) is where liked songs go: the engine
+/// takes it at start, as the GTK app does (the Windows beta saved them to ~/Music whatever was picked).
+#[test]
+fn the_picked_music_folder_is_where_likes_go() {
+    let _l = setup();
+    let picked = std::env::temp_dir().join(format!("radiance-controller-test-{}", std::process::id())).join("picked-music");
+    let mut s = radiance_engine::settings::load();
+    let before = s.music_dir.clone();
+    s.music_dir = Some(picked.display().to_string());
+    radiance_engine::settings::save(&s);
+    radiance_engine::library::set_music_dir(None);
+    let (heard, _rx) = listener();
+    let c = Controller::start(heard, Arc::new(Fake::default())).unwrap();
+    let end = Instant::now() + Duration::from_secs(3);
+    while radiance_engine::library::music_dir() != picked && Instant::now() < end {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let found = radiance_engine::library::music_dir();
+    c.quit();
+    s.music_dir = before;
+    radiance_engine::settings::save(&s);
+    radiance_engine::library::set_music_dir(None);
+    assert_eq!(found, picked);
+}

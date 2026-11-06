@@ -842,6 +842,9 @@ const VIDEO_FRESH: Duration = Duration::from_secs(3600);
 
 impl Engine {
     fn new(shared: Arc<Shared>, epoch: u64) -> Engine {
+        let settings = settings::load();
+        // liked songs go to the folder picked in Storage (as the GTK app's start)
+        crate::library::set_music_dir(settings.music_dir.clone().map(std::path::PathBuf::from));
         Engine {
             shared,
             epoch,
@@ -869,7 +872,7 @@ impl Engine {
             ran_out: Cell::new(false),
             autoplay_for: RefCell::default(),
             counts: RefCell::default(),
-            settings: RefCell::new(settings::load()),
+            settings: RefCell::new(settings),
             muted: Cell::new(false),
             lines: RefCell::default(),
             last_save: Cell::new(None),
