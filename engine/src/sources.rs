@@ -67,6 +67,24 @@ pub trait Sources: Send + Sync + 'static {
     fn count_update(&self, r: &crate::update::Release, install: &crate::update::Install) {
         crate::update::counted(r, install)
     }
+    /// Is there a network at all (GIO's monitor; read at the start).
+    fn network_available(&self) -> bool {
+        use gio::prelude::*;
+        gio::NetworkMonitor::default().is_network_available()
+    }
+    /// YouTube Music's suggestions for what's typed (worker thread; none on any failure).
+    fn suggestions(&self, q: &str) -> Vec<String> {
+        crate::youtube::suggestions(q)
+    }
+    /// The fast split's files fetched if any are missing (worker thread; quietly, as GTK's
+    /// get_two_part_ready at the start and back online).
+    fn fetch_two_part(&self) {
+        if crate::two_part::ready().is_none() {
+            if let Err(e) = crate::two_part::fetch(&|_| {}) {
+                crate::log::note(&format!("the fast split's files: {e}"));
+            }
+        }
+    }
     /// Report a Problem: sends it (worker thread; the admin site).
     fn send_report(&self, report: &crate::report::Report, note: &str) -> Result<String, crate::feedback::Failure> {
         crate::report::send(report, note)

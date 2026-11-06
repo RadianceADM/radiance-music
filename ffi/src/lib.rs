@@ -40,6 +40,7 @@ pub enum ChangeKind {
     Report,
     Rating,
     Storage,
+    Suggestions,
 }
 
 impl From<Change> for ChangeKind {
@@ -65,6 +66,7 @@ impl From<Change> for ChangeKind {
             Change::Report => ChangeKind::Report,
             Change::Rating => ChangeKind::Rating,
             Change::Storage => ChangeKind::Storage,
+            Change::Suggestions => ChangeKind::Suggestions,
         }
     }
 }

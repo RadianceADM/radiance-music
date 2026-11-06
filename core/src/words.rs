@@ -188,6 +188,8 @@ pub const HOW_TO_FIX: &str = "How to Fix It";
 
 /// A song's menu: splitting and lyrics.
 pub const SPLIT_TWO: &str = "Split: Music + Vocals (Fast)";
+/// The toast when the internet comes back (GTK's set_online).
+pub const BACK_ONLINE: &str = "Back online";
 /// Storage: moving the songs' folder (GTK's confirm_move).
 pub const MOVE_TITLE: &str = "Move your songs?";
 pub fn move_text(from: &str, to: &str) -> String {

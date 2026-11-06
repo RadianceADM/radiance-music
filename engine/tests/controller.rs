@@ -85,6 +85,11 @@ pub struct Fake {
     pub rating_due: std::sync::atomic::AtomicBool,
     pub account: Mutex<Option<radiance_engine::feedback::Account>>,
     pub answers: Mutex<Vec<radiance_engine::feedback::Answer>>,
+    /// Offline and suggestions (stage 4a): the network down at the start; YouTube Music's
+    /// suggestions (and how long they take) by what's typed; the fast split's files fetched.
+    pub network_down: std::sync::atomic::AtomicBool,
+    pub suggestions: Mutex<HashMap<String, (Duration, Vec<String>)>>,
+    pub two_part_fetches: AtomicUsize,
 }
 
 fn kind_name(k: Kind) -> &'static str {
@@ -169,6 +174,17 @@ impl Sources for Fake {
     fn send_report(&self, _: &radiance_engine::report::Report, note: &str) -> Result<String, radiance_engine::feedback::Failure> {
         self.reports.lock().unwrap().push(note.to_string());
         Ok("RM-0042".into())
+    }
+    fn network_available(&self) -> bool {
+        !self.network_down.load(Ordering::SeqCst)
+    }
+    fn suggestions(&self, q: &str) -> Vec<String> {
+        let (wait, found) = self.suggestions.lock().unwrap().get(q).cloned().unwrap_or_default();
+        std::thread::sleep(wait);
+        found
+    }
+    fn fetch_two_part(&self) {
+        self.two_part_fetches.fetch_add(1, Ordering::SeqCst);
     }
     fn rating_due(&self) -> bool {
         self.rating_due.load(Ordering::SeqCst)
@@ -1458,6 +1474,52 @@ fn the_guide_is_seen_once() {
     assert!(!c.guide_seen());
     c.set_guide_seen();
     assert!(until(1.0, || radiance_engine::settings::load().guide_seen && c.guide_seen()));
+    c.quit();
+}
+
+// ------------------------------------------------------------------ offline and suggestions (stage 4a)
+
+#[test]
+fn back_online_says_so_and_searches_again() {
+    let _l = setup();
+    let (c, fake, rx) = with_songs("back online", vec![]);
+    c.search("rebelution");
+    assert!(until(2.0, || fake.searches.load(Ordering::SeqCst) >= 2), "never searched");
+    std::thread::sleep(Duration::from_millis(200));
+    let before = fake.searches.load(Ordering::SeqCst);
+    c.network_changed(false);
+    assert!(until(1.0, || !c.online()));
+    let fetched = fake.two_part_fetches.load(Ordering::SeqCst);
+    c.network_changed(true);
+    let toasts = toasts_for(&c, &rx, 2.0);
+    assert!(toasts.contains(&"Back online".to_string()), "{toasts:?}");
+    assert!(fake.searches.load(Ordering::SeqCst) > before, "the search didn't run again");
+    assert!(fake.two_part_fetches.load(Ordering::SeqCst) > fetched, "the fast split's files weren't fetched");
+    c.quit();
+}
+
+#[test]
+fn the_start_reads_the_network() {
+    let _l = setup();
+    let fake = Arc::new(Fake::default());
+    fake.network_down.store(true, Ordering::SeqCst);
+    let (heard, _rx) = listener();
+    let c = Controller::start(heard, fake.clone()).unwrap();
+    assert!(until(2.0, || !c.online()), "it started online with no network");
+    c.quit();
+}
+
+#[test]
+fn suggestions_follow_the_typing() {
+    let _l = setup();
+    let (c, fake, _rx) = with_songs("suggest", vec![]);
+    fake.suggestions.lock().unwrap().insert("a".into(), (Duration::from_millis(600), vec!["a late".into()]));
+    fake.suggestions.lock().unwrap().insert("ab".into(), (Duration::ZERO, vec!["ab now".into()]));
+    c.suggest("a");
+    c.suggest("ab");
+    assert!(until(2.0, || c.suggestions().iter().any(|s| s.text == "ab now")), "{:?}", c.suggestions());
+    std::thread::sleep(Duration::from_millis(800));
+    assert!(!c.suggestions().iter().any(|s| s.text == "a late"), "an older answer replaced the newer: {:?}", c.suggestions());
     c.quit();
 }
 

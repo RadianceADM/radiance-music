@@ -72,6 +72,8 @@ pub enum Change {
     Rating,
     /// Storage: the songs' folder and the space used (counted, or moved).
     Storage,
+    /// Search suggestions for what's typed (yours at once, YouTube Music's after).
+    Suggestions,
 }
 
 /// Storage as its section shows it: where the songs are, and the space used (None: counting…).
@@ -424,6 +426,7 @@ struct View {
     storage: StorageState,
     autoplay: bool,
     guide_seen: bool,
+    suggestions: Vec<radiance_core::suggest::Chip>,
 }
 
 /// Between the app's threads and the engine's.
@@ -531,6 +534,7 @@ impl Controller {
                 storage: StorageState::default(),
                 autoplay: true,
                 guide_seen: false,
+                suggestions: Vec::new(),
             }),
             liked_q: Mutex::new(String::new()),
         });
@@ -1023,6 +1027,22 @@ impl Controller {
         self.post(move |e| e.set_split_paused(on));
     }
 
+    /// The network came or went (GIO's monitor; Windows' own events too).
+    pub fn network_changed(&self, available: bool) {
+        self.post(move |e| e.set_online(available));
+    }
+
+    /// Search suggestions for what's typed (empty: your artists): yours at once, then YouTube
+    /// Music's (an answer for older typing is dropped).
+    pub fn suggest(&self, typed: &str) {
+        let typed = typed.to_string();
+        self.post(move |e| e.suggest(typed));
+    }
+
+    pub fn suggestions(&self) -> Vec<radiance_core::suggest::Chip> {
+        self.shared.view(|v| v.suggestions.clone())
+    }
+
     /// Storage: the songs' folder and the space used.
     pub fn storage(&self) -> StorageState {
         self.shared.view(|v| v.storage.clone())
@@ -1224,6 +1244,7 @@ struct Engine {
     /// Which engine this is (late answers for an earlier one are dropped).
     epoch: u64,
     search_gen: Cell<u64>,
+    suggest_gen: Cell<u64>,
     query: RefCell<String>,
     /// What the search found, as found: (lossless, YouTube Music).
     found: RefCell<(Option<Vec<Track>>, Option<Vec<Track>>)>,
@@ -1333,6 +1354,7 @@ impl Engine {
             shared,
             epoch,
             search_gen: Cell::new(0),
+            suggest_gen: Cell::new(0),
             query: RefCell::default(),
             found: RefCell::new((Some(Vec::new()), Some(Vec::new()))),
             liked: RefCell::default(),
@@ -1396,6 +1418,10 @@ impl Engine {
         // the internet: GIO says when it comes and goes, as the GTK app's (final review I4: the first
         // start's download and offline lyrics waited for a search or a song to notice it was back)
         use gio::prelude::*;
+        if !self.shared.sources.network_available() {
+            self.set_online(false);
+        }
+        self.fetch_two_part();
         let monitor = gio::NetworkMonitor::default();
         let me = Rc::downgrade(self);
         monitor.connect_network_changed(move |_, available| {
@@ -2646,6 +2672,42 @@ impl Engine {
         );
     }
 
+    // ------------------------------------------------------------------ suggestions, the fast split's files (stage 4a)
+
+    fn suggest(self: &Rc<Self>, typed: String) {
+        let gen = self.suggest_gen.get() + 1;
+        self.suggest_gen.set(gen);
+        let mine = radiance_core::suggest::mine(&self.liked.borrow(), &typed);
+        self.shared.view(|v| v.suggestions = mine.clone());
+        self.shared.tell(Change::Suggestions);
+        if typed.trim().is_empty() {
+            return;
+        }
+        let sources = self.shared.sources.clone();
+        let q = typed.trim().to_string();
+        self.bg(
+            move || sources.suggestions(&q),
+            move |e, found: Vec<String>| {
+                if e.suggest_gen.get() != gen {
+                    return; // typed on
+                }
+                let mut all = mine.clone();
+                all.extend(radiance_core::suggest::add_youtube(&mine, &found));
+                e.shared.view(|v| v.suggestions = all);
+                e.shared.tell(Change::Suggestions);
+            },
+        );
+    }
+
+    /// The fast split's files fetched quietly if missing (never in a screenshot or test copy run).
+    fn fetch_two_part(self: &Rc<Self>) {
+        if std::env::var_os("RADIANCE_SHOT").is_some() {
+            return;
+        }
+        let sources = self.shared.sources.clone();
+        self.bg(move || sources.fetch_two_part(), |_, ()| {});
+    }
+
     // ------------------------------------------------------------------ storage, Autoplay, the guide (stage 4a)
 
     fn set_storage(&self, f: impl FnOnce(&mut StorageState)) {
@@ -3541,7 +3603,7 @@ impl Engine {
                 },
                 move |e, (found, reached)| {
                     if kind == Kind::Songs {
-                        e.set_online(reached);
+                        e.set_online_by(reached, true);
                     }
                     if e.search_gen.get() != gen {
                         return; // typed on since
@@ -3570,9 +3632,24 @@ impl Engine {
     }
 
     fn set_online(self: &Rc<Self>, on: bool) {
+        self.set_online_by(on, false);
+    }
+
+    /// The internet came or went (`by_search`: a search found it; it isn't run again then).
+    fn set_online_by(self: &Rc<Self>, on: bool, by_search: bool) {
         let changed = self.shared.view(|v| std::mem::replace(&mut v.online, on) != on);
         if changed {
             self.shared.tell(Change::Online);
+        }
+        // back online, as the GTK app's: it says so, the search runs again, the fast split's files come
+        if changed && on {
+            crate::log::note("back online");
+            self.toast(radiance_core::words::BACK_ONLINE.to_string());
+            let q = self.query.borrow().clone();
+            if !by_search && !q.trim().is_empty() {
+                self.search(q);
+            }
+            self.fetch_two_part();
         }
         // back online: the song's lyrics looked up again (none came offline), as the GTK app's
         if changed && on && self.lyrics_offline.replace(false) {
