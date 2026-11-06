@@ -61,6 +61,8 @@ pub struct Fake {
     pub counterparts: Mutex<HashMap<String, Track>>,
     /// Videos' streams (picture, sound), by the video's id.
     pub videos: Mutex<HashMap<String, Result<(String, String), String>>>,
+    /// A seed's radio (by its id), and how long YouTube Music takes to answer.
+    pub radios: Mutex<HashMap<String, (Duration, Vec<Track>)>>,
 }
 
 fn kind_name(k: Kind) -> &'static str {
@@ -94,8 +96,10 @@ impl Sources for Fake {
         std::thread::sleep(wait);
         answer.map(|url| Stream { url, size: 0, mime: "audio/wav".into(), kbps: 128 })
     }
-    fn radio(&self, _seed: &Track) -> Vec<Track> {
-        Vec::new()
+    fn radio(&self, seed: &Track) -> Vec<Track> {
+        let (wait, list) = self.radios.lock().unwrap().get(&seed.id).cloned().unwrap_or_default();
+        std::thread::sleep(wait);
+        list
     }
     fn lyrics(&self, _t: &Track) -> Lyrics {
         self.lyrics.lock().unwrap().clone().unwrap_or(Lyrics::None)
@@ -300,6 +304,21 @@ fn with_songs(q: &str, songs: Vec<Track>) -> (Controller, Arc<Fake>, Receiver<(C
     (c, fake, rx)
 }
 
+/// `songs` as a list that plays on through (a playlist named `q`, in that order): a search pick
+/// plays its radio instead (#47), so the queue's own tests take their songs from here.
+fn with_list(q: &str, songs: Vec<Track>) -> (Controller, Arc<Fake>, Receiver<(Change, Instant)>, ListRef) {
+    let (c, fake, rx) = with_songs(q, songs.clone());
+    let id = c.create_playlist(q, Some(&songs[0].key())).expect("a playlist for the test");
+    for t in &songs[1..] {
+        c.add_to_playlist(id, &t.key());
+    }
+    let end = Instant::now() + Duration::from_secs(5);
+    while c.playlist(id).is_none_or(|p| p.songs.len() < songs.len()) && Instant::now() < end {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    (c, fake, rx, ListRef::Playlist(id))
+}
+
 /// Waits (up to `secs`) until `ok` says yes.
 fn until(secs: f64, ok: impl Fn() -> bool) -> bool {
     let end = Instant::now() + Duration::from_secs_f64(secs);
@@ -319,8 +338,8 @@ fn now_id(c: &Controller) -> String {
 #[test]
 fn a_list_plays_and_moves_on() {
     let _l = setup();
-    let (c, _f, rx) = with_songs("files one", vec![wav("move-a", 1.5), wav("move-b", 1.5)]);
-    c.play_from(ListRef::Songs, 0, "yt:file-move-a");
+    let (c, _f, rx, list) = with_list("files one", vec![wav("move-a", 1.5), wav("move-b", 1.5)]);
+    c.play_from(list.clone(), 0, "yt:file-move-a");
     assert!(until(3.0, || c.now().playing), "never played");
     assert_eq!(now_id(&c), "file-move-a");
     assert!(wait_for(&rx, Change::Position, 2.0));
@@ -350,8 +369,8 @@ fn the_song_picked_last_wins() {
 fn a_song_that_wont_play_is_skipped_then_it_stops_after_three() {
     let _l = setup();
     let gone: Vec<Track> = (1..=4).map(|i| song(Source::YouTube, &format!("gone{i}"), &format!("Gone {i}"))).collect();
-    let (c, _f, rx) = with_songs("files three", gone);
-    c.play_from(ListRef::Songs, 0, "yt:gone1");
+    let (c, _f, rx, list) = with_list("files three", gone);
+    c.play_from(list.clone(), 0, "yt:gone1");
     let mut problems = 0;
     let end = Instant::now() + Duration::from_secs(6);
     while problems < 3 && Instant::now() < end {
@@ -451,8 +470,8 @@ fn art_files_are_cached_pngs() {
 #[test]
 fn next_while_picked_up_starts_the_next_song_from_its_start() {
     let _l = setup();
-    let (c, _f, _rx) = with_songs("files eight", vec![wav("picked-a", 6.0), wav("picked-b", 6.0)]);
-    c.play_from(ListRef::Songs, 0, "yt:file-picked-a");
+    let (c, _f, _rx, list) = with_list("files eight", vec![wav("picked-a", 6.0), wav("picked-b", 6.0)]);
+    c.play_from(list.clone(), 0, "yt:file-picked-a");
     // (A's own place: a song picked up from an earlier test can show one already)
     assert!(until(4.0, || now_id(&c) == "file-picked-a" && c.now().playing && c.now().at >= 1.6), "A never got to 1.6 s");
     c.quit();
@@ -473,8 +492,8 @@ fn next_while_picked_up_starts_the_next_song_from_its_start() {
 fn try_again_starts_over_after_three_failures() {
     let _l = setup();
     let gone: Vec<Track> = (1..=4).map(|i| song(Source::YouTube, &format!("again{i}"), &format!("Again {i}"))).collect();
-    let (c, _f, rx) = with_songs("files nine", gone);
-    c.play_from(ListRef::Songs, 0, "yt:again1");
+    let (c, _f, rx, list) = with_list("files nine", gone);
+    c.play_from(list.clone(), 0, "yt:again1");
     assert!(until(6.0, || c.problem().is_some_and(|p| p.retry)), "never stopped");
     assert_eq!(c.problem().unwrap().text, "3 songs in a row wouldn't play: its source didn't answer");
     while rx.try_recv().is_ok() {}
@@ -768,8 +787,8 @@ fn adding_twice_says_already_in() {
 fn queue_commands_follow_the_key() {
     let _g = setup();
     let songs = vec![wav("q-a", 30.0), wav("q-b", 30.0), wav("q-c", 30.0)];
-    let (c, _f, _rx) = with_songs("queue keys", songs.clone());
-    c.play_from(ListRef::Songs, 0, &songs[0].key());
+    let (c, _f, _rx, list) = with_list("queue keys", songs.clone());
+    c.play_from(list.clone(), 0, &songs[0].key());
     assert!(until(5.0, || now_id(&c) == "file-q-a"));
     let p = c.queue_panel();
     assert_eq!((p.start, p.now, p.rows.len()), (0, true, 3));
@@ -789,8 +808,8 @@ fn queue_commands_follow_the_key() {
 fn nothing_moves_above_the_song_playing() {
     let _g = setup();
     let songs = vec![wav("m-a", 30.0), wav("m-b", 30.0), wav("m-c", 30.0), wav("m-d", 30.0)];
-    let (c, _f, _rx) = with_songs("queue moves", songs.clone());
-    c.play_from(ListRef::Songs, 1, &songs[1].key());
+    let (c, _f, _rx, list) = with_list("queue moves", songs.clone());
+    c.play_from(list.clone(), 1, &songs[1].key());
     assert!(until(5.0, || now_id(&c) == "file-m-b"));
     c.move_in_queue(3, 0, &songs[3].key());
     std::thread::sleep(Duration::from_millis(400));
@@ -976,4 +995,42 @@ fn the_picked_music_folder_is_where_likes_go() {
     radiance_engine::settings::save(&s);
     radiance_engine::library::set_music_dir(None);
     assert_eq!(found, picked);
+}
+
+/// A song picked from Search plays, and Up next is its radio, not the other results (#47: as
+/// YouTube Music does); quietly, no radio toasts.
+#[test]
+fn a_search_pick_plays_its_radio_not_the_other_results() {
+    let _l = setup();
+    let (c, fake, rx) = with_songs("radio pick", vec![wav("radio-pick", 3.0), wav("other-result", 3.0), wav("another-result", 3.0)]);
+    fake.radios.lock().unwrap().insert("file-radio-pick".into(), (Duration::ZERO, vec![wav("like-it-one", 3.0), wav("like-it-two", 3.0)]));
+    c.play_from(ListRef::Songs, 0, "yt:file-radio-pick");
+    let end = Instant::now() + Duration::from_secs(5);
+    while c.queue().0.len() != 3 && Instant::now() < end {
+        wait_for(&rx, Change::Queue, 0.5);
+    }
+    let ids: Vec<String> = c.queue().0.iter().map(|t| t.id.clone()).collect();
+    assert_eq!(ids, ["file-radio-pick", "file-like-it-one", "file-like-it-two"]);
+    assert_eq!(c.queue().1, 0);
+    let mut said = Vec::new();
+    while let Some(t) = c.toast() {
+        said.push(t);
+    }
+    assert!(!said.iter().any(|t| t.contains("radio")), "{said:?}");
+    c.quit();
+}
+
+/// A search pick's radio that answers after another song was picked never takes over.
+#[test]
+fn a_late_radio_never_takes_over() {
+    let _l = setup();
+    let (c, fake, _rx) = with_songs("late radio", vec![wav("late-radio-pick", 3.0), wav("picked-after", 3.0)]);
+    fake.radios.lock().unwrap().insert("file-late-radio-pick".into(), (Duration::from_millis(600), vec![wav("late-like-it", 3.0)]));
+    c.play_from(ListRef::Songs, 0, "yt:file-late-radio-pick");
+    std::thread::sleep(Duration::from_millis(100));
+    c.play_from(ListRef::Songs, 1, "yt:file-picked-after");
+    std::thread::sleep(Duration::from_millis(1200));
+    assert_eq!(now_id(&c), "file-picked-after");
+    assert!(!c.queue().0.iter().any(|t| t.id == "file-late-like-it"), "{:?}", c.queue().0.iter().map(|t| t.id.clone()).collect::<Vec<_>>());
+    c.quit();
 }

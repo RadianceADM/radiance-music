@@ -1005,7 +1005,43 @@ impl Engine {
             self.play_current();
             return;
         }
+        if matches!(list, ListRef::Songs | ListRef::Lossless | ListRef::Mine) {
+            self.play_with_radio(tracks[i].clone());
+            return;
+        }
         self.play_list(tracks, i);
+    }
+
+    /// A song picked from Search: it plays now, and its radio fills Up next (#47, as YouTube
+    /// Music does: the other results aren't songs like it), quietly. A radio that answers after
+    /// another song was picked is dropped; songs added to the queue meanwhile stay before it.
+    fn play_with_radio(self: &Rc<Self>, seed: Track) {
+        *self.autoplay_for.borrow_mut() = Some(seed.key()); // its radio is coming: Autoplay needn't
+        self.play_list(vec![seed.clone()], 0);
+        let sources = self.shared.sources.clone();
+        let s = seed.clone();
+        self.bg(move || sources.radio(&s), move |e, list| {
+            if !e.current.borrow().as_ref().is_some_and(|c| c.key() == seed.key()) {
+                return;
+            }
+            let more: Vec<Track> = {
+                let q = e.queue.borrow();
+                list.into_iter()
+                    .filter(|x| x.key() != seed.key() && !x.same_song(&seed) && !e.often_skipped(x) && !q.iter().any(|t| t.key() == x.key()))
+                    .collect()
+            };
+            if more.is_empty() {
+                return;
+            }
+            e.queue.borrow_mut().extend(more);
+            e.publish_queue();
+            e.publish_now();
+            if e.ran_out.replace(false) {
+                e.skip(1); // the song ended while they were on their way: on to them
+            } else {
+                e.prefetch_next();
+            }
+        });
     }
 
     fn retry(self: &Rc<Self>) {

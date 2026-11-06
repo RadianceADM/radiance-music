@@ -715,8 +715,10 @@ fn quality_badge(t: &Track) -> gtk::Widget {
 /// Where a song is shown: what its menu offers, and what clicking it plays.
 #[derive(Clone)]
 enum Place {
-    /// Search results or the "For you" mix: plays on through that list.
+    /// Home's rows and History: plays on through that list.
     List(Rc<Vec<Track>>, usize),
+    /// A search result: plays, then its radio (#47, as YouTube Music: not the other results).
+    Search(Rc<Vec<Track>>, usize),
     Liked(Rc<Vec<Track>>, usize),
     /// A song in a playlist (its id), which plays on through it.
     Playlist(i64, Rc<Vec<Track>>, usize),
@@ -3844,7 +3846,7 @@ impl Ui {
         if !mine.is_empty() {
             let mine = Rc::new(mine);
             for (i, t) in mine.iter().enumerate() {
-                let row = self.track_row(t, Place::Liked(mine.clone(), i));
+                let row = self.track_row(t, Place::Search(mine.clone(), i));
                 self.in_liked.add(&row);
                 self.result_rows.borrow_mut().push((self.in_liked.clone(), row));
             }
@@ -3852,7 +3854,7 @@ impl Ui {
         let list: Rc<Vec<Track>> =
             Rc::new(lossless.unwrap_or_default().into_iter().chain(youtube.unwrap_or_default()).chain(videos.unwrap_or_default()).collect());
         for (i, t) in list.iter().enumerate() {
-            let row = self.track_row(t, Place::List(list.clone(), i));
+            let row = self.track_row(t, Place::Search(list.clone(), i));
             let group = if t.video {
                 &self.videos
             } else if t.lossless() {
@@ -3955,6 +3957,11 @@ impl Ui {
     fn play_from(self: &Rc<Self>, place: &Place) {
         match place {
             Place::List(list, i) | Place::Liked(list, i) | Place::Playlist(_, list, i) => self.play_list((**list).clone(), *i),
+            Place::Search(list, i) => {
+                if let Some(t) = list.get(*i) {
+                    self.play_with_radio(t.clone());
+                }
+            }
             Place::Server(list, i) => self.play_from_server(list, *i),
             Place::Queue(i) => {
                 self.leave_picked_up();
@@ -4004,7 +4011,7 @@ impl Ui {
 
     fn open_menu(self: &Rc<Self>, on: &gtk::Widget, place: &Place, at: Option<(f64, f64)>) {
         let track = match place {
-            Place::List(list, i) | Place::Liked(list, i) | Place::Playlist(_, list, i) | Place::Server(list, i) => list.get(*i).cloned(),
+            Place::List(list, i) | Place::Search(list, i) | Place::Liked(list, i) | Place::Playlist(_, list, i) | Place::Server(list, i) => list.get(*i).cloned(),
             Place::Queue(i) => self.queue.borrow().get(*i).cloned(),
             Place::Again(t) => Some(t.clone()),
             Place::Current => self.current.borrow().clone(),
@@ -4491,6 +4498,38 @@ impl Ui {
             self.recent_group.add(&row);
             self.recent_rows.borrow_mut().push(row);
         }
+    }
+
+    /// A song picked from Search: it plays now, and its radio fills Up next (#47, as YouTube
+    /// Music does: the other results aren't songs like it), quietly. A radio that answers after
+    /// another song was picked is dropped; songs added to the queue meanwhile stay before it.
+    fn play_with_radio(self: &Rc<Self>, seed: Track) {
+        *self.autoplay_for.borrow_mut() = Some(seed.key()); // its radio is coming: Autoplay needn't
+        self.play_list(vec![seed.clone()], 0);
+        let me = Rc::downgrade(self);
+        let s = seed.clone();
+        bg(move || mix::radio(&s), move |list| {
+            let Some(me) = me.upgrade() else { return };
+            if !me.current.borrow().as_ref().is_some_and(|c| c.key() == seed.key()) {
+                return;
+            }
+            let more: Vec<Track> = {
+                let q = me.queue.borrow();
+                list.into_iter()
+                    .filter(|x| x.key() != seed.key() && !x.same_song(&seed) && !often_skipped(x) && !q.iter().any(|t| t.key() == x.key()))
+                    .collect()
+            };
+            if more.is_empty() {
+                return;
+            }
+            me.queue.borrow_mut().extend(more);
+            me.queue_changed();
+            if me.ran_out.replace(false) {
+                me.skip(1); // the song ended while they were on their way: on to them
+            } else {
+                me.prefetch_next();
+            }
+        });
     }
 
     /// A song's radio: that song, then about 50 like it.
