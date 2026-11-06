@@ -4,6 +4,7 @@
 //! SPDX-License-Identifier: GPL-3.0-or-later
 
 pub mod guide;
+pub mod help_words;
 pub mod library;
 pub mod lyrics;
 pub mod menu;

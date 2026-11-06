@@ -318,6 +318,8 @@ impl MusicEngine {
     /// Starts the engine (the internet's real sources). Err when one runs already.
     #[uniffi::constructor]
     pub fn start(listener: Arc<dyn EngineListener>) -> Result<Arc<Self>, EngineError> {
+        // this process is the Windows beta: its own updates, version and log (stage 4a)
+        radiance_engine::update::set_beta(&beta_version());
         Self::with(listener, Arc::new(Real))
     }
 
@@ -1322,8 +1324,520 @@ impl MusicEngine {
     }
 }
 
+// ---------------------------------------------------------------------------------- stage 4a: the app's own parts
+
+#[derive(Clone, Debug, PartialEq, Eq, uniffi::Enum)]
+pub enum UpdateStepView {
+    None,
+    Out,
+    Downloading,
+    Ready,
+    Restarting,
+    Failed,
+}
+
+/// The update pop-up, its words ready to show (core::update_words, the GTK app's).
+#[derive(Clone, Debug, uniffi::Record)]
+pub struct UpdateView {
+    pub step: UpdateStepView,
+    /// How far the download is (0..1).
+    pub done: f64,
+    pub version: String,
+    /// The release's first four points.
+    pub bullets: Vec<String>,
+    pub asks: bool,
+    /// This copy can't put it on: the release's page instead.
+    pub page_only: bool,
+    pub page: String,
+    pub current: String,
+    pub title: String,
+    pub text: String,
+    /// The main button's words (Update Now (149 MB), Restart to Update, Try Again…).
+    pub main: String,
+    /// Under the download's bar ("75 MB of 150 MB").
+    pub progress: String,
+}
+
+fn update_view(u: &controller::UpdateState, playing: bool) -> UpdateView {
+    use radiance_core::update_words as w;
+    use radiance_engine::controller::UpdateStep as S;
+    let r = u.release.clone().unwrap_or_default();
+    let (step, done) = match &u.step {
+        S::None => (UpdateStepView::None, 0.0),
+        S::Out => (UpdateStepView::Out, 0.0),
+        S::Downloading(d) => (UpdateStepView::Downloading, *d),
+        S::Ready => (UpdateStepView::Ready, 1.0),
+        S::Restarting => (UpdateStepView::Restarting, 1.0),
+        S::Failed(_) => (UpdateStepView::Failed, 0.0),
+    };
+    let (title, text, main) = match &u.step {
+        S::None => (String::new(), String::new(), String::new()),
+        S::Out => (w::out_title(&r.version), w::OUT_NOTE.to_string(), w::update_now_label(r.size, u.page_only, false)),
+        S::Downloading(_) => (w::downloading_title(&r.version), w::DOWNLOADING_NOTE.to_string(), w::HIDE.to_string()),
+        S::Ready => (w::ready_title(&r.version), w::ready_text(playing, u.installer), w::RESTART.to_string()),
+        S::Restarting => (w::restarting_title(&r.version), w::RESTARTING_NOTE.to_string(), String::new()),
+        S::Failed(why) => (why.clone(), w::failed_text(&u.current), w::TRY_AGAIN.to_string()),
+    };
+    UpdateView {
+        step,
+        done,
+        bullets: r.bullets(4),
+        asks: u.asks,
+        page_only: u.page_only,
+        page: if r.page.is_empty() { "https://github.com/RadianceADM/radiance-music/releases/latest".into() } else { r.page.clone() },
+        current: u.current.clone(),
+        progress: w::downloading_words(r.size, done, false),
+        version: r.version,
+        title,
+        text,
+        main,
+    }
+}
+
+/// Report a Problem: what will be sent (None until read) and how sending went.
+#[derive(Clone, Debug, uniffi::Record)]
+pub struct ReportView {
+    pub ready: bool,
+    /// What will be sent, exactly as the dialog shows it.
+    pub what: String,
+    pub sending: bool,
+    /// Sent: its code ("RM-0042") and the words with it; or why not.
+    pub code: Option<String>,
+    pub sent_text: String,
+    pub failed: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, uniffi::Enum)]
+pub enum RateOutcomeView {
+    None,
+    Sent,
+    Failed,
+}
+
+/// The rating pop-up's state.
+#[derive(Clone, Debug, uniffi::Record)]
+pub struct RatingView {
+    pub due: bool,
+    pub account_name: Option<String>,
+    pub account_email: Option<String>,
+    /// "Sending as …" / "Send opens your browser…" (the Privacy link goes after it).
+    pub who: String,
+    pub busy: String,
+    /// The browser's sign-in address: the app opens it (once).
+    pub sign_in_url: Option<String>,
+    pub outcome: RateOutcomeView,
+    pub share: bool,
+    pub failed: String,
+}
+
+/// What the rating form sends.
+#[derive(Clone, Debug, uniffi::Record)]
+pub struct AnswerView {
+    pub enjoying: bool,
+    /// 1–5 each, in the five rows' order.
+    pub ratings: Vec<u8>,
+    pub comment: String,
+}
+
+/// A row of Storage's "Space used".
+#[derive(Clone, Debug, uniffi::Record)]
+pub struct StorageRowView {
+    pub title: String,
+    pub subtitle: String,
+    pub size: String,
+}
+
+#[derive(Clone, Debug, uniffi::Record)]
+pub struct StorageView {
+    pub folder: String,
+    pub counting: bool,
+    pub moving: bool,
+    /// "1.2 GB in your songs' folder" (Counting… while counting).
+    pub total: String,
+    pub rows: Vec<StorageRowView>,
+}
+
+fn storage_view(st: &controller::StorageState) -> StorageView {
+    use radiance_core::help_words as w;
+    use radiance_engine::storage::human;
+    let Some(u) = st.usage else {
+        return StorageView { folder: st.folder.clone(), counting: true, moving: st.moving, total: w::COUNTING.into(), rows: vec![] };
+    };
+    let row = |title: &str, sub: String, bytes: u64| StorageRowView { title: title.into(), subtitle: sub, size: human(bytes) };
+    let total = u.songs.bytes + u.videos.bytes + u.parts.bytes + u.extras.bytes;
+    StorageView {
+        folder: st.folder.clone(),
+        counting: false,
+        moving: st.moving,
+        total: w::space_total(&human(total)),
+        rows: vec![
+            row("Songs", format!("{} files", u.songs.files), u.songs.bytes),
+            row("Music videos", format!("{} files", u.videos.files), u.videos.bytes),
+            row("Split parts", format!("{} files (drums, bass, other, vocals; no vocals)", u.parts.files), u.parts.bytes),
+            row("Lyrics and covers", format!("{} files", u.extras.files), u.extras.bytes),
+            row("App data", "the database and cache".into(), u.app),
+            row("This computer's splitter", "Python and Demucs".into(), u.splitter),
+            row("Free on this drive", String::new(), u.free),
+        ],
+    }
+}
+
+#[derive(Clone, Debug, uniffi::Record)]
+pub struct ChipView {
+    pub text: String,
+    pub mine: bool,
+}
+
+#[derive(Clone, Debug, uniffi::Record)]
+pub struct GuideCardView {
+    pub icon: String,
+    pub title: String,
+    pub text: String,
+}
+
+#[derive(Clone, Debug, uniffi::Record)]
+pub struct NotesSectionView {
+    pub heading: String,
+    pub items: Vec<String>,
+}
+
+#[uniffi::export]
+impl MusicEngine {
+    pub fn update(&self) -> UpdateView {
+        update_view(&self.inner.update(), self.inner.now().playing)
+    }
+    pub fn look_for_updates(&self, asked: bool) {
+        self.inner.look_for_updates(asked);
+    }
+    pub fn update_now(&self) {
+        self.inner.update_now();
+    }
+    pub fn update_restart(&self) {
+        self.inner.update_restart();
+    }
+    pub fn update_later(&self) {
+        self.inner.update_later();
+    }
+    pub fn update_skip(&self) {
+        self.inner.update_skip();
+    }
+    pub fn update_cancel(&self) {
+        self.inner.update_cancel();
+    }
+
+    pub fn report(&self) -> ReportView {
+        use radiance_core::help_words as w;
+        let r = self.inner.report();
+        let what = r.gathered.as_ref().map(|g| w::report_what(&g.version, g.platform, &g.system, &g.install, &g.log)).unwrap_or_else(|| w::REPORT_READING.into());
+        let (code, failed) = match r.outcome {
+            Some(Ok(c)) => (Some(c), None),
+            Some(Err(e)) => (None, Some(e)),
+            None => (None, None),
+        };
+        ReportView { ready: r.gathered.is_some(), what, sending: r.sending, sent_text: code.as_deref().map(w::report_sent).unwrap_or_default(), code, failed }
+    }
+    pub fn report_gather(&self) {
+        self.inner.report_gather();
+    }
+    pub fn report_send(&self, note: String) {
+        self.inner.report_send(&note);
+    }
+
+    pub fn rating(&self) -> RatingView {
+        let r = self.inner.rating();
+        let (outcome, share, failed) = match &r.outcome {
+            Some(controller::RateOutcome::Sent { share }) => (RateOutcomeView::Sent, *share, String::new()),
+            Some(controller::RateOutcome::Failed(why)) => (RateOutcomeView::Failed, false, why.clone()),
+            None => (RateOutcomeView::None, false, String::new()),
+        };
+        RatingView {
+            due: r.due,
+            who: radiance_core::help_words::rate_who(r.account.as_ref().map(|(n, e)| (n.as_str(), e.as_str()))),
+            account_name: r.account.as_ref().map(|a| a.0.clone()),
+            account_email: r.account.as_ref().map(|a| a.1.clone()),
+            busy: r.busy,
+            sign_in_url: r.sign_in_url,
+            outcome,
+            share,
+            failed,
+        }
+    }
+    pub fn rating_shown(&self) {
+        self.inner.rating_shown();
+    }
+    pub fn rating_never(&self) {
+        self.inner.rating_never();
+    }
+    pub fn rate(&self, answer: AnswerView) {
+        let mut ratings = [3u8; 5];
+        for (i, n) in answer.ratings.iter().take(5).enumerate() {
+            ratings[i] = (*n).clamp(1, 5);
+        }
+        self.inner.rate(radiance_engine::feedback::Answer { enjoying: answer.enjoying, ratings, comment: answer.comment });
+    }
+    pub fn cancel_sign_in(&self) {
+        self.inner.cancel_sign_in();
+    }
+    pub fn sign_out(&self) {
+        self.inner.sign_out();
+    }
+
+    pub fn storage(&self) -> StorageView {
+        storage_view(&self.inner.storage())
+    }
+    pub fn storage_count(&self) {
+        self.inner.storage_count();
+    }
+    pub fn move_music(&self, to: String) {
+        self.inner.move_music(&to);
+    }
+
+    pub fn autoplay(&self) -> bool {
+        self.inner.autoplay()
+    }
+    pub fn set_autoplay(&self, on: bool) {
+        self.inner.set_autoplay(on);
+    }
+    pub fn guide_seen(&self) -> bool {
+        self.inner.guide_seen()
+    }
+    pub fn set_guide_seen(&self) {
+        self.inner.set_guide_seen();
+    }
+
+    pub fn network_changed(&self, available: bool) {
+        self.inner.network_changed(available);
+    }
+    pub fn suggest(&self, typed: String) {
+        self.inner.suggest(&typed);
+    }
+    pub fn suggestions(&self) -> Vec<ChipView> {
+        self.inner.suggestions().into_iter().map(|c| ChipView { text: c.text, mine: c.mine }).collect()
+    }
+}
+
+/// Storage's Change…: where the songs go for the folder picked, and the confirm's words.
+#[uniffi::export]
+pub fn storage_target(chosen: String) -> String {
+    radiance_engine::storage::target(std::path::Path::new(&chosen)).display().to_string()
+}
+
+#[uniffi::export]
+pub fn move_text(from: String, to: String) -> String {
+    radiance_core::words::move_text(&from, &to)
+}
+
+/// How to Use It's cards (the beta shows the first four until sharing comes: stage 4b).
+#[uniffi::export]
+pub fn guide_cards() -> Vec<GuideCardView> {
+    radiance_core::guide::CARDS.iter().map(|(icon, title, text)| GuideCardView { icon: (*icon).into(), title: (*title).into(), text: (*text).into() }).collect()
+}
+
+/// What's New: the beta's own CHANGELOG sections (the newest three), as built.
+#[uniffi::export]
+pub fn whats_new() -> Vec<NotesSectionView> {
+    radiance_core::release_notes::sections(include_str!("../../CHANGELOG.md"), "Windows beta", 3).into_iter().map(|(heading, items)| NotesSectionView { heading, items }).collect()
+}
+
+/// The stage-4a words the C# app shows (core's help_words, update_words, guide, words), in one call.
+#[derive(Clone, Debug, uniffi::Record)]
+pub struct HelpWords {
+    pub update_title: String,
+    pub keeps_playing: String,
+    pub remind_later: String,
+    pub skip_version: String,
+    pub cancel_download: String,
+    pub from_github: String,
+    pub look: String,
+    pub report_title: String,
+    pub report_intro: String,
+    pub report_heading: String,
+    pub report_what: String,
+    pub cancel: String,
+    pub send: String,
+    pub sending: String,
+    pub sent_title: String,
+    pub copy_code: String,
+    pub close: String,
+    pub rate_title: String,
+    pub rate_head: String,
+    pub rate_sub: String,
+    pub yes: String,
+    pub not_really: String,
+    pub rate_areas: Vec<String>,
+    pub rate_comment: String,
+    pub cancel_sign_in: String,
+    pub sign_out: String,
+    pub not_now: String,
+    pub dont_ask: String,
+    pub rate_choose: String,
+    pub privacy: String,
+    pub privacy_word: String,
+    pub thanks: String,
+    pub thanks_share: String,
+    pub thanks_plain: String,
+    pub share_app: String,
+    pub share_link: String,
+    pub share_toast: String,
+    pub done: String,
+    pub storage_title: String,
+    pub kept_group: String,
+    pub folder: String,
+    pub change: String,
+    pub open_folder: String,
+    pub space_group: String,
+    pub pick_folder: String,
+    pub move_title: String,
+    pub move_word: String,
+    pub offline: String,
+    pub offline_tip: String,
+    pub autoplay: String,
+    pub mine_tip: String,
+    pub guide_title: String,
+    pub guide_skip: String,
+    pub guide_next: String,
+    pub guide_start: String,
+    pub about: String,
+    pub app_name: String,
+    pub developer: String,
+    pub website: String,
+    pub issues: String,
+    pub copyright: String,
+    pub about_text: String,
+    pub credits_music: String,
+    pub credits_built: String,
+    pub sources: Vec<String>,
+    pub built_with: Vec<String>,
+    pub whats_new: String,
+    pub report_issue: String,
+}
+
+#[uniffi::export]
+pub fn help_words() -> HelpWords {
+    use radiance_core::{guide as g, help_words as h, update_words as u, words as w};
+    let pairs = |list: &[(&str, &str)]| list.iter().map(|(n, url)| format!("{n} {url}")).collect::<Vec<_>>();
+    HelpWords {
+        update_title: u::TITLE.into(),
+        keeps_playing: u::KEEPS_PLAYING.into(),
+        remind_later: u::REMIND_LATER.into(),
+        skip_version: u::SKIP_VERSION.into(),
+        cancel_download: u::CANCEL_DOWNLOAD.into(),
+        from_github: u::FROM_GITHUB.into(),
+        look: u::LOOK.into(),
+        report_title: h::REPORT_TITLE.into(),
+        report_intro: h::REPORT_INTRO.into(),
+        report_heading: h::REPORT_HEADING.into(),
+        report_what: h::REPORT_WHAT.into(),
+        cancel: h::CANCEL.into(),
+        send: h::SEND.into(),
+        sending: w::SENDING.into(),
+        sent_title: h::SENT_TITLE.into(),
+        copy_code: h::COPY_CODE.into(),
+        close: h::CLOSE.into(),
+        rate_title: h::RATE_TITLE.into(),
+        rate_head: h::RATE_HEAD.into(),
+        rate_sub: h::RATE_SUB.into(),
+        yes: h::YES.into(),
+        not_really: h::NOT_REALLY.into(),
+        rate_areas: h::RATE_AREAS.iter().map(|a| a.to_string()).collect(),
+        rate_comment: h::RATE_COMMENT.into(),
+        cancel_sign_in: h::CANCEL_SIGN_IN.into(),
+        sign_out: h::SIGN_OUT.into(),
+        not_now: h::NOT_NOW.into(),
+        dont_ask: h::DONT_ASK.into(),
+        rate_choose: h::RATE_CHOOSE.into(),
+        privacy: h::PRIVACY.into(),
+        privacy_word: h::PRIVACY_WORD.into(),
+        thanks: h::THANKS.into(),
+        thanks_share: h::THANKS_SHARE.into(),
+        thanks_plain: h::THANKS_PLAIN.into(),
+        share_app: h::SHARE_APP.into(),
+        share_link: h::SHARE_LINK.into(),
+        share_toast: h::SHARE_TOAST.into(),
+        done: h::DONE.into(),
+        storage_title: h::STORAGE_TITLE.into(),
+        kept_group: h::KEPT_GROUP.into(),
+        folder: h::FOLDER.into(),
+        change: h::CHANGE.into(),
+        open_folder: h::OPEN_FOLDER.into(),
+        space_group: h::SPACE_GROUP.into(),
+        pick_folder: h::PICK_FOLDER.into(),
+        move_title: w::MOVE_TITLE.into(),
+        move_word: w::MOVE.into(),
+        offline: h::OFFLINE.into(),
+        offline_tip: h::OFFLINE_TIP.into(),
+        autoplay: w::AUTOPLAY.into(),
+        mine_tip: radiance_core::suggest::MINE_TIP.into(),
+        guide_title: g::TITLE.into(),
+        guide_skip: g::SKIP.into(),
+        guide_next: g::NEXT.into(),
+        guide_start: g::START.into(),
+        about: h::ABOUT.into(),
+        app_name: h::APP_NAME.into(),
+        developer: h::DEVELOPER.into(),
+        website: h::WEBSITE.into(),
+        issues: h::ISSUES.into(),
+        copyright: h::COPYRIGHT.into(),
+        about_text: h::ABOUT_TEXT.into(),
+        credits_music: h::CREDITS_MUSIC.into(),
+        credits_built: h::CREDITS_BUILT.into(),
+        sources: pairs(&h::SOURCES),
+        built_with: pairs(&h::BUILT_WITH),
+        whats_new: h::WHATS_NEW.into(),
+        report_issue: h::REPORT_ISSUE.into(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
+
+    // ---- stage 4a
+
+    #[test]
+    fn the_update_pop_up_says_each_step_as_the_linux_app() {
+        use radiance_engine::controller::{UpdateState, UpdateStep};
+        let r = radiance_engine::update::Release { version: "0.8.0-beta.4".into(), notes: "- **One**\n- two\n- three\n- four\n- five".into(), size: 150_000_000, ..Default::default() };
+        let mut u = UpdateState { step: UpdateStep::Out, release: Some(r), asks: true, page_only: false, installer: true, current: "0.8.0-beta.3".into() };
+        let v = update_view(&u, false);
+        assert_eq!((v.step, v.title.as_str(), v.main.as_str()), (UpdateStepView::Out, "Radiance Music 0.8.0-beta.4 is out", "Update Now (150 MB)"));
+        assert_eq!(v.bullets, ["One", "two", "three", "four"]);
+        u.step = UpdateStep::Downloading(0.5);
+        assert_eq!(update_view(&u, false).progress, "75 MB of 150 MB");
+        u.step = UpdateStep::Ready;
+        assert!(update_view(&u, true).text.contains("and stops the music; the installer puts it on"));
+        u.step = UpdateStep::Failed("Couldn't update: stopped".into());
+        let f = update_view(&u, false);
+        assert_eq!((f.title.as_str(), f.text.as_str()), ("Couldn't update: stopped", "Nothing changed: you're still on 0.8.0-beta.3."));
+        assert!(update_view(&UpdateState::default(), false).page.contains("releases/latest"));
+    }
+
+    #[test]
+    fn storage_shows_the_linux_apps_rows() {
+        let mut st = radiance_engine::controller::StorageState { folder: "D:/Music/Radiance Music".into(), ..Default::default() };
+        let counting = storage_view(&st);
+        assert!(counting.counting && counting.total == "Counting…" && counting.rows.is_empty());
+        let mut u = radiance_engine::storage::Usage::default();
+        u.songs.files = 2;
+        u.songs.bytes = 2_000_000;
+        st.usage = Some(u);
+        let v = storage_view(&st);
+        assert_eq!(v.total, "2 MB in your songs' folder");
+        assert_eq!(v.rows.len(), 7);
+        assert_eq!((v.rows[0].title.as_str(), v.rows[0].subtitle.as_str()), ("Songs", "2 files"));
+        assert_eq!(v.rows[5].title, "This computer's splitter");
+    }
+
+    #[test]
+    fn the_guide_and_whats_new_come_from_core_and_the_changelog() {
+        assert_eq!(guide_cards().len(), 5);
+        assert_eq!(guide_cards()[0].title, "Search Any Song");
+        let notes = whats_new();
+        assert!(!notes.is_empty() && notes.iter().all(|n| n.heading.starts_with("Windows beta")), "{notes:?}");
+        assert_eq!(storage_target("D:/Songs".into()), std::path::Path::new("D:/Songs").join("Radiance Music").display().to_string());
+        let w = help_words();
+        assert_eq!((w.report_title.as_str(), w.rate_areas.len(), w.offline.as_str()), ("Report a Problem", 5, "Offline"));
+    }
+
     use super::*;
 
     #[test]

@@ -155,7 +155,7 @@ pub fn in_snap() -> bool {
     std::env::var_os("SNAP").is_some() && std::env::var("SNAP_NAME").is_ok_and(|n| n == "radiance-music")
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Release {
     pub version: String,
     /// The release's notes (GitHub's markdown).
