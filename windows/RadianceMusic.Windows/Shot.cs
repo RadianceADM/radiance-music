@@ -30,7 +30,7 @@ internal static class Shot
         if (dev.SplashAt.Count > 0 && window.Splash is { } splash)
         {
             var front = WinRT.Interop.WindowNative.GetWindowHandle(window);
-            Win32.SetForegroundWindow(front);
+            if (!dev.Hidden) Win32.SetForegroundWindow(front);
             foreach (var at in dev.SplashAt.OrderBy(a => a))
             {
                 while (splash.Elapsed < at && !splash.Finished) await Task.Delay(10);
@@ -59,7 +59,7 @@ internal static class Shot
         var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(window);
         if (dev.Acts.Count > 0) Crash.Note("shot: queue after the steps: " + window.SidePanel.Titles());
         if (dev.Acts.Count > 0) Crash.Note($"shot: playing at {App.Hub.Engine.Now().At:F1} s");
-        Win32.SetForegroundWindow(hwnd);
+        if (!dev.Hidden) Win32.SetForegroundWindow(hwnd);
         await Task.Delay(300);
         // opened in front, as a click on the bar's button does (over the page, the panel closes when the window loses focus)
         if (dev.Side != null)
@@ -81,16 +81,20 @@ internal static class Shot
 
     internal static async Task Save(nint hwnd, string path)
     {
+        var hidden = Program.Dev.Hidden;
         if (Win32.IsIconic(hwnd))
         {
             Crash.Note("shot: the window was minimized; restored");
-            Win32.ShowWindow(hwnd, 9); // SW_RESTORE
-            Win32.SetForegroundWindow(hwnd);
+            Win32.ShowWindow(hwnd, hidden ? 4 /* SW_SHOWNOACTIVATE */ : 9 /* SW_RESTORE */);
+            if (hidden) Win32.Behind(hwnd);
+            else Win32.SetForegroundWindow(hwnd);
             await Task.Delay(800);
         }
         Win32.GetWindowRect(hwnd, out var rect);
-        Crash.Note($"shot: window {rect.Right - rect.Left}x{rect.Bottom - rect.Top} at {rect.Left},{rect.Top}");
-        var bits = Win32.Grab(rect, out var w, out var h);
+        Crash.Note($"shot: window {rect.Right - rect.Left}x{rect.Bottom - rect.Top} at {rect.Left},{rect.Top}{(hidden ? " (hidden: PrintWindow)" : "")}");
+        // hidden: the window's own picture, behind whatever the owner has in front; else the screen where it is
+        int w, h;
+        var bits = hidden ? Win32.Print(hwnd, out w, out h) : Win32.Grab(rect, out w, out h);
         using var file = File.Create(path);
         var encoder = await BitmapEncoder.CreateAsync(BitmapEncoder.PngEncoderId, file.AsRandomAccessStream());
         encoder.SetPixelData(BitmapPixelFormat.Bgra8, BitmapAlphaMode.Ignore, (uint)w, (uint)h, 96, 96, bits);

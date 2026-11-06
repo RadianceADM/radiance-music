@@ -62,7 +62,17 @@ public partial class App : Application
         Window = new MainWindow(Hub);
         // the sunrise while it gets ready, as the Linux app's start (#55); not in screenshots unless asked
         if (Program.Dev.Shot == null || Program.Dev.SplashAt.Count > 0) Window.CoverWithSplash(Program.Dev.SplashAt.Count > 0);
-        Window.Activate();
+        if (Program.Dev.Hidden)
+        {
+            // a screenshot run: behind everything, no focus, not in the taskbar (the owner's PC stays his)
+            Window.AppWindow.IsShownInSwitchers = false;
+            Window.AppWindow.Show(false);
+            Win32.Behind(WinRT.Interop.WindowNative.GetWindowHandle(Window));
+        }
+        else
+        {
+            Window.Activate();
+        }
         Trace("window shown");
         var icon = Path.Combine(AppContext.BaseDirectory, "radiance-music.ico");
         tray = new Tray(Hub, icon);

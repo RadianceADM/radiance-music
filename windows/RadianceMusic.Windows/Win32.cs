@@ -68,6 +68,39 @@ internal static partial class Win32
     public static partial int GetDIBits(nint dc, nint bmp, uint start, uint lines, byte[] bits, ref BitmapInfoHeader info, uint usage);
 
     /// <summary>What's on screen inside `rect`, as top-down BGRA (the compositor's work included).</summary>
+    [LibraryImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static partial bool PrintWindow(nint hwnd, nint dc, uint flags);
+
+    [LibraryImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static partial bool SetWindowPos(nint hwnd, nint after, int x, int y, int cx, int cy, uint flags);
+
+    /// <summary>The window to the bottom of the stack, without activating it (the hidden screenshot runs).</summary>
+    public static void Behind(nint hwnd) => SetWindowPos(hwnd, 1 /* HWND_BOTTOM */, 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0010 /* NOSIZE | NOMOVE | NOACTIVATE */);
+
+    /// <summary>The window's own picture, even behind others (PrintWindow, PW_RENDERFULLCONTENT: its composition
+    /// and swapchains too), as BGRA rows.</summary>
+    public static byte[] Print(nint hwnd, out int w, out int h)
+    {
+        GetWindowRect(hwnd, out var rect);
+        w = rect.Right - rect.Left;
+        h = rect.Bottom - rect.Top;
+        var screen = GetDC(0);
+        var mem = CreateCompatibleDC(screen);
+        var bmp = CreateCompatibleBitmap(screen, w, h);
+        var old = SelectObject(mem, bmp);
+        PrintWindow(hwnd, mem, 2 /* PW_RENDERFULLCONTENT */);
+        SelectObject(mem, old);
+        var info = new BitmapInfoHeader { Size = Marshal.SizeOf<BitmapInfoHeader>(), Width = w, Height = -h, Planes = 1, BitCount = 32 };
+        var bits = new byte[w * h * 4];
+        GetDIBits(mem, bmp, 0, (uint)h, bits, ref info, 0);
+        DeleteObject(bmp);
+        DeleteDC(mem);
+        ReleaseDC(0, screen);
+        return bits;
+    }
+
     public static byte[] Grab(Rect rect, out int w, out int h)
     {
         w = rect.Right - rect.Left;

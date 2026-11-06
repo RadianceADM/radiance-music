@@ -55,7 +55,8 @@ internal static class SongMenu
 
     private static MenuFlyout Build(EngineHub hub, FrameworkElement row, string key, uint index, MenuPlace place, Action? play)
     {
-        var menu = new MenuFlyout();
+        // (a hidden screenshot run: the menu drawn inside the window, so its PrintWindow picture has it)
+        var menu = new MenuFlyout { ShouldConstrainToRootBounds = Program.Dev.Hidden };
         foreach (var section in hub.Engine.SongMenu(key, place))
         {
             if (menu.Items.Count > 0) menu.Items.Add(new MenuFlyoutSeparator());

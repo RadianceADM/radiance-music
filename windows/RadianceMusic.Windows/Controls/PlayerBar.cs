@@ -126,7 +126,7 @@ internal sealed class PlayerBar : Grid
         mute = Round(muteIcon, "Mute", ToggleMute);
         // the Mixer: a soft, rounded pop-up above the bar (owner, 2026-11-06), the sliders heard at once
         var mixer = new Mixer(hub);
-        mixerPopup = new Flyout { Content = mixer, Placement = Microsoft.UI.Xaml.Controls.Primitives.FlyoutPlacementMode.Top };
+        mixerPopup = new Flyout { Content = mixer, Placement = Microsoft.UI.Xaml.Controls.Primitives.FlyoutPlacementMode.Top, ShouldConstrainToRootBounds = Program.Dev.Hidden };
         var round = new Style(typeof(FlyoutPresenter));
         round.Setters.Add(new Setter(Control.CornerRadiusProperty, new CornerRadius(16)));
         round.Setters.Add(new Setter(Control.BorderThicknessProperty, new Thickness(0)));
