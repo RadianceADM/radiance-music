@@ -392,12 +392,20 @@ fn shared(t: &Track, server: &SplitServer, local: &LocalSplitter, file: &Path, e
     Ok(())
 }
 
+/// The pack's models beside its Python (…\windows-splitter\python\python.exe → …\windows-splitter\models), found
+/// wherever the settings point (a copy with a data folder of its own still runs the pack as installed).
+fn models_beside(python: &str) -> Option<PathBuf> {
+    let models = Path::new(python).parent()?.parent()?.join("models");
+    models.exists().then_some(models)
+}
+
 /// A command for this computer's splitter: at idle priority (whatever you're
 /// doing always goes first), on at most the cores you allow it (gauged
 /// 2026-10-27 on a 4-core laptop: 2 cores this way slow other apps by ~60 %).
 fn here(local: &LocalSplitter) -> Command {
     let threads = local.threads.to_string();
-    if let Some(models) = crate::setup::bundled_models() {
+    let models = crate::setup::bundled_models().or_else(|| if cfg!(windows) { models_beside(&local.python) } else { None });
+    if let Some(models) = models {
         // Windows: the installer's Python, at idle priority with no console window, its models
         // in the app's folder and never fetched
         let mut cmd = Command::new(&local.python);
@@ -662,6 +670,20 @@ pub fn align_on_server(t: &Track, server: &SplitServer, given: &serde_json::Valu
 
 #[cfg(test)]
 mod tests {
+    /// The splitter's models are found beside its own Python (the pack's folder), wherever the settings
+    /// point: a test copy with its own data folder ran the owner's pack without them (2026-11-07: MMS
+    /// fetched 1.26 GB into the test cache).
+    #[test]
+    fn the_models_beside_the_splitters_python() {
+        let dir = std::env::temp_dir().join(format!("rm-models-{}", std::process::id()));
+        let python = dir.join("windows-splitter").join("python").join("python.exe");
+        std::fs::create_dir_all(python.parent().unwrap()).unwrap();
+        assert_eq!(super::models_beside(python.to_str().unwrap()), None); // (none there yet)
+        std::fs::create_dir_all(dir.join("windows-splitter").join("models")).unwrap();
+        assert_eq!(super::models_beside(python.to_str().unwrap()), Some(dir.join("windows-splitter").join("models")));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     use super::*;
 
     /// The fast split (#43): a song asked for in two is split once Music and Vocals are there;
