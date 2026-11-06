@@ -4,8 +4,8 @@
 /// The sound heard now, as the player knows it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Heard<'a> {
-    /// A split song's four parts in the Mixer.
-    Parts,
+    /// A split song's parts in the Mixer: its four, or (`two`) Music and Vocals.
+    Parts { two: bool },
     /// A music video: its picture's height, its sound's bit rate (0: a saved file).
     Video { height: u32, kbps: u32 },
     /// One half of a two-part split (`voice`: "Vocals", "Music", …).
@@ -32,7 +32,8 @@ pub fn khz(rate: i32) -> String {
 /// The words for what's heard.
 pub fn text(h: Heard) -> String {
     match h {
-        Heard::Parts => "Mixer · its four parts".into(),
+        Heard::Parts { two: false } => "Mixer · its four parts".into(),
+        Heard::Parts { two: true } => "Mixer · Music and Vocals".into(),
         Heard::Video { height, kbps: 0 } => format!("Video · {height}p"),
         Heard::Video { height, kbps } => format!("Video · {height}p · Opus {kbps} kbps"),
         Heard::Half { voice, bits, rate } => format!("{voice} · split · {bits} · {}", khz(rate)),
@@ -51,7 +52,9 @@ mod tests {
 
     #[test]
     fn the_words_the_linux_app_says() {
-        assert_eq!(text(Heard::Parts), "Mixer · its four parts");
+        assert_eq!(text(Heard::Parts { two: false }), "Mixer · its four parts");
+        // (a song split in two plays both halves in the beta's Mixer; the Linux app plays one half file)
+        assert_eq!(text(Heard::Parts { two: true }), "Mixer · Music and Vocals");
         assert_eq!(text(Heard::Video { height: 720, kbps: 160 }), "Video · 720p · Opus 160 kbps");
         assert_eq!(text(Heard::Video { height: 720, kbps: 0 }), "Video · 720p");
         assert_eq!(text(Heard::Half { voice: "Vocals", bits: "16-bit", rate: 44_100 }), "Vocals · split · 16-bit · 44.1 kHz");

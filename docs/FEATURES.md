@@ -17,7 +17,7 @@ marked 🔜.
 |---|---|---|---|---|---|
 | Search songs: lossless (Internet Archive) first, YouTube Music after | ✅ | ✅ | ✅ | ✅ | |
 | A song played from Search plays, then songs like it (its radio) | ✅ | ✅ | ✅ | ✅ | as YouTube Music; before, the other search results played after it (#47) |
-| Search suggestions as you type | ✅ | ✅ | 🔜 3 | ✅ | |
+| Search suggestions as you type | ✅ | ✅ | 🔜 4 | ✅ | the engine has them (YouTube Music's); the beta's box shows them in stage 4 |
 | Genre tiles before you type | ✅ | ✅ | ✅ | ❌ | |
 | Made for you mix (songs like your most-played likes) | ✅ | ✅ | ✅ | ❌ | the phone's "Play your mix" shuffles your liked songs |
 | Home rows: recently played, liked songs | ✅ | ✅ | ✅ | ✅ | |
@@ -45,23 +45,24 @@ marked 🔜.
 | Starts on the first click (a stuck start is started again) | ✅ | ✅ | ✅ | ➖ | the computer's sound output could refuse a song; the phone's player doesn't |
 | "Loading…" while a song starts | ✅ | ✅ | ✅ | ✅ | the bar and Now Playing say it; the phone: a ring on the cover and the mini player |
 | The bar's song opens Now Playing | ✅ | ✅ | ✅ | ✅ | the phone's mini player |
+| Now Playing's background follows the beat (a kick swells it, bass flows it faster) | ✅ | ✅ | ✅ | 🔜 | #56; the phone: android#27; the beta's costs about 0.6 % of one core and rests when minimised |
 
 ## Mixer and splitting
 
 | Feature | Linux | Windows | Windows beta | Phone | Notes |
 |---|---|---|---|---|---|
-| Part sliders: Drums, Bass, Other, Vocals | ✅ | ✅ | 🔜 3 | ✅ | |
+| Part sliders: Drums, Bass, Other, Vocals | ✅ | ✅ | ✅ | ✅ | |
 | Two-part songs: Music and Vocals sliders | ✅ | ✅ | 🔜 3 | 🔜 | the phone's split (0.5.17, #43); on the computer, songs split before there were four parts |
-| Keeps the loudness when parts are turned down | ✅ | ✅ | 🔜 3 | ✅ | |
-| Low cut, High cut, Reverb (one setting, every song) | ✅ | ✅ | 🔜 3 | ✅ | built into the computer app since 0.7.14 |
-| Fast split in two (Music + Vocals, a few seconds) | ✅ | ✅ | 🔜 3 | 🔜 | computer: inside the app, no Python; the Split button asks "Music + Vocals (fast)" or "Four parts" (#43); phone: its only split (0.5.17) |
-| Split a song on this device | ✅ | ✅ | 🔜 3 | ✅ | computer: Python Demucs, 4 parts (no-Python version in testing, #31); phone: 2 parts (Music + Vocals) with Spleeter, about 16× real time (🔜 0.5.17, #43; Demucs before), 4 parts only from the computer or a server |
-| Liked songs are split by themselves | ✅ | ✅ | 🔜 3 | ❌ | the phone splits when you ask |
-| Split queue, pause / stop splitting | ✅ | ✅ | 🔜 3 | ✅ | |
-| Cores it may use | ✅ | ✅ | 🔜 3 | ✅ | |
+| Keeps the loudness when parts are turned down | ✅ | ✅ | ✅ | ✅ | |
+| Low cut, High cut, Reverb (one setting, every song) | ✅ | ✅ | ✅ | ✅ | built into the computer app since 0.7.14 |
+| Fast split in two (Music + Vocals, a few seconds) | ✅ | ✅ | ✅ | 🔜 | computer: inside the app, no Python; the Split button asks "Music + Vocals (fast)" or "Four parts" (#43); phone: its only split (0.5.17) |
+| Split a song on this device | ✅ | ✅ | ✅ | ✅ | computer: Python Demucs, 4 parts (no-Python version in testing, #31); phone: 2 parts (Music + Vocals) with Spleeter, about 16× real time (🔜 0.5.17, #43; Demucs before), 4 parts only from the computer or a server |
+| Liked songs are split by themselves | ✅ | ✅ | ✅ | ❌ | the phone splits when you ask |
+| Split queue, pause / stop splitting | ✅ | ✅ | ✅ | ✅ | |
+| Cores it may use | ✅ | ✅ | ✅ | ✅ | |
 | Pauses for low battery or heat | ➖ | ➖ | ➖ | ✅ | |
 | Split on a Radiance Music Server | ✅ | ✅ | 🔜 4 | ✅ | |
-| Six parts (piano, guitar) | off | off | 🔜 3 | off | songs already split in six play, piano and guitar follow Other |
+| Six parts (piano, guitar) | off | off | off | off | songs already split in six play, piano and guitar follow Other |
 
 ## Lyrics
 
@@ -71,11 +72,11 @@ marked 🔜.
 | Refuses another artist's lyrics | ✅ | ✅ | ✅ | ✅ | |
 | The sung line lit, tap a line to jump there | ✅ | ✅ | ✅ | ✅ | |
 | Word by word (each word lights as it's sung) | ✅ | ✅ | ✅ | ❌ | the phone lights whole lines |
-| Every word timed to the singing (MMS) | ✅ | ✅ | 🔜 3 | ❌ | |
+| Every word timed to the singing (MMS) | ✅ | ✅ | ✅ | ❌ | |
 | Hums light at a steady pace | ✅ | ✅ | ✅ | ➖ | only matters with word-by-word lyrics |
-| Lyrics editor (fix lines, tap timing, singers) | ✅ | ✅ | 🔜 3 | ❌ | |
-| Find Lyrics Again | ✅ | ✅ | 🔜 3 | ❌ | |
-| Comes back by itself when online again | ✅ | ✅ | 🔜 3 | ✅ | |
+| Lyrics editor (fix lines, tap timing, singers) | ✅ | ✅ | ✅ | ❌ | |
+| Find Lyrics Again | ✅ | ✅ | ✅ | ❌ | |
+| Comes back by itself when online again | ✅ | ✅ | ✅ | ✅ | |
 
 ## Saving and your library
 
@@ -112,7 +113,7 @@ marked 🔜.
 | Installs its own update | ✅ | ✅ | 🔜 4 | ✅ | Linux download / Flatpak / Windows installer / Android installer |
 | What's New | ✅ | ✅ | 🔜 4 | ✅ | |
 | How to Use It guide | ✅ | ✅ | 🔜 4 | ✅ | |
-| Start screen with first-open setup and progress | ✅ | ✅ | the sunrise ✅, setup 🔜 3 | ✅ | the beta has nothing to set up until splitting (stage 3) |
+| Start screen with first-open setup and progress | ✅ | ✅ | ✅ | ✅ | the beta: the sunrise holds while splitting gets ready, offline it offers Try Again or Open Radiance Music Now |
 | Looks: Stone, True Black | ✅ | ✅ | Windows' light/dark | ✅ | |
 | Offline sign, things retry when back online | ✅ | ✅ | Search's note ✅, retry 🔜 4 | ✅ | |
 | Report a problem: link to GitHub Issues | ✅ | ✅ | 🔜 4 | ✅ | |

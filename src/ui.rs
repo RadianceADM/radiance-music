@@ -5146,7 +5146,7 @@ impl Ui {
     fn update_quality(&self) {
         let Some(t) = self.current.borrow().clone() else { return };
         if self.player.borrow().as_ref().is_some_and(|p| p.hears_parts()) {
-            self.set_quality(Some(&quality::text(Heard::Parts)), false);
+            self.set_quality(Some(&quality::text(Heard::Parts { two: false })), false);
             if let Some(d) = self.player.borrow().as_ref().and_then(|p| p.duration()) {
                 self.seek.set_range(0.0, d.max(1.0));
                 self.len.set_label(&clock(d));

@@ -2429,7 +2429,8 @@ impl Engine {
         };
         let player = self.player.borrow();
         if player.as_ref().is_some_and(|p| p.hears_parts()) {
-            *self.quality.borrow_mut() = quality::text(Heard::Parts);
+            let two = player.as_ref().is_some_and(|p| p.two_parts());
+            *self.quality.borrow_mut() = quality::text(Heard::Parts { two });
             return;
         }
         let text = if player.as_ref().is_some_and(|p| p.is_video()) || (t.video && t.file.is_none()) {

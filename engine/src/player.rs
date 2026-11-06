@@ -1027,6 +1027,11 @@ impl Player {
     }
 
     /// The parts are what's heard (not the song's own file).
+    /// The parts at hand are a two-part split's (Music and Vocals), not the four.
+    pub fn two_parts(&self) -> bool {
+        self.stems.borrow().as_ref().is_some_and(|m| m.parts.contains_key("music"))
+    }
+
     pub fn hears_parts(&self) -> bool {
         self.stems.borrow().as_ref().is_some_and(|m| !m.whole_on.get())
     }
