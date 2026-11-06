@@ -6,6 +6,20 @@
 - **Sharing with the phone carries its two-part split:** a song the phone split in two (Music + Vocals, its new fast split) comes to the computer with both parts, and the computer sends a song's Music part along too. The computer's mixer plays two-part songs with two sliders (#43).
 - **Next right after opening starts the next song from its start:** with last time's song shown (picked up at its saved place), pressing Next, picking another song in the queue, Play again, or removing that song from the queue started the next one at the old song's place, and the first Pause then started it over (#46).
 
+## Windows beta 0.8.0-beta.2 — not released yet (#45, stage 2)
+
+The native Windows app (WinUI 3, Windows' own look) gets its library and the rest of playing:
+- **Liked Songs** with its own search, Play, Shuffle and the A to Z rail. The rail shrinks to fit a short window.
+- **History** by day.
+- **Albums, Artists and Genres** as tiles, and each one's songs.
+- **Playlists:** make one from a song's menu, add to it, rename it, delete it.
+- **Liking a song saves it** to the folder picked in Storage.
+- **A song's menu** on right-click: Play, Play Next, Add to Queue, Add to Playlist, Like, Song Radio, Go to Artist, Go to Album.
+- **The queue panel:** Played before, then the queue. Drag a song to move it, or remove it. Next to the page in a wide window, over it in a narrow one.
+- **Lyrics word by word:** each word lights as it's sung, the sung line grows into the middle, and a tap on a line goes there. The side panel has no Lyrics tab while Now Playing shows them.
+- **Music videos** where the cover goes, drawn by the graphics card, with fullscreen (F11, Esc, double-click). Switch between a song and its video, and the place is kept.
+- About 1 % of one core with lyrics on Now Playing, about 7 % with a music video.
+
 ## v0.7.19 — 2026-11-05
 
 - **Now Playing doesn't hold the processor any more (Windows lag, continued):** its moving background (the art flowing with the beat) drew itself 60 times a second, about a whole core on Windows. It draws 20 times a second now, still following every beat, and stands still while Radiance Music is behind another window or minimized. Home's lights already do the same since 0.7.18.
