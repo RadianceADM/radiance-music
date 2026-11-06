@@ -6,7 +6,9 @@
 # -Video FILE (beta): FILE playing alone in the beta's video check (--video-probe), in front, then minimized.
 # -PlayTitle WORDS (beta): Home's recent song with WORDS in its title instead of the first (a music video, say).
 # -Page NAME (beta): that page instead of Now Playing; -NoPlay: nothing played (the app idle).
-param([ValidateSet('beta', 'gtk')][string]$App = 'beta', [int]$Seconds = 60, [switch]$Short, [string]$Video = '', [string]$PlayTitle = '', [string]$Page = 'playing', [switch]$NoPlay)
+# The beta runs hidden (--behind: behind everything, no focus, never minimised over or restored in front of
+# the owner's work; his rule, 2026-11-06); -Front: in front, as before (only when he's away).
+param([ValidateSet('beta', 'gtk')][string]$App = 'beta', [int]$Seconds = 60, [switch]$Short, [string]$Video = '', [string]$PlayTitle = '', [string]$Page = 'playing', [switch]$NoPlay, [switch]$Front)
 $ErrorActionPreference = 'Stop'
 Add-Type @'
 using System; using System.Runtime.InteropServices; using System.Collections.Generic;
@@ -39,7 +41,8 @@ set RADIANCE_SILENT=1
 if ($App -eq 'beta') {
     $name = 'RadianceMusicBeta'
     $play = if ($NoPlay) { '' } elseif ($PlayTitle) { "--play-title `"$PlayTitle`"" } else { '--play-test' }
-    $cmd = "@echo off`r`n$data`r`nstart `"`" `"C:\rb\beta\dist\RadianceMusicBeta.exe`" $play --page $Page --size 1280x800"
+    $where = if ($Front) { '' } else { ' --behind' }
+    $cmd = "@echo off`r`n$data`r`nstart `"`" `"C:\rb\beta\dist\RadianceMusicBeta.exe`" $play --page $Page --size 1280x800$where"
     if ($Video) { $cmd = "@echo off`r`n$data`r`nstart `"`" `"C:\rb\beta\dist\RadianceMusicBeta.exe`" --video-probe `"$Video`" --size 1280x720" }
 } else {
     $name = 'radiance-music'
@@ -72,15 +75,19 @@ try {
     $p = Get-Process $name -ErrorAction SilentlyContinue | Where-Object { $before -notcontains $_.Id } | Sort-Object WorkingSet64 -Descending | Select-Object -First 1
     Write-Output "measuring $name, process $($p.Id), $([math]::Round($p.WorkingSet64 / 1MB)) MB"
     if (-not $p) { throw "$name didn't start" }
-    Cpu $p $(if ($Video) { 'a video in front' } elseif ($Page -ne 'playing') { "$Page in front" } else { 'Now Playing in front' })
+    $shown = if ($App -eq 'beta' -and -not $Front) { 'behind (hidden run)' } else { 'in front' }
+    Cpu $p $(if ($Video) { "a video $shown" } elseif ($Page -ne 'playing') { "$Page $shown" } else { "Now Playing $shown" })
     if ($App -eq 'gtk' -or $Short) { return }
     $h = [Win]::Find([uint32]$p.Id)
-    [Win]::ShowWindow($h, 6) | Out-Null   # SW_MINIMIZE
+    # (hidden: SW_SHOWMINNOACTIVE, nothing else gets or loses focus)
+    [Win]::ShowWindow($h, $(if ($Front -or $App -ne 'beta') { 6 } else { 7 })) | Out-Null   # SW_MINIMIZE
     Start-Sleep -Seconds 3
     Cpu $p 'minimized'
     if ($App -eq 'beta' -and -not $Video) {
-        [Win]::ShowWindow($h, 9) | Out-Null   # SW_RESTORE
-        Start-Sleep -Seconds 2
+        if ($Front) {
+            [Win]::ShowWindow($h, 9) | Out-Null   # SW_RESTORE
+            Start-Sleep -Seconds 2
+        }
         [Win]::PostMessage($h, 0x10, [IntPtr]::Zero, [IntPtr]::Zero) | Out-Null   # WM_CLOSE: playing, so it hides to the tray
         Start-Sleep -Seconds 3
         Cpu $p 'hidden to the tray'

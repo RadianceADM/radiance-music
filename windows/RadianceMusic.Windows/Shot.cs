@@ -69,12 +69,13 @@ internal static class Shot
             Crash.Note($"shot: side panel open on {dev.Side}: {window.SideState}");
         }
         await Save(hwnd, dev.Shot!);
-        Crash.Note("shot: saved " + dev.Shot);
+        Crash.Note("shot: saved " + dev.Shot + "; the beat: " + window.Beat);
         Crash.Note("shot: the lyrics column's time: " + Controls.LyricsColumn.Stats());
         if (dev.Again > 0)
         {
             await Task.Delay(TimeSpan.FromSeconds(dev.Again));
             await Save(hwnd, Path.ChangeExtension(dev.Shot!, null) + "-2.png");
+            Crash.Note("shot: saved the second; the beat: " + window.Beat);
         }
         App.Quit();
     }

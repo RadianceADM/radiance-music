@@ -71,7 +71,10 @@ public sealed class Dev
     public bool Front { get; private set; }
     /// <summary>--setup-act: the first start's download acted out (its steps, then offline), for the sunrise's checks.</summary>
     public bool SetupAct { get; private set; }
-    public bool Hidden => Shot != null && !Front;
+    /// <summary>--behind: started hidden (behind everything, no focus, not in the taskbar) without a screenshot:
+    /// measure-cpu.ps1's runs (the owner's PC stays his).</summary>
+    public bool Behind { get; private set; }
+    public bool Hidden => (Shot != null || Behind) && !Front;
     /// <summary>--splash-at 1.2,3.3: the start's sunrise in a --shot run too, drawn to FILE-splash-S.png at those seconds.</summary>
     public List<double> SplashAt { get; } = new();
 
@@ -92,6 +95,7 @@ public sealed class Dev
                 case "--video-probe": d.VideoProbe = Next(); break;
                 case "--side": d.Side = Next(); break;
                 case "--front": d.Front = true; break;
+                case "--behind": d.Behind = true; break;
                 case "--setup-act": d.SetupAct = true; break;
                 case "--splash-at":
                     foreach (var s in Next().Split(','))

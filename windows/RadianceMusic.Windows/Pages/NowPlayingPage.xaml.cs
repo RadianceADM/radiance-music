@@ -66,6 +66,8 @@ public sealed partial class NowPlayingPage : Page
         Pulse();
     }
 
+    internal string Beat => $"swell {Back.BeatNow.Swell:0.0000}, speed {Back.BeatNow.Speed:0.00}";
+
     private void Moment()
     {
         if (hub == null) return;

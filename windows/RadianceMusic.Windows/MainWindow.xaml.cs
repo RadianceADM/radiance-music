@@ -19,6 +19,9 @@ public sealed partial class MainWindow : Window
 
     /// <summary>The window can be seen (not minimised, not in the tray), and when that changes.</summary>
     internal bool Seen { get; private set; } = true;
+
+    /// <summary>Now Playing's beat now (the screenshots' check that the background follows it).</summary>
+    internal string Beat => Pages.Content is NowPlayingPage np ? np.Beat : "not on Now Playing";
     internal event Action? SeenChanged;
 
     private void Look()
