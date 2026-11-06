@@ -110,21 +110,13 @@ internal sealed class Splash : Grid
         sunGroup.IsHitTestVisible = false;
         Children.Add(sunGroup);
         // then the logo writes itself, in its own units
-        r = Stroke(LogoR, new SolidColorBrush(White), PenLineCap.Round);
-        leg = Stroke(LogoLeg, new LinearGradientBrush
-        {
-            MappingMode = BrushMappingMode.Absolute,
-            StartPoint = new Point(50.5, 0),
-            EndPoint = new Point(90.5, 0),
-            GradientStops = { new GradientStop { Color = White, Offset = 0 }, new GradientStop { Color = SunTop, Offset = 0.24 }, new GradientStop { Color = Orange, Offset = 1 } },
-        }, PenLineCap.Round);
-        tail = Stroke(LogoTail, new LinearGradientBrush
-        {
-            MappingMode = BrushMappingMode.Absolute,
-            StartPoint = new Point(90.5, 71),
-            EndPoint = new Point(100.5, 61),
-            GradientStops = { new GradientStop { Color = Orange, Offset = 0 }, new GradientStop { Color = WithAlpha(Orange, 0), Offset = 1 } },
-        }, PenLineCap.Flat);
+        r = Stroke(LogoR, PenLineCap.Round);
+        r.Stroke = new SolidColorBrush(White);
+        // a shape's brush counts from its own drawing's corner, not the logo's: each gradient moved there
+        leg = Stroke(LogoLeg, PenLineCap.Round);
+        leg.Stroke = Along(leg, new Point(50.5, 0), new Point(90.5, 0), (White, 0), (SunTop, 0.24), (Orange, 1));
+        tail = Stroke(LogoTail, PenLineCap.Flat);
+        tail.Stroke = Along(tail, new Point(90.5, 71), new Point(100.5, 61), (Orange, 0), (WithAlpha(Orange, 0), 1));
         logo.Children.Add(r);
         logo.Children.Add(leg);
         logo.Children.Add(tail);
@@ -147,10 +139,24 @@ internal sealed class Splash : Grid
     /// <summary>Everything's ready: the bars come to rest and the logo writes itself (once it has shown whole).</summary>
     public void Ready() => line.SetReady();
 
-    private static Microsoft.UI.Xaml.Shapes.Path Stroke(string data, Brush brush, PenLineCap cap)
+    /// <summary>A gradient from `from` to `to` in the logo's units, on `stroke` (moved to its drawing's corner).</summary>
+    private static LinearGradientBrush Along(Microsoft.UI.Xaml.Shapes.Path stroke, Point from, Point to, params (Color Color, double At)[] stops)
+    {
+        var corner = stroke.Data.Bounds;
+        var brush = new LinearGradientBrush
+        {
+            MappingMode = BrushMappingMode.Absolute,
+            StartPoint = new Point(from.X - corner.X, from.Y - corner.Y),
+            EndPoint = new Point(to.X - corner.X, to.Y - corner.Y),
+        };
+        foreach (var (color, at) in stops) brush.GradientStops.Add(new GradientStop { Color = color, Offset = at });
+        App.Trace($"splash: a stroke's corner at {corner.X:0.#},{corner.Y:0.#}");
+        return brush;
+    }
+
+    private static Microsoft.UI.Xaml.Shapes.Path Stroke(string data, PenLineCap cap)
     {
         var path = (Microsoft.UI.Xaml.Shapes.Path)XamlReader.Load($"<Path xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation' Data='{data}' />");
-        path.Stroke = brush;
         path.StrokeThickness = Pen;
         path.StrokeStartLineCap = cap;
         path.StrokeEndLineCap = cap;
