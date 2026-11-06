@@ -42,7 +42,7 @@ public sealed partial class MainWindow : Window
         Nav.ItemInvoked += (_, e) =>
         {
             if (e.InvokedItemContainer is NavigationViewItem { Tag: "new-playlist" }) Show("new-playlist");
-            if (e.InvokedItemContainer is NavigationViewItem { Tag: "splitting" }) _ = Dialogs.SplittingDialog.Open(hub, Content.XamlRoot);
+            if (e.InvokedItemContainer is NavigationViewItem { Tag: "splitting" }) { var opened = Dialogs.SplittingDialog.Open(hub, Content.XamlRoot); }
         };
         hub.Change += OnChange;
         Bar = new Controls.PlayerBar(hub);
