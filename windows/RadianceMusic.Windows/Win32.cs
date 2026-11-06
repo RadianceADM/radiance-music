@@ -81,7 +81,14 @@ internal static partial class Win32
     public static partial bool SetWindowPos(nint hwnd, nint after, int x, int y, int cx, int cy, uint flags);
 
     /// <summary>The window to the bottom of the stack, without activating it (the hidden screenshot runs).</summary>
-    public static void Behind(nint hwnd) => SetWindowPos(hwnd, 1 /* HWND_BOTTOM */, 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0010 /* NOSIZE | NOMOVE | NOACTIVATE */);
+    /// <summary>A hidden developer run's window: past the right edge of every screen (never seen, never clicked:
+    /// 2026-11-07, one behind the owner's windows still took a click meant for his own beta) and at the bottom;
+    /// PrintWindow still draws it there.</summary>
+    public static void Behind(nint hwnd) =>
+        SetWindowPos(hwnd, 1 /* HWND_BOTTOM */, GetSystemMetrics(76 /* SM_XVIRTUALSCREEN */) + GetSystemMetrics(78 /* SM_CXVIRTUALSCREEN */) + 200, 0, 0, 0, 0x0001 | 0x0010 /* NOSIZE | NOACTIVATE */);
+
+    [LibraryImport("user32.dll")]
+    private static partial int GetSystemMetrics(int index);
 
     /// <summary>The window's own picture, even behind others (PrintWindow, PW_RENDERFULLCONTENT: its composition
     /// and swapchains too), as BGRA rows.</summary>
