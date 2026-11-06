@@ -23,6 +23,9 @@ namespace RadianceMusic.Controls;
 /// is behind). Over the whole window; what's behind stays hidden (nothing laid out) until the logo is
 /// written, so nothing it does shows as a stutter. A click goes straight in once it's ready. Never there
 /// with animations off, or for screenshots (unless --splash-at). <see cref="SplashTimeline"/> says when.
+/// Held (splitting getting ready at the first start, stage 3, splash.rs hold/progress/offer), the sun plays on
+/// with what's being got ready and how far along under it (a soft 4 px track), and buttons near the bottom
+/// when it can't go on (offline: Try Again, or open the app now).
 /// </summary>
 internal sealed class Splash : Grid
 {
@@ -52,6 +55,13 @@ internal sealed class Splash : Grid
     private readonly CompositeTransform logoAt = new();
     private readonly Microsoft.UI.Xaml.Shapes.Path r, leg, tail;
     private readonly TextBlock name = new() { FontWeight = FontWeights.Bold, FontFamily = new FontFamily("Segoe UI Variable Display"), HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Top, IsHitTestVisible = false };
+    // what's being got ready first, and how far along (under the sun, while held); buttons when it can't
+    private readonly StackPanel progress = new() { Spacing = 10, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Top, IsHitTestVisible = false, Visibility = Visibility.Collapsed };
+    private readonly TextBlock progressText = new() { Foreground = new SolidColorBrush(WithAlpha(White, 0.8)), FontFamily = new FontFamily("Segoe UI Variable Text"), TextAlignment = TextAlignment.Center, TextWrapping = TextWrapping.Wrap, HorizontalAlignment = HorizontalAlignment.Center };
+    private readonly Grid track = new() { Height = 4, CornerRadius = new CornerRadius(2), Background = new SolidColorBrush(WithAlpha(White, 0.14)), HorizontalAlignment = HorizontalAlignment.Center };
+    private readonly Border trackFill = new() { CornerRadius = new CornerRadius(2), Background = new SolidColorBrush(Orange), HorizontalAlignment = HorizontalAlignment.Left };
+    private double progressDone;
+    private FrameworkElement? offered;
     private SpriteVisual? glow;
     private CompositionRadialGradientBrush? glowBrush;
     private readonly List<CompositionRadialGradientBrush> masks = new();
@@ -127,6 +137,10 @@ internal sealed class Splash : Grid
         name.Inlines.Add(new Run { Text = "Music", Foreground = new SolidColorBrush(Orange) });
         name.Opacity = 0;
         Children.Add(name);
+        track.Children.Add(trackFill);
+        progress.Children.Add(progressText);
+        progress.Children.Add(track);
+        Children.Add(progress);
         Tapped += (_, _) =>
         {
             line.Skip();
@@ -138,6 +152,49 @@ internal sealed class Splash : Grid
 
     /// <summary>Everything's ready: the bars come to rest and the logo writes itself (once it has shown whole).</summary>
     public void Ready() => line.SetReady();
+
+    /// <summary>The bars have begun to rest (too late to hold it).</summary>
+    public bool Settling => line.SettleFrom != null;
+
+    /// <summary>The app needs something first (the splitter, the first time): the sun keeps playing (with
+    /// <see cref="Progress"/>) until it's let go.</summary>
+    public void Hold() => line.Hold();
+
+    public void Release()
+    {
+        line.Release();
+        if (line.Holds > 0) return;
+        progress.Visibility = Visibility.Collapsed;
+        ClearOffer();
+    }
+
+    /// <summary>What's being got ready, and how far along (0..1), under the sun.</summary>
+    public void Progress(string what, double done)
+    {
+        progressText.Text = what;
+        progressDone = Math.Clamp(done, 0, 1);
+        progress.Visibility = Visibility.Visible;
+        Place();
+    }
+
+    /// <summary>Buttons under what's being got ready (offline, the first start had no way past the sunrise):
+    /// real buttons over the drawing, near the bottom.</summary>
+    public void Offer(FrameworkElement buttons)
+    {
+        ClearOffer();
+        buttons.HorizontalAlignment = HorizontalAlignment.Center;
+        buttons.VerticalAlignment = VerticalAlignment.Bottom;
+        buttons.Margin = new Thickness(0, 0, 0, 56);
+        offered = buttons;
+        Children.Add(buttons);
+    }
+
+    public void ClearOffer()
+    {
+        if (offered == null) return;
+        Children.Remove(offered);
+        offered = null;
+    }
 
     /// <summary>A gradient from `from` to `to` in the logo's units, on `stroke` (moved to its drawing's corner).</summary>
     private static LinearGradientBrush Along(Microsoft.UI.Xaml.Shapes.Path stroke, Point from, Point to, params (Color Color, double At)[] stops)
@@ -288,6 +345,16 @@ internal sealed class Splash : Grid
             var (y0, y1) = (At(0, SeaTop).Y, At(0, SeaBottom).Y);
             Put(seaFade, 0, y0, w, y1 - y0);
             Put(sea, 0, y1 - 0.5, w, h - y1 + 0.5);
+        }
+        // what's being got ready, under the sea's edge (the sun's foot), and how far along
+        if (progress.Visibility == Visibility.Visible)
+        {
+            var top = At(0, SeaBottom).Y + 12 * u;
+            progress.Margin = new Thickness(0, top, 0, 0);
+            progressText.FontSize = Math.Max(5 * u, 13);
+            progressText.MaxWidth = w * 0.8;
+            track.Width = Math.Min(w, h) * 0.36;
+            trackFill.Width = track.Width * progressDone;
         }
         // the logo writing itself: each stroke drawn so far along (a dash as long as the stroke, moved back)
         var (pr, pl, pt) = line.Strokes;

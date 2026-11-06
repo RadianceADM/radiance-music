@@ -2287,6 +2287,11 @@ impl Engine {
     /// Splitting set up at the first start, as the GTK app's get_splitter_ready: nothing to do when it's
     /// set up already (or its files are here: kept), and only Windows downloads its pack here.
     fn get_splitter_ready(self: &Rc<Self>) {
+        // RADIANCE_SETUP_TEST=act: the download acted out for screenshot checks (even with a splitter here)
+        if acted_setup() {
+            self.set_splitter_up();
+            return;
+        }
         if self.settings.borrow().local_split.is_some() {
             return;
         }
@@ -2321,6 +2326,9 @@ impl Engine {
                     shared.view(|v| v.setup = SetupState::Getting { step: step.to_string(), done });
                     shared.tell(Change::Setup);
                 };
+                if acted_setup() {
+                    return crate::setup::acted(&say, Duration::from_millis(900));
+                }
                 sources.install_splitter(threads, &say)
             },
             |e, result| match result {
@@ -3036,4 +3044,10 @@ mod tests {
     fn explorer_selects_a_path_with_spaces() {
         assert_eq!(super::explorer_select(r"C:\Music\Radiance Music\A B - Song.flac"), r#"/select,"C:\Music\Radiance Music\A B - Song.flac""#);
     }
+}
+
+/// RADIANCE_SETUP_TEST=act: the first start's download acted out (screenshot checks of the sunrise's
+/// progress and its offline buttons); the engine tests' RADIANCE_SETUP_TEST=1 runs the Fake's install.
+fn acted_setup() -> bool {
+    std::env::var("RADIANCE_SETUP_TEST").as_deref() == Ok("act")
 }

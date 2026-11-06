@@ -380,3 +380,35 @@ pub fn install(threads: u32, say: &(dyn Fn(&str, f64) + Send + Sync)) -> Result<
     say("Ready", 1.0);
     installed(threads).ok_or_else(|| "the install finished, but the splitter isn't there".into())
 }
+
+/// The first start's download acted out for screenshot checks (RADIANCE_SETUP_TEST=act; the Linux app's
+/// RADIANCE_SHOT_SETUP): its steps in turn, `pause` apart, then what offline looks like. Nothing is fetched
+/// or saved.
+pub fn acted(say: &(dyn Fn(&str, f64) + Send + Sync), pause: std::time::Duration) -> Result<LocalSplitter, String> {
+    let steps = ["Downloading PyTorch…", "Downloading Demucs…", "Downloading the splitting model (about 80 MB)…", "Downloading the word-timing model (about 1.2 GB)…", "Checking it works…"];
+    for (i, what) in steps.iter().enumerate() {
+        say(what, i as f64 / 6.0);
+        std::thread::sleep(pause);
+    }
+    Err("acted: Failed to establish a new connection: [Errno -3] Temporary failure in name resolution".into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Mutex;
+
+    /// The screenshot check's acted setup (RADIANCE_SETUP_TEST=act, as the Linux app's RADIANCE_SHOT_SETUP):
+    /// the download's steps, said in turn, then the failure being offline looks like.
+    #[test]
+    fn acted_setup_says_its_steps_then_is_offline() {
+        let said = Mutex::new(Vec::<(String, f64)>::new());
+        let result = acted(&|what: &str, done: f64| said.lock().unwrap().push((what.to_string(), done)), std::time::Duration::ZERO);
+        let said = said.into_inner().unwrap();
+        assert_eq!(said.len(), 5);
+        assert_eq!(said[0].0, "Downloading PyTorch…");
+        assert!(said.windows(2).all(|w| w[0].1 < w[1].1), "it moves along: {said:?}");
+        let why = result.expect_err("acted: it fails");
+        assert_eq!(radiance_core::trouble::why_not(&why, true).0, "you're offline");
+    }
+}

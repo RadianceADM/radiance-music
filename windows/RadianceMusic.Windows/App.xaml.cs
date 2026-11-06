@@ -1,5 +1,6 @@
 using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Controls;
 using RadianceMusic.Native;
 using Ffi = RadianceMusic.Native.Native;
 
@@ -12,6 +13,8 @@ public partial class App : Application
     private static Tray? tray;
     private static MediaKeys? keys;
     private static bool quitting;
+    /// <summary>The sunrise holds for the first start's download; let go (ready, or "Open Radiance Music Now").</summary>
+    private static bool holding, letGo;
 
     public App()
     {
@@ -57,6 +60,8 @@ public partial class App : Application
             return;
         }
         Ffi.ListenForOthers(new Others(ui));
+        // --setup-act: the first start's download acted out (screenshot checks of the sunrise's hold)
+        if (Program.Dev.SetupAct) Environment.SetEnvironmentVariable("RADIANCE_SETUP_TEST", "act");
         Hub = EngineHub.Start(ui);
         Trace("engine started");
         Window = new MainWindow(Hub);
@@ -80,12 +85,95 @@ public partial class App : Application
         Trace($"tray icon added: {tray.Added}; media keys: on");
         // ready: the engine runs on its own thread and the pages are built (the sun settles once it has shown)
         Window.Splash?.Ready();
+        // splitting getting ready at the first start: the sunrise holds, saying how far along (stage 3)
+        if (Window.Splash != null)
+        {
+            ShowSetup();
+            Hub.Change += kind =>
+            {
+                if (kind == ChangeKind.Setup) ShowSetup();
+            };
+        }
         if (Program.Dev.Shot != null) _ = Shot.TakeAsync(Window, Program.Dev);
         if (Program.Dev.PlayTest && Hub.Engine.Home().Recent is { Length: > 0 } recent)
         {
             var i = Program.Dev.PlayTitle is { } title ? Math.Max(0, Array.FindIndex(recent, s => s.Title.Contains(title, StringComparison.OrdinalIgnoreCase))) : 0;
             Hub.Engine.PlayFrom(ListKind.Recent, (uint)i, recent[i].Key);
         }
+    }
+
+    /// <summary>
+    /// The first start's download on the sunrise, as the Linux app's get_splitter_ready: held while it's
+    /// getting ready (what and how far along under the sun); offline or failed, it says why and offers Try
+    /// Again or Open Radiance Music Now (splitting then gets ready in the background); let go once it's ready.
+    /// </summary>
+    private static void ShowSetup()
+    {
+        if (letGo || Window?.Splash is not { } splash || splash.Finished) return;
+        var setup = Hub.Engine.Setup();
+        switch (setup.Kind)
+        {
+            case SetupKind.Getting or SetupKind.Offline or SetupKind.Failed:
+                if (!holding)
+                {
+                    if (splash.Settling) return; // (too late: the Splits tab and Splitting… say how it goes)
+                    splash.Hold();
+                    holding = true;
+                    Trace("splash: held for getting splitting ready");
+                }
+                var getting = setup.Kind == SetupKind.Getting;
+                splash.Progress(setup.Text, getting ? setup.Done : 0);
+                if (getting) splash.ClearOffer();
+                else splash.Offer(SetupButtons(splash));
+                break;
+            default:
+                if (!holding) return;
+                holding = false;
+                splash.Release();
+                Trace("splash: let go (splitting is ready, or not needed)");
+                break;
+        }
+    }
+
+    /// <summary>Under the sunrise when getting splitting ready failed: try again now, or open the app and let
+    /// it get ready in the background (as soon as it can). Pills, the second the suggested one.</summary>
+    private static StackPanel SetupButtons(Controls.Splash splash)
+    {
+        var w = Ffi.BetaWords();
+        var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 12 };
+        var again = new Button { Content = Labelled("\uE72C", w.TryAgain), CornerRadius = new CornerRadius(18), Padding = new Thickness(18, 8, 18, 8) };
+        again.Click += (_, _) =>
+        {
+            splash.ClearOffer();
+            Hub.Engine.RetrySetup();
+        };
+        var now = new Button
+        {
+            Content = Labelled("\uE768", w.OpenNow),
+            Style = (Style)Current.Resources["AccentButtonStyle"],
+            CornerRadius = new CornerRadius(18),
+            Padding = new Thickness(18, 8, 18, 8),
+        };
+        ToolTipService.SetToolTip(now, w.OpenNowNote);
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(now, w.OpenNow);
+        now.Click += (_, _) =>
+        {
+            letGo = true; // (the next try has no sunrise to report to)
+            holding = false;
+            splash.Release();
+            Trace("splash: opened now; splitting gets ready in the background");
+        };
+        row.Children.Add(again);
+        row.Children.Add(now);
+        return row;
+    }
+
+    private static StackPanel Labelled(string glyph, string text)
+    {
+        var p = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
+        p.Children.Add(new FontIcon { Glyph = glyph, FontSize = 14 });
+        p.Children.Add(new TextBlock { Text = text });
+        return p;
     }
 
     /// <summary>Developer runs (--shot, --play-test): each step of the start in the crash note.</summary>

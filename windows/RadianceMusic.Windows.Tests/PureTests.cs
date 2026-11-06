@@ -328,6 +328,37 @@ public class SplashTimelineTests
         At(line, 1.4, 1.4 + 0.35);
         Assert.Equal(0, line.Play, 3); // at rest
     }
+
+    /// <summary>Getting splitting ready at the first start (stage 3, splash.rs hold): the sun keeps playing,
+    /// past the 10 s too, until it's let go; then, ready, it settles at the next frame.</summary>
+    [Fact]
+    public void AHeldSunNeverSettles()
+    {
+        var line = new SplashTimeline();
+        line.Hold();
+        line.SetReady();
+        At(line, 0, 1.4, 10, 30);
+        Assert.Null(line.SettleFrom);
+        Assert.Equal(1, line.Play, 3); // still playing
+        line.Release();
+        At(line, 30.02);
+        Assert.Equal(30.02, line.SettleFrom);
+    }
+
+    [Fact]
+    public void AClickWhileHeldWaits()
+    {
+        var line = new SplashTimeline();
+        line.Hold();
+        line.SetReady();
+        At(line, 0, 2);
+        line.Skip();
+        Assert.Null(line.FadeFrom);
+        Assert.False(line.ContentShown);
+        line.Release();
+        line.Skip();
+        Assert.Equal(2, line.FadeFrom);
+    }
 }
 
 /// <summary>The Mixer's effects as the Linux app shows them (ui.rs fx_values / fx_tooltips): each slider off

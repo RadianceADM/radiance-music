@@ -69,6 +69,8 @@ public sealed class Dev
     /// <summary>--shot runs are hidden (owner, 2026-11-07: never over what he's doing): shown without focus, at the
     /// bottom, out of the taskbar and Alt-Tab, captured with PrintWindow. --front: the old way, in front.</summary>
     public bool Front { get; private set; }
+    /// <summary>--setup-act: the first start's download acted out (its steps, then offline), for the sunrise's checks.</summary>
+    public bool SetupAct { get; private set; }
     public bool Hidden => Shot != null && !Front;
     /// <summary>--splash-at 1.2,3.3: the start's sunrise in a --shot run too, drawn to FILE-splash-S.png at those seconds.</summary>
     public List<double> SplashAt { get; } = new();
@@ -90,6 +92,7 @@ public sealed class Dev
                 case "--video-probe": d.VideoProbe = Next(); break;
                 case "--side": d.Side = Next(); break;
                 case "--front": d.Front = true; break;
+                case "--setup-act": d.SetupAct = true; break;
                 case "--splash-at":
                     foreach (var s in Next().Split(','))
                         if (double.TryParse(s, System.Globalization.CultureInfo.InvariantCulture, out var at)) d.SplashAt.Add(at);

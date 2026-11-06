@@ -5,6 +5,8 @@ namespace RadianceMusic;
 /// and its bars play at least <see cref="ShownS"/>; once the app is ready (or after <see cref="LongestS"/>)
 /// they come to rest, the sun sets and the logo writes itself, the name under it; the app shows behind,
 /// and once it's been drawn the dark opens from the middle out. A click goes straight in once ready.
+/// Held (splitting getting ready at the first start, stage 3), the sun keeps playing, past the 10 s too,
+/// until each hold is let go.
 /// Seconds since the first frame; the Splash control draws what this says.
 /// </summary>
 public sealed class SplashTimeline
@@ -18,16 +20,22 @@ public sealed class SplashTimeline
     /// <summary>The window behind is shown (it's laid out while the logo stands still).</summary>
     public bool ContentShown { get; private set; }
     public bool Done { get; private set; }
+    /// <summary>What it waits for first (the first start's download): the sun plays on until each is let go.</summary>
+    public int Holds { get; private set; }
     /// <summary>Frames drawn since the window behind was shown (-1: not yet): it fades in once it's been drawn twice.</summary>
     private int shownFrames = -1;
 
     public void SetReady() => Ready = true;
 
+    public void Hold() => Holds++;
+
+    public void Release() => Holds = Math.Max(0, Holds - 1);
+
     /// <summary>A frame, `t` seconds after the first.</summary>
     public void Frame(double t)
     {
         T = t;
-        if (SettleFrom == null && ((Ready && t >= ShownS) || t >= LongestS)) SettleFrom = t;
+        if (SettleFrom == null && Holds == 0 && ((Ready && t >= ShownS) || t >= LongestS)) SettleFrom = t;
         if (SettleFrom is { } s && FadeFrom == null)
         {
             var written = s + SettleS + WriteS + WrittenS;
@@ -41,7 +49,7 @@ public sealed class SplashTimeline
     /// <summary>A click: once ready, straight into the app (the dark opens now).</summary>
     public void Skip()
     {
-        if (!Ready || FadeFrom != null) return;
+        if (!Ready || Holds > 0 || FadeFrom != null) return;
         ShowContent();
         FadeFrom = T;
     }
