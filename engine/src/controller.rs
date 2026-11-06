@@ -1544,7 +1544,14 @@ impl Engine {
         self.bg(
             {
                 let id = id.clone();
-                move || sources.video_streams(&id).map(|(v, a)| (relay.add(v.url, v.size, v.mime), v.kbps, relay.add(a.url, a.size, a.mime), a.kbps))
+                move || {
+                    let found = sources.video_streams(&id);
+                    match &found {
+                        Ok((v, a)) => crate::log::note(&format!("music video {id}: {} {}p ({} bytes) + {} ({} bytes)", v.mime, v.kbps, v.size, a.mime, a.size)),
+                        Err(e) => crate::log::note(&format!("music video {id}: {e}")),
+                    }
+                    found.map(|(v, a)| (relay.add(v.url, v.size, v.mime), v.kbps, relay.add(a.url, a.size, a.mime), a.kbps))
+                }
             },
             move |e, found| match found {
                 Ok((picture, height, sound, kbps)) => {
