@@ -946,6 +946,20 @@ impl Controller {
         self.shared.view(|v| v.splits.clone())
     }
 
+    /// Every song with a split mark now: waiting (its place), being split, or split while the app runs.
+    pub fn split_marks(&self) -> HashMap<String, SplitMark> {
+        self.shared.view(|v| {
+            let mut m: HashMap<String, SplitMark> = v.split_done.clone();
+            for (i, t) in v.splits.waiting.iter().chain(v.splits.two_waiting.iter()).enumerate() {
+                m.insert(t.key(), SplitMark::Waiting(i + 1));
+            }
+            for t in v.splits.now.iter().map(|(t, _)| t).chain(v.splits.two_now.iter()) {
+                m.insert(t.key(), SplitMark::Splitting);
+            }
+            m
+        })
+    }
+
     /// A song's split mark (its row): waiting, being split, or split while the app runs.
     pub fn split_mark(&self, key: &str) -> SplitMark {
         self.shared.view(|v| {

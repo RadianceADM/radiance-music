@@ -123,6 +123,8 @@ pub struct SongView {
     pub subtitle: String,
     pub plays: u32,
     pub counts: String,
+    /// Its split mark (stage 3): waiting (its place in line), being split, split in two or four.
+    pub split: SplitMarkView,
 }
 
 impl From<&Track> for SongView {
@@ -138,6 +140,7 @@ impl From<&Track> for SongView {
             lossless: t.lossless(),
             video: t.video,
             liked: false,
+            split: SplitMarkView::None,
             saved: if t.file.is_some() { SavedState::Saved } else { SavedState::NotSaved },
             subtitle: t.byline(),
             plays: 0,
@@ -189,6 +192,8 @@ pub struct NowView {
     pub quality: String,
     /// Picked and not playing yet (#55).
     pub loading: bool,
+    /// The Mixer (stage 3).
+    pub mix: MixView,
 }
 
 /// What went wrong; `retry`: it stopped (show Try Again).
@@ -388,6 +393,7 @@ impl MusicEngine {
             has_counterpart: n.has_counterpart,
             quality: n.quality,
             loading: n.loading,
+            mix: mix_view(&n.mix),
         }
     }
 
@@ -673,11 +679,13 @@ pub struct LitView {
 struct Rows {
     liked: HashMap<String, Saved>,
     counts: HashMap<String, (usize, usize)>,
+    /// The engine's split marks now (the queue, and songs split while it runs).
+    marks: HashMap<String, controller::SplitMark>,
 }
 
 impl Rows {
     fn of(c: &Controller) -> Rows {
-        Rows { liked: c.liked().into_iter().map(|(t, s)| (t.key(), s)).collect(), counts: c.counts() }
+        Rows { liked: c.liked().into_iter().map(|(t, s)| (t.key(), s)).collect(), counts: c.counts(), marks: c.split_marks() }
     }
 
     fn song(&self, t: &Track) -> SongView {
@@ -691,6 +699,13 @@ impl Rows {
         let (plays, skips) = self.counts.get(&key).copied().unwrap_or_default();
         v.plays = plays as u32;
         v.counts = counts_text(plays, skips);
+        // split before this run: its files say (Vocals, then Drums: in four), saved songs only
+        let mark = self.marks.get(&key).copied().or_else(|| {
+            t.file.as_ref()?;
+            radiance_engine::split::ready_part(t, "vocals")?;
+            Some(if radiance_engine::split::ready_part(t, "drums").is_some() { controller::SplitMark::Four } else { controller::SplitMark::Two })
+        });
+        v.split = mark.map(SplitMarkView::from).unwrap_or(SplitMarkView::None);
         v
     }
 
@@ -956,6 +971,259 @@ pub fn listen_for_others(on_show: Arc<dyn ShowListener>) {
     radiance_engine::one_copy::listen(move |link| on_show.show(link));
 }
 
+
+// ---------------------------------------------------------------------------------- stage 3: parts, splitting, lyrics, the beat
+
+/// A song's split mark on its row.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, uniffi::Enum)]
+pub enum SplitMarkView {
+    None,
+    Waiting { place: u32 },
+    Splitting,
+    Two,
+    Four,
+}
+
+impl From<controller::SplitMark> for SplitMarkView {
+    fn from(m: controller::SplitMark) -> Self {
+        match m {
+            controller::SplitMark::None => SplitMarkView::None,
+            controller::SplitMark::Waiting(n) => SplitMarkView::Waiting { place: n as u32 },
+            controller::SplitMark::Splitting => SplitMarkView::Splitting,
+            controller::SplitMark::Two => SplitMarkView::Two,
+            controller::SplitMark::Four => SplitMarkView::Four,
+        }
+    }
+}
+
+/// The voice buttons: the song, No vocals, Vocals only.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, uniffi::Enum)]
+pub enum VoiceMode {
+    Song,
+    NoVocals,
+    VocalsOnly,
+}
+
+impl From<radiance_core::mix::Voice> for VoiceMode {
+    fn from(v: radiance_core::mix::Voice) -> Self {
+        match v {
+            radiance_core::mix::Voice::Song => VoiceMode::Song,
+            radiance_core::mix::Voice::NoVocals => VoiceMode::NoVocals,
+            radiance_core::mix::Voice::VocalsOnly => VoiceMode::VocalsOnly,
+        }
+    }
+}
+
+impl From<VoiceMode> for radiance_core::mix::Voice {
+    fn from(v: VoiceMode) -> Self {
+        match v {
+            VoiceMode::Song => radiance_core::mix::Voice::Song,
+            VoiceMode::NoVocals => radiance_core::mix::Voice::NoVocals,
+            VoiceMode::VocalsOnly => radiance_core::mix::Voice::VocalsOnly,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, uniffi::Record)]
+pub struct PartView {
+    pub name: String,
+    /// Its title on the Mixer's row ("Drums", "Music"…).
+    pub title: String,
+    pub gain: f64,
+}
+
+/// The Mixer: the song's parts (none: not split), the voice button, the effects, its parts loaded.
+#[derive(Clone, Debug, PartialEq, uniffi::Record)]
+pub struct MixView {
+    pub parts: Vec<PartView>,
+    pub voice: VoiceMode,
+    pub low_cut: f64,
+    pub high_cut: f64,
+    pub reverb: f64,
+    pub plays_parts: bool,
+}
+
+fn mix_view(m: &controller::MixState) -> MixView {
+    MixView {
+        parts: m.parts.iter().map(|(name, gain)| PartView { name: name.clone(), title: radiance_core::mix::part_title(name).to_string(), gain: *gain }).collect(),
+        voice: m.voice.into(),
+        low_cut: m.effects.low_cut,
+        high_cut: m.effects.high_cut,
+        reverb: m.effects.reverb,
+        plays_parts: m.plays_parts,
+    }
+}
+
+#[derive(Clone, Debug, uniffi::Record)]
+pub struct PartLevelView {
+    pub name: String,
+    pub level: f64,
+}
+
+/// The song being split, how far, and at what (core's words: "Splitting · 40%"…).
+#[derive(Clone, Debug, uniffi::Record)]
+pub struct SplitNowView {
+    pub song: SongView,
+    pub done: f64,
+    pub phase: String,
+}
+
+/// The Splits tab.
+#[derive(Clone, Debug, uniffi::Record)]
+pub struct SplitsView {
+    pub now: Option<SplitNowView>,
+    pub waiting: Vec<SongView>,
+    pub two_now: Option<SongView>,
+    pub two_waiting: Vec<SongView>,
+    pub paused: bool,
+    pub can_split: bool,
+    pub can_split_two: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, uniffi::Enum)]
+pub enum SetupKind {
+    NotNeeded,
+    Getting,
+    Offline,
+    Failed,
+    Ready,
+}
+
+/// Getting splitting ready at the first start: what's happening (core's words), how far, why it stopped.
+#[derive(Clone, Debug, uniffi::Record)]
+pub struct SetupView {
+    pub kind: SetupKind,
+    pub text: String,
+    pub done: f64,
+    pub why: String,
+}
+
+/// "Cores it may use": now, this computer's, and the dialog's words.
+#[derive(Clone, Debug, uniffi::Record)]
+pub struct CoresView {
+    pub now: u32,
+    pub max: u32,
+    pub title: String,
+    pub note: String,
+}
+
+/// A lyrics editor row: its start (none: not set), its words, who sings it.
+#[derive(Clone, Debug, PartialEq, uniffi::Record)]
+pub struct EditedLineView {
+    pub at: Option<f64>,
+    pub text: String,
+    pub singer: Option<String>,
+}
+
+#[derive(Clone, Debug, uniffi::Record)]
+pub struct LyricsEditView {
+    pub rows: Vec<EditedLineView>,
+    /// Who can sing a line: the song's artists, and anyone already named.
+    pub names: Vec<String>,
+}
+
+fn edited_rows(v: Vec<EditedLineView>) -> Vec<(Option<f64>, String, Option<String>)> {
+    v.into_iter().map(|r| (r.at, r.text, r.singer)).collect()
+}
+
+/// The song's beat for the background: how hard each moment hits and how much bass, `fps` a second
+/// from `offset` seconds.
+#[derive(Clone, Debug, uniffi::Record)]
+pub struct PulseView {
+    pub key: String,
+    pub fps: f64,
+    pub offset: f64,
+    pub level: Vec<f32>,
+    pub bass: Vec<f32>,
+}
+
+#[uniffi::export]
+impl MusicEngine {
+    // the Mixer
+    pub fn set_part(&self, name: String, gain: f64) {
+        self.inner.set_part(&name, gain);
+    }
+    pub fn reset_mix(&self) {
+        self.inner.reset_mix();
+    }
+    pub fn set_voice(&self, voice: VoiceMode) {
+        self.inner.set_voice(voice.into());
+    }
+    pub fn set_effects(&self, low_cut: f64, high_cut: f64, reverb: f64) {
+        self.inner.set_effects(radiance_engine::effects::Sound { low_cut, high_cut, reverb });
+    }
+    /// Each part's loudness now (the meters, while the Mixer is open).
+    pub fn part_levels(&self) -> Vec<PartLevelView> {
+        self.inner.part_levels().into_iter().map(|(name, level)| PartLevelView { name, level }).collect()
+    }
+
+    // splitting
+    pub fn split(&self, key: String, two: bool) {
+        self.inner.split(&key, two);
+    }
+    pub fn set_split_paused(&self, on: bool) {
+        self.inner.set_split_paused(on);
+    }
+    pub fn splits(&self) -> SplitsView {
+        let s = self.inner.splits();
+        let rows = Rows::of(&self.inner);
+        SplitsView {
+            now: s.now.map(|(t, p)| SplitNowView { song: rows.song(&t), done: p.code().max(0.0), phase: radiance_core::words::split_progress(p.code()) }),
+            waiting: rows.songs(&s.waiting),
+            two_now: s.two_now.as_ref().map(|t| rows.song(t)),
+            two_waiting: rows.songs(&s.two_waiting),
+            paused: s.paused,
+            can_split: s.can_split,
+            can_split_two: s.can_split_two,
+        }
+    }
+    pub fn split_mark(&self, key: String) -> SplitMarkView {
+        self.inner.split_mark(&key).into()
+    }
+    pub fn setup(&self) -> SetupView {
+        use controller::SetupState as S;
+        use radiance_core::words;
+        match self.inner.setup() {
+            S::NotNeeded => SetupView { kind: SetupKind::NotNeeded, text: String::new(), done: 0.0, why: String::new() },
+            S::Getting { step, done } => SetupView { kind: SetupKind::Getting, text: if step.is_empty() { words::SETUP_GETTING.to_string() } else { words::setup_step(&step) }, done, why: String::new() },
+            S::Offline => SetupView { kind: SetupKind::Offline, text: words::SETUP_OFFLINE.to_string(), done: 0.0, why: String::new() },
+            S::Failed { why } => SetupView { kind: SetupKind::Failed, text: words::SETUP_RETRY.to_string(), done: 0.0, why },
+            S::Ready => SetupView { kind: SetupKind::Ready, text: String::new(), done: 1.0, why: String::new() },
+        }
+    }
+    pub fn retry_setup(&self) {
+        self.inner.retry_setup();
+    }
+    pub fn set_split_cores(&self, n: u32) {
+        self.inner.set_split_cores(n);
+    }
+    pub fn split_cores(&self) -> CoresView {
+        let (now, max) = self.inner.split_cores();
+        CoresView { now, max, title: radiance_core::words::CORES_TITLE.to_string(), note: radiance_core::words::cores_note(max) }
+    }
+
+    // lyrics
+    pub fn find_lyrics_again(&self, key: String) {
+        self.inner.find_lyrics_again(&key);
+    }
+    pub fn save_lyrics(&self, key: String, rows: Vec<EditedLineView>) {
+        self.inner.save_lyrics(&key, edited_rows(rows));
+    }
+    /// The editor's rows and singer names (looked up when needed: call it off the UI thread).
+    pub fn lyrics_text(&self, key: String) -> Option<LyricsEditView> {
+        self.inner.lyrics_text(&key).map(|(rows, names)| LyricsEditView { rows: rows.into_iter().map(|(at, text, singer)| EditedLineView { at, text, singer }).collect(), names })
+    }
+    /// Show Lyrics: the lines' words (off the UI thread too).
+    pub fn show_lyrics(&self, key: String) -> String {
+        self.inner.lyrics_text(&key).map(|(rows, _)| rows.into_iter().map(|r| r.1).collect::<Vec<_>>().join("\n")).unwrap_or_default()
+    }
+
+    // the beat (#56)
+    pub fn pulse(&self) -> Option<PulseView> {
+        self.inner.pulse().map(|(key, p)| PulseView { key, fps: p.fps, offset: p.offset, level: p.level.clone(), bass: p.bass.clone() })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -989,6 +1257,35 @@ mod tests {
         let v = results_view(r, false, &rows);
         assert!(v.mine[0].liked, "a liked song found in Search");
         assert!(v.songs.unwrap()[0].liked);
+    }
+
+    #[test]
+    fn the_mix_view_names_the_parts_in_the_linux_words() {
+        let m = controller::MixState { parts: vec![("drums".into(), 1.0), ("vocals".into(), 0.3)], voice: radiance_core::mix::Voice::NoVocals, effects: radiance_engine::effects::Sound::OFF, plays_parts: true };
+        let v = mix_view(&m);
+        assert_eq!(v.parts.iter().map(|p| p.title.as_str()).collect::<Vec<_>>(), ["Drums", "Vocals"]);
+        assert_eq!(v.parts[1].gain, 0.3);
+        assert_eq!(v.voice, VoiceMode::NoVocals);
+        assert_eq!((v.low_cut, v.high_cut, v.reverb), (20.0, 20000.0, 0.0));
+        assert!(v.plays_parts);
+    }
+
+    #[test]
+    fn split_marks_reach_the_rows() {
+        use radiance_engine::track::Source;
+        let t = Track { source: Source::YouTube, id: "sm".into(), title: "Marked".into(), artist: "Ann".into(), album: String::new(), seconds: 200, art: String::new(), format: String::new(), file: None, video: false, genres: None };
+        let mut rows = Rows::default();
+        assert_eq!(rows.song(&t).split, SplitMarkView::None);
+        rows.marks.insert(t.key(), controller::SplitMark::Waiting(2));
+        assert_eq!(rows.song(&t).split, SplitMarkView::Waiting { place: 2 });
+        rows.marks.insert(t.key(), controller::SplitMark::Four);
+        assert_eq!(rows.song(&t).split, SplitMarkView::Four);
+    }
+
+    #[test]
+    fn edited_lines_go_through() {
+        let rows = edited_rows(vec![EditedLineView { at: Some(1.5), text: "one".into(), singer: Some("Nairud".into()) }, EditedLineView { at: None, text: "two".into(), singer: None }]);
+        assert_eq!(rows, vec![(Some(1.5), "one".to_string(), Some("Nairud".to_string())), (None, "two".to_string(), None)]);
     }
 
     #[test]

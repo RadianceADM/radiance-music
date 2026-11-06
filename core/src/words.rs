@@ -193,6 +193,13 @@ pub const FIND_LYRICS_AGAIN: &str = "Find Lyrics Again";
 pub const LYRICS_SAVED: &str = "Lyrics saved";
 pub const LYRICS_NOT_SAVED: &str = "Couldn't save the lyrics";
 
+/// Splitting… (the cores it may use), as the Linux app's dialog says it.
+pub const CORES_TITLE: &str = "Cores it may use";
+pub fn cores_note(total: u32) -> String {
+    format!("Of the {total} this computer has. More is quicker; fewer leaves more for everything else.")
+}
+pub const SPLITTING_READY: (&str, &str) = ("Ready", "Demucs splits, MMS times the words. It runs at idle priority: whatever you're doing always goes first.");
+
 /// Find Lyrics Again (the song's menu): looking, then what was found.
 pub fn finding_lyrics_again(title: &str, timed: bool) -> String {
     if timed {
