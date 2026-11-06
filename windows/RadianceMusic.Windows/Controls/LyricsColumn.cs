@@ -141,6 +141,9 @@ internal sealed class LyricsColumn : Grid
         follower.Reset();
         lead = null;
         note.Visibility = Visibility.Collapsed;
+        // a song's lyrics start at the top, as the Linux app's (ui.rs: both columns back to 0 each time
+        // it lays them out): the next song's never open where the last one's had scrolled to (#57)
+        scroll.ChangeView(null, 0, null, true);
         switch (l.Kind)
         {
             case LyricsKind.Looking:
