@@ -4,7 +4,7 @@ The same features on the computer (Linux and Windows) and the phone (Android). T
 screens are made for a phone, so they look and work differently; this list is about what each
 one **can do**, not how it looks. Kept in step with every change (owner, 2026-11-02).
 
-As of: computer **0.7.19**, phone **0.5.15** (released versions). Built but not released yet:
+As of: computer **0.7.20**, phone **0.5.15** (released versions). Built but not released yet:
 marked 🔜.
 
 ✅ has it · ❌ missing (a gap to close) · ➖ not needed there (the platform does it its own way)
@@ -16,6 +16,7 @@ marked 🔜.
 | Feature | Linux | Windows | Windows beta | Phone | Notes |
 |---|---|---|---|---|---|
 | Search songs: lossless (Internet Archive) first, YouTube Music after | ✅ | ✅ | ✅ | ✅ | |
+| A song played from Search plays, then songs like it (its radio) | ✅ | ✅ | 🔜 2 | ✅ | as YouTube Music; before, the other search results played after it (#47) |
 | Search suggestions as you type | ✅ | ✅ | 🔜 2 | ✅ | |
 | Genre tiles before you type | ✅ | ✅ | ✅ | ❌ | |
 | Made for you mix (songs like your most-played likes) | ✅ | ✅ | ✅ | ❌ | the phone's "Play your mix" shuffles your liked songs |
@@ -51,7 +52,7 @@ marked 🔜.
 | Two-part songs: Music and Vocals sliders | ✅ | ✅ | 🔜 3 | 🔜 | the phone's split (0.5.17, #43); on the computer, songs split before there were four parts |
 | Keeps the loudness when parts are turned down | ✅ | ✅ | 🔜 3 | ✅ | |
 | Low cut, High cut, Reverb (one setting, every song) | ✅ | ✅ | 🔜 3 | ✅ | built into the computer app since 0.7.14 |
-| Fast split in two (Music + Vocals, a few seconds) | 🔜 | 🔜 | 🔜 3 | 🔜 | computer: inside the app, no Python; the Split button asks "Music + Vocals (fast)" or "Four parts" (#43); phone: its only split (0.5.17) |
+| Fast split in two (Music + Vocals, a few seconds) | ✅ | ✅ | 🔜 3 | 🔜 | computer: inside the app, no Python; the Split button asks "Music + Vocals (fast)" or "Four parts" (#43); phone: its only split (0.5.17) |
 | Split a song on this device | ✅ | ✅ | 🔜 3 | ✅ | computer: Python Demucs, 4 parts (no-Python version in testing, #31); phone: 2 parts (Music + Vocals) with Spleeter, about 16× real time (🔜 0.5.17, #43; Demucs before), 4 parts only from the computer or a server |
 | Liked songs are split by themselves | ✅ | ✅ | 🔜 3 | ❌ | the phone splits when you ask |
 | Split queue, pause / stop splitting | ✅ | ✅ | 🔜 3 | ✅ | |

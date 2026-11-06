@@ -1,7 +1,8 @@
 # Changelog
 
-## Unreleased
+## v0.7.20 — 2026-11-06
 
+- **A song played from Search plays, then songs like it:** as YouTube Music does, the song you pick from Search plays at once and its radio (songs like it) fills Up next. Before, the queue was the other search results: covers and same-named songs by other artists, so unrelated songs played after it. Songs you add to the queue meanwhile stay, before the radio (#47).
 - **Split a song in two in seconds:** Split this song now asks: **Music + Vocals (fast)**, a few seconds a song, or **Four parts** (Drums, Bass, Other, Vocals for the Mixer, about 3 minutes). The fast split runs inside the app, on Linux and Windows, with nothing to install (what it needs, about 50 MB, comes at the first start; gently while Bluetooth music plays). A song split in two can be split in four later. Liked songs still split in four by themselves. Where this computer can't split in four, No vocals and Vocals only use the fast split (#43).
 - **Sharing with the phone carries its two-part split:** a song the phone split in two (Music + Vocals, its new fast split) comes to the computer with both parts, and the computer sends a song's Music part along too. The computer's mixer plays two-part songs with two sliders (#43).
 - **Next right after opening starts the next song from its start:** with last time's song shown (picked up at its saved place), pressing Next, picking another song in the queue, Play again, or removing that song from the queue started the next one at the old song's place, and the first Pause then started it over (#46).
