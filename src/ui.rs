@@ -41,6 +41,7 @@ use radiance_core::quality::{self, Heard};
 use radiance_core::split_queue::{self, SplitQueue};
 use radiance_engine::word_times::{aligned_by_mms, hand_edited, keep_on_server, relook_lyrics, time_words, Aligner};
 pub(crate) use radiance_engine::word_times;
+use radiance_engine::splitting as split_jobs;
 use radiance_core::queue::{self, Queue, Removed, Repeat, Step};
 use radiance_core::library::{self as shelf, GroupKind as LikedView, Saved, AZ, RECENT_ROWS};
 use radiance_core::sing;
@@ -3244,9 +3245,9 @@ impl Ui {
         self.refresh_split_marks();
         // progress from the worker thread, shown here as it comes
         let (tx, rx) = async_channel::unbounded::<f64>();
-        let phase = tx.clone(); // after the split: -1 the library copy, -2 the word times
-        let report: split::Progress = std::sync::Arc::new(move |p| {
-            let _ = tx.try_send(p);
+        // (the engine's split job: splitting, then the library copy (-1) and the word times (-2))
+        let report: std::sync::Arc<dyn Fn(split_jobs::Phase) + Send + Sync> = std::sync::Arc::new(move |p: split_jobs::Phase| {
+            let _ = tx.try_send(p.code());
         });
         let me = Rc::downgrade(self);
         glib::spawn_future_local(async move {
@@ -3260,32 +3261,8 @@ impl Ui {
         let song = t.clone();
         bg(
             move || {
-                let uri = match uri {
-                    Some(u) => u,
-                    None => {
-                        let relay = relay.ok_or("no relay")?;
-                        let s = youtube::stream(&song.id)?;
-                        relay.add(s.url, s.size, s.mime)
-                    }
-                };
-                let done = split::split(&song, &uri, server.as_ref(), local.as_ref(), report);
-                match (&done, &server, &local) {
-                    (Ok(()), Some(server), _) => {
-                        let _ = phase.try_send(-1.0);
-                        keep_on_server(&song, server, &|| {
-                            let _ = phase.try_send(-2.0);
-                        }); // for hosting, with its words timed
-                    }
-                    (Ok(()), None, Some(local)) if !aligned_by_mms(&song) => {
-                        // every word timed here too
-                        let _ = phase.try_send(-2.0);
-                        if let Err(e) = time_words(&song, &Aligner::Here(local.clone())) {
-                            debug(&format!("word times for {}: {e}", song.title));
-                        }
-                    }
-                    _ => {}
-                }
-                done
+                let uri = split_jobs::source_uri(&song, uri, relay)?;
+                split_jobs::four_parts(&song, &uri, server.as_ref(), local.as_ref(), report)
             },
             move |result| {
                 let Some(me) = me.upgrade() else { return };
@@ -6057,15 +6034,8 @@ impl Ui {
         let (me, song) = (Rc::downgrade(self), t.clone());
         bg(
             move || {
-                let uri = match uri {
-                    Some(u) => u,
-                    None => {
-                        let relay = relay.ok_or("no relay")?;
-                        let s = youtube::stream(&song.id)?;
-                        relay.add(s.url, s.size, s.mime)
-                    }
-                };
-                split::split_two(&song, &uri, local.as_ref(), std::sync::Arc::new(|_| {}))
+                let uri = split_jobs::source_uri(&song, uri, relay)?;
+                split_jobs::two_parts(&song, &uri, local.as_ref(), std::sync::Arc::new(|_| {}))
             },
             move |result: Result<(), String>| {
                 let Some(me) = me.upgrade() else { return };
