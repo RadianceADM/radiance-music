@@ -164,6 +164,14 @@ public sealed partial class MainWindow : Window
         Side.IsPaneOpen = true;
     }
 
+    /// <summary>The side panel open on `tab` (not toggled: the screenshots' --side).</summary>
+    public void OpenSide(string tab)
+    {
+        if (tab == "lyrics" && !side.HasLyrics) return;
+        side.Tab = tab;
+        Side.IsPaneOpen = true;
+    }
+
     /// <summary>The side panel's Lyrics tab comes and goes with Now Playing's own lyrics column.</summary>
     private void SyncLyricsTab()
     {

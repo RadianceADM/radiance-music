@@ -28,7 +28,6 @@ internal static class Shot
         Crash.Note($"shot: {dev.Page} {dev.Width}x{dev.Height}, in {dev.Wait} s");
         window.Show(dev.Page);
         if (dev.Search != null) window.SearchFor(dev.Search);
-        if (dev.Side != null) window.ToggleSide(dev.Side);
         foreach (var act in dev.Acts)
         {
             await Task.Delay(1500);
@@ -38,6 +37,12 @@ internal static class Shot
         var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(window);
         Win32.SetForegroundWindow(hwnd);
         await Task.Delay(300);
+        // opened in front, as a click on the bar's button does (over the page, the panel closes when the window loses focus)
+        if (dev.Side != null)
+        {
+            window.OpenSide(dev.Side);
+            await Task.Delay(800);
+        }
         await Save(hwnd, dev.Shot!);
         Crash.Note("shot: saved " + dev.Shot);
         if (dev.Again > 0)
