@@ -93,6 +93,12 @@ internal static class SongMenu
             case MenuAction.NewPlaylistWith:
                 _ = Dialogs.NameDialog.NewPlaylist(hub, row.XamlRoot, key);
                 break;
+            case MenuAction.ShowLyrics:
+                _ = Dialogs.LyricsDialogs.Show(hub, row.XamlRoot, key);
+                break;
+            case MenuAction.EditLyrics:
+                _ = Dialogs.LyricsDialogs.Edit(hub, row.XamlRoot, key);
+                break;
             case MenuAction.GoToArtist g:
                 App.Window?.SearchFor(g.Q);
                 break;
@@ -120,6 +126,10 @@ internal static class SongMenu
         MenuAction.GoToArtist => "",
         MenuAction.GoToAlbum => "",
         MenuAction.ShowInFiles => "",
+        MenuAction.SplitTwo or MenuAction.SplitFour => "\uE8C6",
+        MenuAction.ShowLyrics => "\uE8D2",
+        MenuAction.EditLyrics => "\uE70F",
+        MenuAction.FindLyricsAgain => "\uE72C",
         _ => "",
     };
 }

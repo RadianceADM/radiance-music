@@ -36,10 +36,13 @@ public sealed partial class MainWindow : Window
         toastTimer.Tick += (_, _) => { toastTimer.Stop(); Toast.IsOpen = false; NextToast(); };
         Toast.Closed += (_, _) => { toastTimer.Stop(); NextToast(); };
         RenderPlaylists();
+        // Splitting… (stage 3): the cores it may use, Pause Splitting, at the sidebar's foot
+        Nav.FooterMenuItems.Add(new NavigationViewItem { Content = Native.Native.BetaWords().SplittingDialog, Tag = "splitting", Icon = new FontIcon { Glyph = "\uE8C6" }, SelectsOnInvoked = false });
         // "New Playlist" isn't a page (it asks for the name): it acts when clicked, it's never selected
         Nav.ItemInvoked += (_, e) =>
         {
             if (e.InvokedItemContainer is NavigationViewItem { Tag: "new-playlist" }) Show("new-playlist");
+            if (e.InvokedItemContainer is NavigationViewItem { Tag: "splitting" }) _ = Dialogs.SplittingDialog.Open(hub, Content.XamlRoot);
         };
         hub.Change += OnChange;
         Bar = new Controls.PlayerBar(hub);

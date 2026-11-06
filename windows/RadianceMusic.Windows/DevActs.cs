@@ -18,7 +18,7 @@ namespace RadianceMusic;
 ///   liked-search:TEXT  typed into Liked Songs' own search; queue-move:FROM:TO  the queue's drop
 ///   (rows of its list); queue-menu:N  that queue row's menu; lyric-tap:N  a tap on lyric line N;
 ///   next          the next song (the bar's Next); mixer-open  the bar's Mixer pop-up opened;
-///   part:NAME:GAIN  a Mixer slider (0..1)
+///   part:NAME:GAIN  a Mixer slider (0..1); splitting  the Splitting… dialog
 /// </summary>
 internal static class DevActs
 {
@@ -40,6 +40,7 @@ internal static class DevActs
             "fullscreen" => Fullscreen(window),
             "next" => Do(() => App.Hub.Engine.Skip(1)),
             "mixer-open" => window.Bar?.OpenMixer() == true,
+            "splitting" => window.Content?.XamlRoot is { } sx && Do(() => _ = Dialogs.SplittingDialog.Open(App.Hub, sx)),
             "part" => arg.Split(':') is [var name, var g] && double.TryParse(g, System.Globalization.CultureInfo.InvariantCulture, out var gain) && Do(() => App.Hub.Engine.SetPart(name, gain)),
             _ => false,
         };

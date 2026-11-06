@@ -365,3 +365,32 @@ public class EffectTextTests
         Assert.Equal("Reverb: 42 %, a room around the music. For every song, on every speaker.", EffectText.ReverbTip(42));
     }
 }
+
+/// <summary>The lyrics editor's Tap Timing (the Linux app's): Enter stamps the chosen line with the playing time,
+/// then the next line is chosen; at the end, nothing more.</summary>
+public class TapTimingTests
+{
+    [Fact]
+    public void StampingWalksDownTheLines()
+    {
+        var times = new List<double?> { null, null, null };
+        var next = TapTiming.Stamp(times, 0, 12.5);
+        Assert.Equal(12.5, times[0]);
+        Assert.Equal(1, next);
+        next = TapTiming.Stamp(times, next, 15.0);
+        Assert.Equal(2, next);
+        Assert.Equal(3, TapTiming.Stamp(times, next, 18.0)); // the end
+        Assert.Equal(3, TapTiming.Stamp(times, 3, 20.0)); // nothing past it
+        Assert.Equal(new double?[] { 12.5, 15.0, 18.0 }, times);
+    }
+
+    [Fact]
+    public void TappingAgainRetimesEachLineInTurn()
+    {
+        // (the Linux editor chooses the very next line: a line timed already gets the new time)
+        var times = new List<double?> { null, 9.0, null };
+        Assert.Equal(1, TapTiming.Stamp(times, 0, 4.0));
+        Assert.Equal(2, TapTiming.Stamp(times, 1, 7.0));
+        Assert.Equal(7.0, times[1]);
+    }
+}

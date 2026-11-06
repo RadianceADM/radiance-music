@@ -40,9 +40,12 @@ internal sealed class SongRow : Grid
         words.Children.Add(new TextBlock { Text = song.Subtitle, Style = (Style)res["CaptionTextBlockStyle"], Foreground = (Brush)res["TextFillColorSecondaryBrush"], TextTrimming = TextTrimming.CharacterEllipsis, TextWrapping = TextWrapping.NoWrap });
         SetColumn(words, 1);
         Children.Add(words);
-        var badge = Badge(song);
-        SetColumn(badge, 2);
-        Children.Add(badge);
+        // its split mark (stage 3: waiting, being split, split), then its kind
+        var marks = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, VerticalAlignment = VerticalAlignment.Center };
+        if (SplitMark(song.Split) is { } mark) marks.Children.Add(mark);
+        marks.Children.Add(Badge(song));
+        SetColumn(marks, 2);
+        Children.Add(marks);
         if (song.Plays > 0)
         {
             var plays = new TextBlock { Text = song.Plays + "×", VerticalAlignment = VerticalAlignment.Center, Style = (Style)res["CaptionTextBlockStyle"], Foreground = (Brush)res["TextFillColorTertiaryBrush"] };
@@ -87,6 +90,21 @@ internal sealed class SongRow : Grid
     }
 
     /// <summary>The GTK app's badge, with its words: a music video, lossless (green) or compressed (a cloud).</summary>
+    /// <summary>A song's split mark, as the Linux app's: a ring while it's split, a clock while it waits, scissors
+    /// once it's split (its words: Ffi.SplitMarkTip).</summary>
+    private static FrameworkElement? SplitMark(SplitMarkView m)
+    {
+        FrameworkElement? e = m switch
+        {
+            SplitMarkView.Splitting => new ProgressRing { IsActive = true, Width = 14, Height = 14 },
+            SplitMarkView.Waiting => new FontIcon { Glyph = "\uE823", FontSize = 13, Foreground = (Brush)Application.Current.Resources["TextFillColorTertiaryBrush"] },
+            SplitMarkView.Two or SplitMarkView.Four => new FontIcon { Glyph = "\uE8C6", FontSize = 13, Foreground = (Brush)Application.Current.Resources["AccentTextFillColorPrimaryBrush"] },
+            _ => null,
+        };
+        if (e != null) ToolTipService.SetToolTip(e, RadianceMusic.Native.Native.SplitMarkTip(m));
+        return e;
+    }
+
     private static FrameworkElement Badge(SongView s)
     {
         var (glyph, title, body, lossless) = s.Video

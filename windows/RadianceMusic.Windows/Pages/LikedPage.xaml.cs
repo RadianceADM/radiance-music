@@ -87,7 +87,7 @@ public sealed partial class LikedPage : Page
         debounce = new Debounce(Debounce.SearchWait, _ => Render(), new UiDelay());
         hub.Change += kind =>
         {
-            if (kind is ChangeKind.Liked or ChangeKind.Library) Render();
+            if (kind is ChangeKind.Liked or ChangeKind.Library or ChangeKind.Splits) Render(); // (Splits: the rows' split marks)
         };
         Render();
     }
@@ -105,7 +105,7 @@ public sealed partial class LikedPage : Page
         PageKit.SetText(fix, page.Fix ?? "");
         fix.IsEnabled = !page.Fixing;
         rail.SetLetters(page.Letters);
-        var key = string.Join("|", page.Songs.Select(s => s.Key + s.Subtitle + s.Liked + s.Plays));
+        var key = string.Join("|", page.Songs.Select(s => s.Key + s.Subtitle + s.Liked + s.Plays + s.Split));
         if (key == shown) return;
         shown = key;
         list.Items.Clear();
