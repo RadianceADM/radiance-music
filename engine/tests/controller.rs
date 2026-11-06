@@ -175,6 +175,9 @@ impl Sources for Fake {
         self.reports.lock().unwrap().push(note.to_string());
         Ok("RM-0042".into())
     }
+    fn watches_network(&self) -> bool {
+        false
+    }
     fn network_available(&self) -> bool {
         !self.network_down.load(Ordering::SeqCst)
     }

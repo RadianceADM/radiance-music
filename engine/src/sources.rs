@@ -72,6 +72,11 @@ pub trait Sources: Send + Sync + 'static {
         use gio::prelude::*;
         gio::NetworkMonitor::default().is_network_available()
     }
+    /// Whether the engine follows GIO's network monitor (the tests don't: the build server's own
+    /// network coming and going would turn their songs' failures into "you're offline").
+    fn watches_network(&self) -> bool {
+        true
+    }
     /// YouTube Music's suggestions for what's typed (worker thread; none on any failure).
     fn suggestions(&self, q: &str) -> Vec<String> {
         crate::youtube::suggestions(q)

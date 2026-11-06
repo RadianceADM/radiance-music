@@ -1422,13 +1422,15 @@ impl Engine {
             self.set_online(false);
         }
         self.fetch_two_part();
-        let monitor = gio::NetworkMonitor::default();
-        let me = Rc::downgrade(self);
-        monitor.connect_network_changed(move |_, available| {
-            if let Some(e) = me.upgrade() {
-                e.set_online(available);
-            }
-        });
+        if self.shared.sources.watches_network() {
+            let monitor = gio::NetworkMonitor::default();
+            let me = Rc::downgrade(self);
+            monitor.connect_network_changed(move |_, available| {
+                if let Some(e) = me.upgrade() {
+                    e.set_online(available);
+                }
+            });
+        }
         *self.liked.borrow_mut() = crate::db::liked();
         *self.counts.borrow_mut() = crate::db::counts();
         let me = Rc::downgrade(self);
