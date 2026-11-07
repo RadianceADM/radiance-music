@@ -45,6 +45,15 @@ internal sealed class QueuePanel : Grid
     internal bool OpenMenu(int i) => nextList is { } l && i >= 0 && i < l.Items.Count && l.Items[i] is SongRow r && SongMenu.Open(r);
 
     /// <summary>The queue's songs, as drawn (the screenshots' log).</summary>
+    /// <summary>Where Up next's row <paramref name="i"/> is in the window (its handle, at the left; its top and
+    /// height): a real drag's check in a developer run.</summary>
+    internal string Where(int i)
+    {
+        if (nextList?.ContainerFromIndex(i) is not FrameworkElement row) return "";
+        var at = row.TransformToVisual(null).TransformPoint(new Windows.Foundation.Point(0, 0));
+        return $"{at.X + 20:0},{at.Y + row.ActualHeight / 2:0} top {at.Y:0} height {row.ActualHeight:0}";
+    }
+
     internal string Titles() => nextList == null ? "" : string.Join(" | ", nextList.Items.OfType<SongRow>().Select(r => r.Title));
     private uint first;
 

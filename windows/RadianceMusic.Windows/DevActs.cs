@@ -37,6 +37,7 @@ internal static class DevActs
             "queue-move" => arg.Split(':') is [var a, var b] && int.TryParse(a, out var from) && int.TryParse(b, out var to) && window.SidePanel.Drop(from, to),
             "queue-menu" => int.TryParse(arg, out var row) && window.SidePanel.OpenMenu(row),
             // the queue's order now, in the log (a real drag's check: before and after)
+            "queue-where" => int.TryParse(arg, out var qr) && Do(() => Crash.Note($"queue row {qr} at {window.SidePanel.Where(qr)}")),
             "play-song" => window.Page is Pages.SearchPage ps && ps.PlayFirstSong(),
             "queue-log" => Do(() => Crash.Note("queue now: " + window.SidePanel.Titles())),
             "lyric-tap" => window.Page is Pages.NowPlayingPage np && int.TryParse(arg, out var line) && np.TapLyric(line),
