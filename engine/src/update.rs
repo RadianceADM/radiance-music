@@ -555,6 +555,18 @@ fn windows_script(pid: u32, root: &Path, setup: &Path, version: &str, beta: bool
     // the beta: its exe in its folder, its own uninstall key (its folder is where it reinstalls:
     // D:\Apps\Radiance Music (beta) stays there, never the installer's default on C:)
     let (exe, key) = if beta { (format!("{root}\\RadianceMusicBeta.exe"), "RadianceMusicBeta") } else { (format!("{root}\\bin\\radiance-music.exe"), "RadianceMusic") };
+    // What opens once it's in: the beta itself; today's app, whichever app the installer left in its folder. The
+    // release that switches to the WinUI app installs it there as RadianceMusic.exe and takes the GTK files away
+    // (owner, 2026-11-08: "Patch now, delete at switch"), so the WinUI app opens; before it, the GTK app as always.
+    let open = if beta {
+        format!("Start-Process -FilePath '{}'; L 'opened the app'", q(&exe))
+    } else {
+        format!(
+            "$app = '{}'; if (-not (Test-Path $app)) {{ $app = '{}' }}; Start-Process -FilePath $app; L ('opened ' + $app)",
+            q(&format!("{root}\\RadianceMusic.exe")),
+            q(&exe)
+        )
+    };
     let log = setup.with_extension("log").display().to_string();
     // The installer starts straight (CreateProcess, not the shell: no "unknown publisher" check),
     // its /D= last and unquoted, spaces and all, in one argument string as is. It's done when its
@@ -569,11 +581,11 @@ fn windows_script(pid: u32, root: &Path, setup: &Path, version: &str, beta: bool
          $p = [System.Diagnostics.Process]::Start($si); $p.WaitForExit(); L ('installer done: ' + $p.ExitCode); \
          $k = 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{key}'; $t=0; \
          while (((Get-ItemProperty $k).DisplayVersion -ne '{version}') -and $t -lt 300) {{ Start-Sleep 1; $t++ }}; L ('installed: ' + (Get-ItemProperty $k).DisplayVersion); \
-         Start-Process -FilePath '{exe}'; L 'opened the app'",
+         {open}",
         log = q(&log),
         root = q(&root),
         setup = q(&setup.display().to_string()),
-        exe = q(&exe),
+        open = open,
         version = q(version),
         key = key,
     )
@@ -824,6 +836,20 @@ mod tests {
         assert!(gtk.contains("Uninstall\\RadianceMusic'") && gtk.contains("bin\\radiance-music.exe"), "the GTK app's as before");
     }
 
+    /// Owner, 2026-11-08 ("Patch now, delete at switch"): today's Windows app, updated by the release that switches
+    /// to the WinUI app, opens what that installer left in its folder (RadianceMusic.exe, the WinUI app's name there)
+    /// and, before the switch, itself as always. The WinUI installer removes the GTK files (stage 5).
+    #[test]
+    fn the_gtk_app_opens_the_winui_app_after_the_switch() {
+        let gtk = windows_script(42, Path::new("C:\\Users\\Ana\\AppData\\Local\\Programs\\Radiance Music"), Path::new("C:\\u\\0.9.0-RadianceMusic-Setup.exe"), "0.9.0", false);
+        let switched = gtk.find("Radiance Music\\RadianceMusic.exe").expect("it looks for the WinUI app first");
+        let as_before = gtk.find("Radiance Music\\bin\\radiance-music.exe").expect("else itself, as before");
+        assert!(switched < as_before, "the WinUI app first: {gtk}");
+        assert!(gtk.contains("Test-Path"), "the one that's there: {gtk}");
+        let beta = windows_script(42, Path::new("D:\\Apps\\Radiance Music (beta)"), Path::new("C:\\u\\b.exe"), "0.8.0-beta.7", true);
+        assert!(!beta.contains("Test-Path '"), "the beta opens itself, nothing to choose: {beta}");
+    }
+
     #[test]
     fn a_release_without_the_beta_label_offers_nothing() {
         let asset = |label: &str| serde_json::json!({ "name": BETA_ASSET, "label": label, "browser_download_url": "https://x/b.exe", "size": 149, "digest": "sha256:abc" });
@@ -926,7 +952,8 @@ mod tests {
         // done when its uninstall entry says the new version
         assert!(s.contains("DisplayVersion -ne '0.7.13'"));
         assert_eq!(version_of(Path::new(r"C:\cache\0.7.13-RadianceMusic-Setup.exe"), "RadianceMusic-Setup.exe"), "0.7.13");
-        assert!(s.contains(r"Start-Process -FilePath 'C:\Users\Ana''s PC\AppData\Local\Programs\Radiance Music\bin\radiance-music.exe'; L 'opened the app'"));
+        // then opens the app the installer left there (the WinUI app after the switch, else itself)
+        assert!(s.contains(r"$app = 'C:\Users\Ana''s PC\AppData\Local\Programs\Radiance Music\RadianceMusic.exe'; if (-not (Test-Path $app)) { $app = 'C:\Users\Ana''s PC\AppData\Local\Programs\Radiance Music\bin\radiance-music.exe' }; Start-Process -FilePath $app"), "{s}");
         assert!(!s.contains('"'));
     }
 
