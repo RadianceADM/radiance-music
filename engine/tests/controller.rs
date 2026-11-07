@@ -1566,6 +1566,199 @@ fn autoplay_is_kept() {
     c.quit();
 }
 
+/// Between songs (stage 4a-2): the transition and the crossfade length are kept in the settings both apps share, the
+/// length as the Linux app's slider has it (whole seconds, 1 to 12); a transition picked says so.
+#[test]
+fn transition_and_fade_are_kept() {
+    use radiance_engine::settings::Transition;
+    let _l = setup();
+    let (c, _f, rx) = with_songs("transition", vec![]);
+    c.set_transition(Transition::DjMix);
+    c.set_fade(9.4);
+    let toasts = toasts_for(&c, &rx, 2.0);
+    assert!(toasts.contains(&"DJ mix: beats lined up between songs (a crossfade when the tempos are too far apart)".to_string()), "{toasts:?}");
+    let s = radiance_engine::settings::load();
+    assert_eq!((s.transition, s.fade), (Transition::DjMix, 9.0));
+    assert_eq!((c.transition(), c.fade()), (Transition::DjMix, 9.0));
+    c.set_fade(30.0);
+    assert!(until(1.0, || c.fade() == 12.0), "{}", c.fade());
+    c.set_transition(Transition::Off);
+    assert!(until(1.0, || radiance_engine::settings::load().transition == Transition::Off));
+    c.quit();
+}
+
+// ------------------------------------------------------------------ between songs (stage 4a-2)
+
+/// The transition back to Off when a test ends (the settings file is shared by the tests; a song of 40 s or more
+/// would otherwise mix in the next test).
+fn transition_off(c: &Controller) {
+    c.set_transition(radiance_engine::settings::Transition::Off);
+    let _ = until(1.0, || radiance_engine::settings::load().transition == radiance_engine::settings::Transition::Off);
+}
+
+/// Stage 4a-2 (GTK's transitions): with Crossfade, the next song comes in before the first ends, at its start.
+#[test]
+fn crossfade_starts_the_next_song_before_the_end() {
+    use radiance_engine::settings::Transition;
+    let _l = setup();
+    let (a, b) = (wav("xf-a", 45.0), wav("xf-b", 45.0));
+    let (c, _f, rx, list) = with_list("crossfade", vec![a.clone(), b.clone()]);
+    c.set_transition(Transition::Crossfade);
+    c.set_fade(3.0);
+    c.play_from(list, 0, &a.key());
+    assert!(until(4.0, || c.now().playing), "never got going");
+    c.seek(34.0);
+    assert!(until(12.0, || c.mixing()), "it never mixed");
+    assert!(until(1.0, || now_id(&c) == b.id), "the next song isn't the one playing once the mix starts");
+    assert!(c.now().at < 5.0, "the next song should be at its start: {}", c.now().at);
+    assert!(until(6.0, || !c.mixing()), "the mix never finished");
+    assert!(c.now().playing && now_id(&c) == b.id);
+    transition_off(&c);
+    let _ = toasts_for(&c, &rx, 0.5);
+    c.quit();
+}
+
+/// No Transition: the song plays to its end, then the next one starts (never a mix).
+#[test]
+fn no_transition_waits_for_the_end() {
+    let _l = setup();
+    let (a, b) = (wav("nt-a", 45.0), wav("nt-b", 45.0));
+    let (c, _f, rx, list) = with_list("no transition", vec![a.clone(), b.clone()]);
+    transition_off(&c);
+    c.play_from(list, 0, &a.key());
+    assert!(until(4.0, || c.now().playing), "never got going");
+    c.seek(40.0);
+    let mixed = std::cell::Cell::new(false);
+    assert!(until(10.0, || {
+        mixed.set(mixed.get() || c.mixing());
+        now_id(&c) == b.id
+    }), "the next song never came");
+    assert!(!mixed.get(), "it mixed with No Transition");
+    let _ = toasts_for(&c, &rx, 0.5);
+    c.quit();
+}
+
+/// Repeat One: the song plays again, never mixes into another.
+#[test]
+fn repeat_one_never_mixes() {
+    use radiance_core::queue::Repeat;
+    use radiance_engine::settings::Transition;
+    let _l = setup();
+    let (a, b) = (wav("r1-a", 45.0), wav("r1-b", 45.0));
+    let (c, _f, rx, list) = with_list("repeat one mix", vec![a.clone(), b.clone()]);
+    c.set_transition(Transition::Crossfade);
+    c.set_fade(3.0);
+    c.play_from(list, 0, &a.key());
+    assert!(until(4.0, || c.now().playing), "never got going");
+    while c.now().repeat != Repeat::One {
+        c.cycle_repeat();
+        let _ = until(1.0, || false);
+    }
+    c.seek(38.0);
+    let mixed = std::cell::Cell::new(false);
+    let _ = until(9.0, || {
+        mixed.set(mixed.get() || c.mixing());
+        false
+    });
+    assert!(!mixed.get(), "it mixed with Repeat One");
+    assert_eq!(now_id(&c), a.id, "Repeat One: the same song again");
+    while c.now().repeat != Repeat::Off {
+        c.cycle_repeat();
+        let _ = until(1.0, || false);
+    }
+    transition_off(&c);
+    let _ = toasts_for(&c, &rx, 0.5);
+    c.quit();
+}
+
+/// A song put next while the next one is cued: the mix goes into the song that's next now (review focus 1).
+#[test]
+fn a_song_put_next_while_cued_is_the_one_mixed_into() {
+    use radiance_engine::settings::Transition;
+    let _l = setup();
+    let (a, b, x) = (wav("pn-a", 45.0), wav("pn-b", 45.0), wav("pn-x", 45.0));
+    let (c, _f, rx, list) = with_list("put next mix", vec![a.clone(), b.clone(), x.clone()]);
+    c.set_transition(Transition::Crossfade);
+    c.set_fade(3.0);
+    c.play_from(list, 0, &a.key());
+    assert!(until(4.0, || c.now().playing), "never got going");
+    c.seek(34.0);
+    let _ = until(2.0, || false); // b is cued meanwhile
+    c.play_next(&x.key());
+    assert!(until(12.0, || c.mixing()), "it never mixed");
+    assert!(until(1.0, || now_id(&c) == x.id), "it mixed into {} rather than the song put next", now_id(&c));
+    let _ = until(5.0, || !c.mixing());
+    transition_off(&c);
+    let _ = toasts_for(&c, &rx, 0.5);
+    c.quit();
+}
+
+/// A mix into the queue's last song still gets Autoplay's songs after it (GTK's begin_mix never asked: review focus 3).
+#[test]
+fn a_mix_into_the_last_song_still_gets_autoplay() {
+    use radiance_engine::settings::Transition;
+    let _l = setup();
+    let (a, b) = (wav("ap-a", 45.0), wav("ap-b", 45.0));
+    let (c, fake, rx, list) = with_list("mix autoplay", vec![a.clone(), b.clone()]);
+    let more: Vec<Track> = (0..3).map(|i| song(Source::YouTube, &format!("ap-more-{i}"), &format!("More {i}"))).collect();
+    fake.radios.lock().unwrap().insert(b.id.clone(), (Duration::ZERO, more));
+    c.set_autoplay(true);
+    c.set_transition(Transition::Crossfade);
+    c.set_fade(3.0);
+    c.play_from(list, 0, &a.key());
+    assert!(until(4.0, || c.now().playing), "never got going");
+    c.seek(34.0);
+    assert!(until(12.0, || c.mixing() && now_id(&c) == b.id), "it never mixed into the last song");
+    assert!(until(4.0, || c.queue().0.len() > 2), "Autoplay added nothing after a mix into the last song: {:?}", c.queue().0.iter().map(|t| &t.id).collect::<Vec<_>>());
+    let _ = until(5.0, || !c.mixing());
+    transition_off(&c);
+    let _ = toasts_for(&c, &rx, 0.5);
+    c.quit();
+}
+
+/// Paused during a crossfade: the fade waits (it went on silently before, GTK too: review focus 2).
+#[test]
+fn pausing_holds_a_crossfade() {
+    use radiance_engine::settings::Transition;
+    let _l = setup();
+    let (a, b) = (wav("hold-a", 45.0), wav("hold-b", 45.0));
+    let (c, _f, rx, list) = with_list("hold mix", vec![a.clone(), b.clone()]);
+    c.set_transition(Transition::Crossfade);
+    c.set_fade(4.0);
+    c.play_from(list, 0, &a.key());
+    assert!(until(4.0, || c.now().playing), "never got going");
+    c.seek(33.0);
+    assert!(until(12.0, || c.mixing()), "it never mixed");
+    c.toggle_play();
+    assert!(until(2.0, || !c.now().playing), "it didn't pause");
+    let _ = until(5.0, || false); // longer than the whole fade
+    assert!(c.mixing(), "the fade went on while paused");
+    c.toggle_play();
+    assert!(until(7.0, || !c.mixing()), "the fade never finished once playing again");
+    transition_off(&c);
+    let _ = toasts_for(&c, &rx, 0.5);
+    c.quit();
+}
+
+/// DJ Mix (by the Beat): two 120 BPM click tracks are analysed and mixed (beats lined up, the bass swapped).
+#[test]
+fn dj_mix_mixes_click_tracks() {
+    use radiance_engine::settings::Transition;
+    let _l = setup();
+    let (a, b) = (clicks("dj-a", 50.0), clicks("dj-b", 50.0));
+    let (c, _f, rx, list) = with_list("dj mix", vec![a.clone(), b.clone()]);
+    c.set_transition(Transition::DjMix);
+    c.play_from(list, 0, &a.key());
+    assert!(until(4.0, || c.now().playing), "never got going");
+    c.seek(30.0);
+    assert!(until(20.0, || c.mixing()), "it never mixed");
+    assert!(until(1.0, || now_id(&c) == b.id));
+    assert!(until(18.0, || !c.mixing()), "the mix never finished");
+    transition_off(&c);
+    let _ = toasts_for(&c, &rx, 0.5);
+    c.quit();
+}
+
 #[test]
 fn the_guide_is_seen_once() {
     let _l = setup();

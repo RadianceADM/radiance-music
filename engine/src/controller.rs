@@ -29,7 +29,8 @@ use crate::lyrics::{Line, Lyrics};
 use crate::player::{Event, Player};
 use crate::playing::{self, Streams};
 use crate::relay::Relay;
-use crate::settings::{self, Settings};
+use crate::beat;
+use crate::settings::{self, Settings, Transition, FADE_RANGE};
 use crate::sources::Sources;
 use crate::split;
 use crate::splitting::Phase;
@@ -430,6 +431,10 @@ struct View {
     storage: StorageState,
     autoplay: bool,
     guide_seen: bool,
+    /// Between songs (stage 4a-2): the transition, the crossfade length, and a mix under way.
+    transition: Transition,
+    fade: f64,
+    mixing: bool,
     suggestions: Vec<radiance_core::suggest::Chip>,
 }
 
@@ -538,6 +543,9 @@ impl Controller {
                 storage: StorageState::default(),
                 autoplay: true,
                 guide_seen: false,
+                transition: Transition::Off,
+                fade: 6.0,
+                mixing: false,
                 suggestions: Vec::new(),
             }),
             liked_q: Mutex::new(String::new()),
@@ -1098,6 +1106,29 @@ impl Controller {
         self.post(move |e| e.set_autoplay(on));
     }
 
+    /// Between songs (stage 4a-2): No Transition, Crossfade or DJ Mix (by the Beat), kept in the settings both apps share.
+    pub fn transition(&self) -> Transition {
+        self.shared.view(|v| v.transition)
+    }
+
+    pub fn set_transition(&self, t: Transition) {
+        self.post(move |e| e.set_transition(t));
+    }
+
+    /// The crossfade length (whole seconds, 1 to 12).
+    pub fn fade(&self) -> f64 {
+        self.shared.view(|v| v.fade)
+    }
+
+    pub fn set_fade(&self, seconds: f64) {
+        self.post(move |e| e.set_fade(seconds));
+    }
+
+    /// A crossfade or DJ mix under way (the two songs playing into each other).
+    pub fn mixing(&self) -> bool {
+        self.shared.view(|v| v.mixing)
+    }
+
     /// The first-start guide was seen (in the settings both apps share).
     pub fn guide_seen(&self) -> bool {
         self.shared.view(|v| v.guide_seen)
@@ -1312,6 +1343,12 @@ struct Engine {
     /// The list ran out while Autoplay's songs were on their way.
     ran_out: Cell<bool>,
     autoplay_for: RefCell<Option<String>>,
+    /// Between songs (stage 4a-2, GTK's transitions): the DJ plan for (this song, the next), the pair being analysed,
+    /// the song cued for the mix (its key, cued beat-matched, where it plays from), and a mix about to start.
+    mix_plan: RefCell<Option<(String, String, beat::Plan)>>,
+    analysing: RefCell<Option<(String, String)>>,
+    cued: RefCell<Option<(String, bool, String)>>,
+    mix_armed: Cell<bool>,
     /// Each song's (plays, skips).
     counts: RefCell<HashMap<String, (usize, usize)>>,
     settings: RefCell<Settings>,
@@ -1379,10 +1416,12 @@ impl Engine {
         let settings = settings::load();
         // liked songs go to the folder picked in Storage (as the GTK app's start)
         crate::library::set_music_dir(settings.music_dir.clone().map(std::path::PathBuf::from));
-        let (autoplay, guide_seen) = (settings.autoplay, settings.guide_seen);
+        let (autoplay, guide_seen, transition, fade) = (settings.autoplay, settings.guide_seen, settings.transition, settings.fade);
         shared.view(|v| {
             v.autoplay = autoplay;
             v.guide_seen = guide_seen;
+            v.transition = transition;
+            v.fade = fade;
             v.storage.folder = crate::library::music_dir().display().to_string();
         });
         Engine {
@@ -1412,6 +1451,10 @@ impl Engine {
             sound_tries: Cell::new(0),
             ran_out: Cell::new(false),
             autoplay_for: RefCell::default(),
+            mix_plan: RefCell::default(),
+            analysing: RefCell::default(),
+            cued: RefCell::default(),
+            mix_armed: Cell::new(false),
             counts: RefCell::default(),
             settings: RefCell::new(settings),
             muted: Cell::new(false),
@@ -1692,6 +1735,7 @@ impl Engine {
     /// of the Windows app: no parts, voices or videos yet; a video plays its sound.)
     fn play_current(self: &Rc<Self>) {
         self.let_go_of_video(); // before the old video's pipeline goes (review I5)
+        self.replan(); // a new song: its own plan and cue
         let Some(t) = self.queue.borrow().at_index().cloned() else { return };
         let t = playing::saved_copy(&self.liked.borrow(), &t);
         let gen = self.play_gen.get() + 1;
@@ -2325,6 +2369,7 @@ impl Engine {
     /// not split, the fast split is asked for first (the button holds; its parts come in seconds).
     fn set_voice(self: &Rc<Self>, v: Voice) {
         self.voice.set(v);
+        self.replan(); // the next song's cue with this voice's sliders
         let Some(t) = self.current.borrow().clone() else { return };
         // the preset always (a song not split yet gets it once its parts land: final review C2, it came
         // back with every part at full), and its split asked for
@@ -2840,6 +2885,23 @@ impl Engine {
         settings::save(&self.settings.borrow());
         self.shared.view(|v| v.autoplay = on);
         self.toast(if on { radiance_core::words::AUTOPLAY_ON } else { radiance_core::words::AUTOPLAY_OFF }.to_string());
+    }
+
+    fn set_transition(&self, t: Transition) {
+        self.settings.borrow_mut().transition = t;
+        settings::save(&self.settings.borrow());
+        self.shared.view(|v| v.transition = t);
+        self.replan();
+        self.toast(radiance_core::words::transition_toast(t.id()).to_string());
+    }
+
+    /// The crossfade length as the Linux app's slider has it: whole seconds, within FADE_RANGE.
+    fn set_fade(&self, seconds: f64) {
+        let s = seconds.round().clamp(FADE_RANGE.0, FADE_RANGE.1);
+        self.settings.borrow_mut().fade = s;
+        settings::save(&self.settings.borrow());
+        self.shared.view(|v| v.fade = s);
+        self.replan();
     }
 
     fn set_guide_seen(&self) {
@@ -3492,6 +3554,7 @@ impl Engine {
     }
 
     fn seek(&self, at: f64) {
+        self.drop_cue(); // (the player's seek resets the other deck: cued again from here)
         if self.restored.get() {
             self.restore_at.set(Some(at)); // not started yet: from there when it is
         } else if let Some(p) = self.player.borrow().as_ref() {
@@ -3588,14 +3651,21 @@ impl Engine {
     }
 
     /// Five times a second while a song plays.
-    fn tick(&self) {
-        let (playing, at, length) = {
+    fn tick(self: &Rc<Self>) {
+        let (playing, at, length, mixing) = {
             let player = self.player.borrow();
             let Some(p) = player.as_ref() else { return };
-            (p.playing(), p.position(), p.duration())
+            (p.playing(), p.position(), p.duration(), p.mixing())
         };
+        if self.shared.view(|v| std::mem::replace(&mut v.mixing, mixing)) != mixing {
+            self.publish_now();
+        }
         if !playing {
             return;
+        }
+        // never silent after a crossfade (GTK's tick: a deck left at the fade's volume is brought back)
+        if let Some(p) = self.player.borrow().as_ref() {
+            p.heal_volume();
         }
         let Some(at) = at else { return };
         self.position.set(at);
@@ -3615,6 +3685,214 @@ impl Engine {
         self.shared.tell(Change::Position);
         if self.last_save.get().is_none_or(|t| t.elapsed() > Duration::from_secs(5)) {
             self.save_session(); // where you are, in case the app closes
+        }
+        self.transitions(at);
+    }
+
+    // ------------------------------------------------------------------ between songs (stage 4a-2, GTK's transitions)
+
+    /// Crossfade or DJ mix (GTK's transitions, ui.rs): the next song cued up to CUE_AHEAD_S before the plan's start,
+    /// the mix started on the dot. None for a short song, a video, Repeat One or the queue's end (no next song).
+    fn transitions(self: &Rc<Self>, at: f64) {
+        let mode = self.settings.borrow().transition;
+        let (len, mixing) = {
+            let player = self.player.borrow();
+            let Some(p) = player.as_ref() else { return };
+            (p.duration().unwrap_or(0.0), p.mixing())
+        };
+        if mode == Transition::Off || len < MIX_MIN_S || mixing {
+            return;
+        }
+        let Some(cur) = self.current.borrow().clone() else { return };
+        let next = self.queue.borrow().next().cloned();
+        let Some(next) = next else {
+            self.drop_cue();
+            return;
+        };
+        if cur.video || next.video {
+            return; // a video just ends; the next one starts
+        }
+        let next = playing::saved_copy(&self.liked.borrow(), &next);
+        let (a, b) = (cur.key(), next.key());
+        // a cue for a song that isn't next any more goes (a song put next, the queue moved: review focus 1)
+        if self.cued.borrow().as_ref().is_some_and(|(k, _, _)| *k != b) {
+            self.drop_cue();
+        }
+        let fade = self.settings.borrow().fade;
+        if mode == Transition::DjMix {
+            self.analyse_pair(&cur, &next, len, fade);
+        }
+        let plan = match mode {
+            Transition::DjMix => self.mix_plan.borrow().as_ref().filter(|(x, y, _)| *x == a && *y == b).map(|(_, _, p)| *p).unwrap_or_else(|| beat::plan(None, None, len, fade)),
+            _ => beat::plan(None, None, len, fade),
+        };
+        if at > plan.at + plan.seconds / 2.0 {
+            return; // jumped past it: this song just ends
+        }
+        // the DJ plan came after a crossfade's cue (or the other way): cued again to match (review focus 5)
+        if !self.mix_armed.get() && self.cued.borrow().as_ref().is_some_and(|(_, bm, _)| *bm != plan.beat_matched) {
+            self.drop_cue();
+        }
+        if plan.at - at <= CUE_AHEAD_S && self.cued.borrow().is_none() {
+            self.cue_next(&next, &plan);
+        }
+        let ready = self.player.borrow().as_ref().is_some_and(|p| p.cued());
+        if ready && self.cued.borrow().is_some() && plan.at - at <= ARM_S && !self.mix_armed.get() {
+            self.mix_armed.set(true);
+            let wait = Duration::from_secs_f64((plan.at - at).max(0.0));
+            let (me, gen) = (Rc::downgrade(self), self.play_gen.get());
+            glib::timeout_add_local_once(wait, move || {
+                let Some(e) = me.upgrade() else { return };
+                e.mix_armed.set(false);
+                if e.play_gen.get() == gen {
+                    e.begin_mix(plan);
+                }
+            });
+        }
+    }
+
+    /// The pair (this song, the next) analysed for a DJ mix in the background, once (its plan kept in memory).
+    fn analyse_pair(self: &Rc<Self>, cur: &Track, next: &Track, len: f64, fade: f64) {
+        let pair = (cur.key(), next.key());
+        let known = self.mix_plan.borrow().as_ref().is_some_and(|(x, y, _)| *x == pair.0 && *y == pair.1);
+        if known || self.analysing.borrow().as_ref() == Some(&pair) {
+            return;
+        }
+        let here = self.current_uri.borrow().clone();
+        let a_uri = if here.is_empty() { self.uri_for(cur) } else { Some(here) };
+        let (Some(a_uri), Some(b_uri)) = (a_uri, self.uri_for(next)) else { return };
+        *self.analysing.borrow_mut() = Some(pair.clone());
+        self.bg(
+            move || {
+                let x = beat::analyse(&a_uri, (len - 45.0).max(0.0), 45.0);
+                let y = beat::analyse(&b_uri, 0.0, 40.0);
+                beat::plan(x, y, len, fade)
+            },
+            move |e, plan| {
+                if e.analysing.borrow().as_ref() == Some(&pair) {
+                    crate::log::note(&format!("DJ mix planned: {}", if plan.beat_matched { "beats lined up" } else { "a crossfade (no clear beat, or the tempos too far apart)" }));
+                    *e.mix_plan.borrow_mut() = Some((pair.0, pair.1, plan));
+                    e.analysing.replace(None);
+                }
+            },
+        );
+    }
+
+    /// Where a song plays from, for its cue or its analysis (as play_current would start it): its saved file, the
+    /// Archive's file through the relay, a server's file, a YouTube song's stream once found (none yet: looked up).
+    fn uri_for(self: &Rc<Self>, t: &Track) -> Option<String> {
+        use gio::prelude::*;
+        if let Some(f) = t.file.as_deref().filter(|f| std::path::Path::new(f).exists()) {
+            return Some(gio::File::for_path(f).uri().to_string());
+        }
+        let uri = match t.source {
+            Source::Archive => Some(playing::web_uri(self.relay.as_ref(), &t.id)),
+            Source::Server => playing::plain_uri(t, self.relay.as_ref(), &self.streams.borrow()),
+            Source::YouTube => self.streams.borrow().fresh(&t.id).map(|(u, _)| u),
+        };
+        if uri.is_none() {
+            self.prefetch_next();
+        }
+        uri
+    }
+
+    /// The next song cued silently for the mix: with its parts (and the sliders as they are) when it has them and it
+    /// isn't a beat-matched DJ mix (that's deck to deck), else on the other deck.
+    fn cue_next(self: &Rc<Self>, next: &Track, plan: &beat::Plan) {
+        let (parts, whole, rate) = self.parts_of(next);
+        let uri = match whole.filter(|_| !parts.is_empty() && !plan.beat_matched) {
+            Some(whole) => {
+                if let Some(p) = self.player.borrow().as_ref() {
+                    p.cue_parts(&whole, &parts, plan.from, &self.gains_for(next), rate);
+                }
+                whole
+            }
+            None => {
+                let Some(uri) = self.uri_for(next) else { return };
+                if let Some(p) = self.player.borrow().as_ref() {
+                    p.cue(&uri, plan.from, plan.rate, plan.beat_matched);
+                }
+                uri
+            }
+        };
+        *self.cued.borrow_mut() = Some((next.key(), plan.beat_matched, uri));
+    }
+
+    /// The mix starts (GTK's begin_mix): the cued song comes in over `plan.seconds`, and the queue moves on to it.
+    fn begin_mix(self: &Rc<Self>, plan: beat::Plan) {
+        let Some((key, _, uri)) = self.cued.borrow().clone() else { return };
+        let next = self.queue.borrow().next().cloned();
+        let Some(next) = next.filter(|t| t.key() == key) else {
+            self.replan();
+            return;
+        };
+        let started = {
+            let player = self.player.borrow();
+            let Some(p) = player.as_ref() else { return };
+            p.retune_cued(&self.gains_for(&next)); // the sliders as they are now
+            p.mix(plan.seconds, plan.beat_matched);
+            p.mixing()
+        };
+        if !started {
+            return;
+        }
+        self.cued.replace(None);
+        self.mix_plan.replace(None);
+        if !matches!(self.queue.borrow_mut().skip(1, 0.0), Step::Play(_)) {
+            return;
+        }
+        self.mixed_into(next, uri);
+    }
+
+    /// The song mixed into is the one playing now: play_current's bookkeeping without loading it (it's already on),
+    /// and Autoplay when it's the queue's last (GTK's begin_mix never asked: review focus 3).
+    fn mixed_into(self: &Rc<Self>, t: Track, uri: String) {
+        let t = playing::saved_copy(&self.liked.borrow(), &t);
+        let gen = self.play_gen.get() + 1;
+        self.play_gen.set(gen);
+        self.kbps.set(0);
+        self.position.set(0.0);
+        self.restored.set(false);
+        self.restore_at.set(None);
+        self.ran_out.set(false);
+        *self.current.borrow_mut() = Some(t.clone());
+        self.switching.replace(None);
+        self.load_lyrics(&t, gen);
+        self.note_played(&t);
+        self.find_counterpart(&t);
+        self.video_height.set(0);
+        self.current_uri.replace(uri);
+        if !self.pulse_for.replace(String::new()).is_empty() {
+            self.shared.view(|v| v.pulse = None);
+            self.shared.tell(Change::Pulse);
+        }
+        self.loading.set(false);
+        self.update_quality();
+        crate::log::note(&format!("mixed into “{}”", t.title));
+        if self.voice.get() != Voice::Song {
+            if !t.video && split::mix_parts(&t).is_empty() {
+                self.split_fast(&t, true);
+            }
+            self.split_next_ahead();
+        }
+        self.publish_queue();
+        self.publish_now();
+        self.prefetch_next();
+        self.autoplay_if_last();
+    }
+
+    /// Plans and cues start again (the song, the queue, the voice or the setting changed: GTK's replan).
+    fn replan(&self) {
+        self.mix_plan.replace(None);
+        self.analysing.replace(None);
+        self.drop_cue();
+    }
+
+    fn drop_cue(&self) {
+        if self.cued.replace(None).is_some() {
+            if let Some(p) = self.player.borrow().as_ref() {
+                p.drop_cue();
+            }
         }
     }
 
@@ -3855,6 +4133,12 @@ fn pause_poll() -> Duration {
 }
 
 /// How long after the start updates are looked for (the GTK app's 8 s; RADIANCE_UPDATE_AFTER_MS: tests).
+/// Between songs (GTK's transitions): no mix for a song shorter than this; the next song cued at most this long
+/// before the mix; the mix's start timed once it's this close.
+const MIX_MIN_S: f64 = 40.0;
+const CUE_AHEAD_S: f64 = 12.0;
+const ARM_S: f64 = 0.45;
+
 fn update_after() -> Duration {
     std::env::var("RADIANCE_UPDATE_AFTER_MS").ok().and_then(|v| v.parse().ok()).map(Duration::from_millis).unwrap_or(Duration::from_secs(8))
 }

@@ -224,6 +224,26 @@ pub fn splitting_for(voice: &str) -> String {
     format!("Splitting for {voice}…")
 }
 
+/// Between songs (stage 4a-2: the Linux app's main menu, the beta's Settings → Playing), its words for both apps.
+pub const BETWEEN_SONGS: &str = "Between Songs";
+pub const NO_TRANSITION: &str = "No Transition";
+pub const CROSSFADE: &str = "Crossfade";
+pub const DJ_MIX: &str = "DJ Mix (by the Beat)";
+
+/// The crossfade length's label (whole seconds, as the slider moves).
+pub fn fade_label(seconds: f64) -> String {
+    format!("Crossfade length: {seconds:.0} s")
+}
+
+/// What a transition picked says (by its settings id: "off", "crossfade", "dj").
+pub fn transition_toast(id: &str) -> &'static str {
+    match id {
+        "crossfade" => "Songs crossfade",
+        "dj" => "DJ mix: beats lined up between songs (a crossfade when the tempos are too far apart)",
+        _ => "Songs play one after another",
+    }
+}
+
 /// The Mixer's line while the song playing is split in two (any reason: Split, liked songs).
 pub const SPLITTING_TWO: &str = "Splitting into Music and Vocals…";
 
@@ -378,5 +398,15 @@ mod tests {
         assert_eq!(SETUP_OFFLINE, "You're offline. Splitting songs needs a one-time download: it starts when you're back online.");
         assert_eq!((SPLIT_TWO, SPLIT_FOUR, SPLIT_FOUR_AFTER_TWO), ("Split: Music + Vocals (Fast)", "Split: Four Parts", "Split in Four Parts"));
         assert_eq!((LYRICS_SAVED, LYRICS_NOT_SAVED), ("Lyrics saved", "Couldn't save the lyrics"));
+    }
+
+    /// Between songs (stage 4a-2): the Linux app's words, now core's for both apps.
+    #[test]
+    fn between_songs_words_are_the_linux_apps() {
+        assert_eq!((BETWEEN_SONGS, NO_TRANSITION, CROSSFADE, DJ_MIX), ("Between Songs", "No Transition", "Crossfade", "DJ Mix (by the Beat)"));
+        assert_eq!(fade_label(6.0), "Crossfade length: 6 s");
+        assert_eq!(transition_toast("off"), "Songs play one after another");
+        assert_eq!(transition_toast("crossfade"), "Songs crossfade");
+        assert_eq!(transition_toast("dj"), "DJ mix: beats lined up between songs (a crossfade when the tempos are too far apart)");
     }
 }

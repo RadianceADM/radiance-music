@@ -497,6 +497,32 @@ struct Mixing {
     timer: glib::SourceId,
     old: Rc<RefCell<Option<Leaving>>>,
     new: Coming,
+    clock: Rc<RefCell<MixClock>>,
+}
+
+/// A mix's clock: the time it has played. A pause holds it (stage 4a-2: the fade went on while paused before, so
+/// it finished silently and Play brought back the next song alone).
+struct MixClock {
+    played: Duration,
+    since: Option<Instant>,
+}
+
+impl MixClock {
+    fn now(&self) -> Duration {
+        self.played + self.since.map(|s| s.elapsed()).unwrap_or_default()
+    }
+
+    fn hold(&mut self) {
+        if let Some(s) = self.since.take() {
+            self.played += s.elapsed();
+        }
+    }
+
+    fn go(&mut self) {
+        if self.since.is_none() {
+            self.since = Some(Instant::now());
+        }
+    }
 }
 
 impl Leaving {
@@ -1317,6 +1343,12 @@ impl Player {
             if let Some(old) = m.old.borrow().as_ref() {
                 old.set_state(state); // the song fading out pauses too
             }
+            // and the fade waits for it
+            if on {
+                m.clock.borrow_mut().go();
+            } else {
+                m.clock.borrow_mut().hold();
+            }
         }
     }
 
@@ -1498,7 +1530,7 @@ impl Player {
             (Leaving::Deck(a), Coming::Deck(b)) if bass_swap => Some((a.clone(), b.clone())),
             _ => None,
         };
-        let start = Instant::now();
+        let clock = Rc::new(RefCell::new(MixClock { played: Duration::ZERO, since: Some(Instant::now()) }));
         let mixing = self.mixing.clone();
         let master = self.master.clone();
         let smooth = |a: f64, b: f64, x: f64| {
@@ -1516,9 +1548,9 @@ impl Player {
             }
         ));
         let old = Rc::new(RefCell::new(Some(old)));
-        let (going, coming) = (old.clone(), new.clone_volume());
+        let (going, coming, ticking) = (old.clone(), new.clone_volume(), clock.clone());
         let timer = glib::timeout_add_local(Duration::from_millis(25), move || {
-            let p = (start.elapsed().as_secs_f64() / seconds.max(0.1)).min(1.0);
+            let p = (ticking.borrow().now().as_secs_f64() / seconds.max(0.1)).min(1.0);
             let m = master.get();
             if let Some(o) = going.borrow().as_ref() {
                 o.set_volume(m * (p * FRAC_PI_2).cos());
@@ -1543,7 +1575,7 @@ impl Player {
             }
             glib::ControlFlow::Continue
         });
-        *self.mixing.borrow_mut() = Some(Mixing { timer, old, new });
+        *self.mixing.borrow_mut() = Some(Mixing { timer, old, new, clock });
     }
 }
 

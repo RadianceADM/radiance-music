@@ -287,3 +287,36 @@ pub fn plan(a: Option<Beats>, b: Option<Beats>, a_length: f64, fade: f64) -> Pla
     }
     Plan { at, from, rate, seconds, beat_matched: true }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn beats(bpm: f64, strength: f64, start: f64, end: f64) -> Beats {
+        Beats { bpm, beat: 0.25, period: 60.0 / bpm, strength, start, end }
+    }
+
+    /// Stage 4a-2 (the DJ mix the beta gets): close tempos with clear beats are lined up, 16 beats long.
+    #[test]
+    fn close_tempos_with_clear_beats_are_beat_matched() {
+        let p = plan(Some(beats(120.0, 2.0, 0.0, 178.0)), Some(beats(121.0, 1.8, 0.4, 40.0)), 180.0, 6.0);
+        assert!(p.beat_matched, "{p:?}");
+        assert_eq!(p.rate, 1.0, "within 1.5 %: played at its own tempo");
+        assert!((p.seconds - 8.0).abs() < 1e-9, "16 beats at 120 BPM: {}", p.seconds);
+        assert!(p.at + p.seconds <= 178.0 && p.at > 160.0, "the mix ends before this song's last sound: {p:?}");
+        assert!(p.from >= 0.4, "the next song starts on a beat once its sound has: {p:?}");
+        let faster = plan(Some(beats(120.0, 2.0, 0.0, 178.0)), Some(beats(126.0, 1.8, 0.0, 40.0)), 180.0, 6.0);
+        assert!(faster.beat_matched && (faster.rate - 120.0 / 126.0).abs() < 1e-9, "5 % apart: its tempo matched: {faster:?}");
+    }
+
+    /// Tempos too far apart, a beat too weak, or a song not analysed: a smooth crossfade of the length set.
+    #[test]
+    fn otherwise_a_crossfade_of_the_length_set() {
+        let far = plan(Some(beats(120.0, 2.0, 0.0, 178.0)), Some(beats(150.0, 2.0, 1.0, 40.0)), 180.0, 6.0);
+        assert!(!far.beat_matched && far.at == 172.0 && far.seconds == 6.0 && far.from == 1.0, "{far:?}");
+        let weak = plan(Some(beats(120.0, 1.1, 0.0, 178.0)), Some(beats(120.0, 2.0, 0.0, 40.0)), 180.0, 6.0);
+        assert!(!weak.beat_matched, "{weak:?}");
+        let none = plan(None, None, 180.0, 4.0);
+        assert!(!none.beat_matched && none.at == 176.0 && none.from == 0.0 && none.rate == 1.0, "{none:?}");
+    }
+}

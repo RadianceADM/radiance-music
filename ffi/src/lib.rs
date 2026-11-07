@@ -1042,6 +1042,42 @@ impl From<controller::SplitMark> for SplitMarkView {
     }
 }
 
+/// Between songs (stage 4a-2): No Transition, Crossfade, DJ Mix (by the Beat).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, uniffi::Enum)]
+pub enum TransitionMode {
+    Off,
+    Crossfade,
+    DjMix,
+}
+
+impl From<radiance_engine::settings::Transition> for TransitionMode {
+    fn from(t: radiance_engine::settings::Transition) -> Self {
+        use radiance_engine::settings::Transition;
+        match t {
+            Transition::Off => TransitionMode::Off,
+            Transition::Crossfade => TransitionMode::Crossfade,
+            Transition::DjMix => TransitionMode::DjMix,
+        }
+    }
+}
+
+impl From<TransitionMode> for radiance_engine::settings::Transition {
+    fn from(t: TransitionMode) -> Self {
+        use radiance_engine::settings::Transition;
+        match t {
+            TransitionMode::Off => Transition::Off,
+            TransitionMode::Crossfade => Transition::Crossfade,
+            TransitionMode::DjMix => Transition::DjMix,
+        }
+    }
+}
+
+/// The crossfade length's label ("Crossfade length: 6 s"), as the slider moves.
+#[uniffi::export]
+pub fn fade_label(seconds: f64) -> String {
+    radiance_core::words::fade_label(seconds)
+}
+
 /// The voice buttons: the song, No vocals, Vocals only.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, uniffi::Enum)]
 pub enum VoiceMode {
@@ -1660,6 +1696,19 @@ impl MusicEngine {
     pub fn set_autoplay(&self, on: bool) {
         self.inner.set_autoplay(on);
     }
+    /// Between songs (stage 4a-2): the transition and the crossfade length (whole seconds, 1 to 12).
+    pub fn transition(&self) -> TransitionMode {
+        self.inner.transition().into()
+    }
+    pub fn set_transition(&self, t: TransitionMode) {
+        self.inner.set_transition(t.into());
+    }
+    pub fn fade(&self) -> f64 {
+        self.inner.fade()
+    }
+    pub fn set_fade(&self, seconds: f64) {
+        self.inner.set_fade(seconds);
+    }
     pub fn guide_seen(&self) -> bool {
         self.inner.guide_seen()
     }
@@ -1754,6 +1803,10 @@ pub struct HelpWords {
     pub offline: String,
     pub offline_tip: String,
     pub autoplay: String,
+    pub between_songs: String,
+    pub no_transition: String,
+    pub crossfade: String,
+    pub dj_mix: String,
     pub mine_tip: String,
     pub guide_title: String,
     pub guide_skip: String,
@@ -1829,6 +1882,10 @@ pub fn help_words() -> HelpWords {
         offline: h::OFFLINE.into(),
         offline_tip: h::OFFLINE_TIP.into(),
         autoplay: w::AUTOPLAY.into(),
+        between_songs: w::BETWEEN_SONGS.into(),
+        no_transition: w::NO_TRANSITION.into(),
+        crossfade: w::CROSSFADE.into(),
+        dj_mix: w::DJ_MIX.into(),
         mine_tip: radiance_core::suggest::MINE_TIP.into(),
         guide_title: g::TITLE.into(),
         guide_skip: g::SKIP.into(),
@@ -1956,6 +2013,17 @@ mod tests {
         assert_eq!(v.voice, VoiceMode::NoVocals);
         assert_eq!((v.low_cut, v.high_cut, v.reverb), (20.0, 20000.0, 0.0));
         assert!(v.plays_parts);
+    }
+
+    #[test]
+    fn transition_modes_map_both_ways() {
+        use radiance_engine::settings::Transition;
+        for t in [Transition::Off, Transition::Crossfade, Transition::DjMix] {
+            assert_eq!(Transition::from(TransitionMode::from(t)), t);
+        }
+        assert_eq!(fade_label(6.0), "Crossfade length: 6 s");
+        let w = help_words();
+        assert_eq!((w.between_songs.as_str(), w.dj_mix.as_str()), ("Between Songs", "DJ Mix (by the Beat)"));
     }
 
     #[test]

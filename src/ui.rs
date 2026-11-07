@@ -2180,14 +2180,14 @@ impl Ui {
         // the menu (between songs, the music folder, About)
         let menu = gio::Menu::new();
         let between = gio::Menu::new();
-        between.append(Some("No Transition"), Some("win.transition::off"));
-        between.append(Some("Crossfade"), Some("win.transition::crossfade"));
-        between.append(Some("DJ Mix (by the Beat)"), Some("win.transition::dj"));
+        between.append(Some(words::NO_TRANSITION), Some("win.transition::off"));
+        between.append(Some(words::CROSSFADE), Some("win.transition::crossfade"));
+        between.append(Some(words::DJ_MIX), Some("win.transition::dj"));
         let slider = gio::MenuItem::new(None, None);
         slider.set_attribute_value("custom", Some(&"fade".to_variant()));
         between.append_item(&slider);
         between.append(Some("Autoplay When the Queue Ends"), Some("win.autoplay"));
-        menu.append_section(Some("Between Songs"), &between);
+        menu.append_section(Some(words::BETWEEN_SONGS), &between);
         let looks = gio::Menu::new();
         looks.append(Some("Stone"), Some("win.look::stone"));
         looks.append(Some("True Black"), Some("win.look::black"));
@@ -2443,11 +2443,7 @@ impl Ui {
             me.settings.borrow_mut().transition = Transition::from_id(&id);
             settings::save(&me.settings.borrow());
             me.replan();
-            me.toast(match Transition::from_id(&id) {
-                Transition::Off => "Songs play one after another",
-                Transition::Crossfade => "Songs crossfade",
-                Transition::DjMix => "DJ mix: beats lined up between songs (a crossfade when the tempos are too far apart)",
-            });
+            me.toast(words::transition_toast(Transition::from_id(&id).id()));
         });
         self.window.add_action(&transition);
         let me = Rc::downgrade(self);
@@ -2589,7 +2585,7 @@ impl Ui {
     fn fade_row(self: &Rc<Self>) -> gtk::Box {
         let row = gtk::Box::builder().orientation(gtk::Orientation::Vertical).spacing(2).margin_start(12).margin_end(12).margin_bottom(6).build();
         let fade = self.settings.borrow().fade;
-        let show = |l: &gtk::Label, v: f64| l.set_label(&format!("Crossfade length: {v:.0} s"));
+        let show = |l: &gtk::Label, v: f64| l.set_label(&words::fade_label(v));
         show(&self.fade_label, fade);
         self.fade_label.add_css_class("caption");
         let scale = gtk::Scale::with_range(gtk::Orientation::Horizontal, FADE_RANGE.0, FADE_RANGE.1, 1.0);
@@ -2793,6 +2789,9 @@ impl Ui {
             }
         }
         self.update_voice_status();
+        // mixed into the queue's last song: Autoplay's songs after it, as when it starts by itself (stage 4a-2 map:
+        // this was never asked here, so after a mix into the last song the music stopped at its end)
+        self.autoplay_if_last();
     }
 
     // ------------------------------------------------------------------ voice
