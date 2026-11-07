@@ -25,6 +25,7 @@ marked 🔜.
 | Playlists (make, add, rename, delete) | ✅ | ✅ | ✅ | ❌ | |
 | History | ✅ | ✅ | ✅ | ✅ | computer keeps 1000, phone 300 |
 | Liked Songs: A to Z rail, own search, Play, Shuffle | ✅ | ✅ | ✅ | ✅ | |
+| Downloading: the liked songs not saved yet, with how many, in the sidebar | 🔜 | 🔜 | ✅ | ❌ | always there; the ones saving now first, Fix missing on its page (#66) |
 | Music videos: watch in the app | ✅ | ✅ | ✅ | ✅ | phone since 1.0.2: Video on the album art swaps in the music video from the same spot (kept inside the app, out of Gallery; not saved: streamed); beta: on the compositor, 16:9, fullscreen; some streamed videos are refused by YouTube (#48) |
 | Songs from a Radiance Music Server | ✅ | ✅ | 🔜 4 | ✅ | |
 

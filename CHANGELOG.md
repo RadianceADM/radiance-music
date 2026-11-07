@@ -1,5 +1,13 @@
 # Changelog
 
+## Next release — not released yet
+
+- **Downloading in the sidebar:** always there, it says how many liked songs aren't saved on this computer yet, e.g. "Downloading (3)". Its page lists them, the ones saving now first, says they play from the internet until they're saved, and has Fix missing to save them now. A click plays the song. Songs that only stream aren't listed: they're never saved (#66).
+
+## Windows beta 0.8.0-beta.5 — not released yet (#45)
+
+- **Downloading in the sidebar**, as the Linux app's (above), at the sidebar's foot (#66).
+
 ## v0.7.20 — 2026-11-06
 
 - **A song played from Search plays, then songs like it:** as YouTube Music does, the song you pick from Search plays at once and its radio (songs like it) fills Up next. Before, the queue was the other search results: covers and same-named songs by other artists, so unrelated songs played after it. Songs you add to the queue meanwhile stay, before the radio (#47).
