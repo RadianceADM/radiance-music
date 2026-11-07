@@ -109,7 +109,7 @@ public sealed partial class SettingsPage : Page
     {
         var panel = new StackPanel { Spacing = 10 };
         var modes = new RadioButtons { Header = w.BetweenSongs };
-        foreach (var label in new[] { w.NoTransition, w.Crossfade, w.DjMix }) modes.Items.Add(label);
+        foreach (var choice in new[] { w.NoTransition, w.Crossfade, w.DjMix }) modes.Items.Add(choice);
         modes.SelectedIndex = hub!.Engine.Transition() switch { TransitionMode.Crossfade => 1, TransitionMode.DjMix => 2, _ => 0 };
         var label = new TextBlock { Text = Ffi.FadeLabel(hub.Engine.Fade()), Style = (Style)Application.Current.Resources["CaptionTextBlockStyle"] };
         var fade = new Slider { Minimum = 1, Maximum = 12, StepFrequency = 1, Value = hub.Engine.Fade(), IsThumbToolTipEnabled = false, Width = 320, HorizontalAlignment = HorizontalAlignment.Left };
