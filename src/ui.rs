@@ -4534,7 +4534,7 @@ impl Ui {
     /// with Fix missing's button while any are missing ([fix]: its label; [busy]: at work). The sidebar says how many.
     fn render_downloading(self: &Rc<Self>, fix: Option<String>, busy: bool) {
         let liked: Vec<(Track, Saved)> = self.liked.borrow().iter().map(|t| (t.clone(), self.saved(t))).collect();
-        let list = shelf::downloading(&liked);
+        let list = shelf::downloading(&liked, |f| Path::new(f).exists());
         let saving = list.iter().filter(|(_, s)| *s == Saved::Saving).count();
         self.downloading_nav.set_label(&shelf::downloading_title(list.len()));
         let shown = format!("{fix:?}{busy}{}", list.iter().map(|(t, s)| format!("{}{s:?}", t.key())).collect::<String>());
@@ -4549,7 +4549,8 @@ impl Ui {
         }
         page.append(&gtk::Label::builder().label("Downloading").xalign(0.0).css_classes(["page-title"]).build());
         page.append(&gtk::Label::builder().label(shelf::downloading_note(saving, list.len() - saving)).xalign(0.0).wrap(true).css_classes(["dim-label"]).build());
-        if let Some(label) = fix {
+        // only beside the songs it lists (Fix missing counts music videos too: not beside "Every liked song is saved")
+        if let Some(label) = fix.filter(|_| !list.is_empty()) {
             let save = gtk::Button::builder().child(&adw::ButtonContent::builder().icon_name("folder-download-symbolic").label(label).build()).halign(gtk::Align::Start).sensitive(!busy).css_classes(["pill-button"]).build();
             if !busy {
                 save.add_css_class("suggested-action");

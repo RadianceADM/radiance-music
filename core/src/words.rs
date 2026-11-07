@@ -217,6 +217,12 @@ pub const RATE_IN_BROWSER: &str = "Finish signing in with Google in your browser
 pub const SENDING: &str = "Sending…";
 /// The Mixer's note while a voice waits for the song's split (GTK's voice status).
 pub const FULL_UNTIL_SPLIT: &str = "Plays as the full song until it's split.";
+
+/// The Mixer's loading line while the song is split for a voice ("No vocals"): owner, 2026-11-07, "walang loading
+/// indicator sa mixer kung splitting pa".
+pub fn splitting_for(voice: &str) -> String {
+    format!("Splitting for {voice}…")
+}
 pub const SPLIT_FOUR: &str = "Split: Four Parts";
 pub const SPLIT_FOUR_AFTER_TWO: &str = "Split in Four Parts";
 pub const SHOW_LYRICS: &str = "Show Lyrics";

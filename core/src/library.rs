@@ -85,10 +85,15 @@ pub enum Saved {
 
 /// Downloading (owner, 2026-11-07: "pede ba may downloading den sa sidebar", then "for download not yet saved but
 /// liked"): the liked songs not saved on this computer yet, the ones saving now first. A song that streams (a
-/// public build's YouTube song) isn't one: it isn't saved at all.
-pub fn downloading(liked: &[(Track, Saved)]) -> Vec<(Track, Saved)> {
-    let mut out: Vec<(Track, Saved)> = liked.iter().filter(|(_, s)| *s == Saved::Saving).cloned().collect();
-    out.extend(liked.iter().filter(|(_, s)| *s == Saved::NotSaved).cloned());
+/// public build's YouTube song) isn't one: it isn't saved at all. A saved song whose file isn't [on_disk] any more
+/// (deleted, its drive out) is waiting again, as Fix missing counts it.
+pub fn downloading(liked: &[(Track, Saved)], on_disk: impl Fn(&str) -> bool) -> Vec<(Track, Saved)> {
+    let state = |(t, s): &(Track, Saved)| match s {
+        Saved::Saved if t.file.as_deref().is_some_and(|f| !on_disk(f)) => Saved::NotSaved,
+        s => *s,
+    };
+    let mut out: Vec<(Track, Saved)> = liked.iter().filter(|x| state(x) == Saved::Saving).cloned().collect();
+    out.extend(liked.iter().filter(|x| state(x) == Saved::NotSaved).map(|(t, _)| (t.clone(), Saved::NotSaved)));
     out
 }
 
@@ -198,10 +203,11 @@ mod tests {
             (song("b", "B", "X", "", None), Saved::NotSaved),
             (song("c", "C", "X", "", None), Saved::Streams),
             (song("d", "D", "X", "", None), Saved::Saving),
+            (Track { file: Some("gone.flac".into()), ..song("e", "E", "X", "", None) }, Saved::Saved),
         ];
-        let list = downloading(&liked);
-        let got: Vec<&str> = list.iter().map(|(t, _)| t.id.as_str()).collect();
-        assert_eq!(got, ["d", "b"], "saving first, then waiting; saved and streamed ones aren't downloads");
+        let list = downloading(&liked, |f| f != "gone.flac");
+        let got: Vec<(&str, Saved)> = list.iter().map(|(t, s)| (t.id.as_str(), *s)).collect();
+        assert_eq!(got, [("d", Saved::Saving), ("b", Saved::NotSaved), ("e", Saved::NotSaved)], "saving first, then waiting (a saved file that's gone too, as Fix missing counts it); saved and streamed ones aren't downloads");
         assert_eq!(downloading_title(0), "Downloading");
         assert_eq!(downloading_title(3), "Downloading (3)");
         assert_eq!(downloading_note(0, 0), "Every liked song is saved on this computer.");

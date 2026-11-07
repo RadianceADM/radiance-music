@@ -627,7 +627,8 @@ fn downloading_view(list: &[(radiance_core::track::Track, radiance_core::library
         title: shelf::downloading_title(list.len()),
         note: shelf::downloading_note(saving, list.len() - saving),
         songs: list.iter().map(|(t, _)| rows.song(t)).collect(),
-        fix,
+        // only beside the songs it lists (Fix missing counts music videos too: not beside "Every liked song is saved")
+        fix: fix.filter(|_| !list.is_empty()),
         fixing,
     }
 }
@@ -1084,6 +1085,9 @@ pub struct MixView {
     pub plays_parts: bool,
     /// Under the voice buttons: "Plays as the full song until it's split.", or empty.
     pub note: String,
+    /// The loading line while the song is split for the voice picked ("Splitting for No vocals…"; the voice buttons
+    /// show Song, what's heard, till then), or empty.
+    pub splitting: String,
 }
 
 fn mix_view(m: &controller::MixState) -> MixView {
@@ -1095,6 +1099,7 @@ fn mix_view(m: &controller::MixState) -> MixView {
         reverb: m.effects.reverb,
         plays_parts: m.plays_parts,
         note: m.note.clone(),
+        splitting: m.splitting_for.map(|v| radiance_core::words::splitting_for(v.label())).unwrap_or_default(),
     }
 }
 
@@ -1886,8 +1891,9 @@ mod tests {
         assert_eq!(v.note, "2 liked songs aren't saved on this computer yet: 1 saving now. They play from the internet until they're saved.");
         assert_eq!(v.songs.len(), 2);
         assert_eq!((v.fix.as_deref(), v.fixing), (Some("Fix missing (2)"), true));
-        let none = downloading_view(&[], None, false, &Rows::default());
+        let none = downloading_view(&[], Some("Fix missing (3)".into()), false, &Rows::default());
         assert_eq!((none.title.as_str(), none.songs.len()), ("Downloading", 0));
+        assert_eq!(none.fix, None, "no songs listed: no Fix missing beside \"Every liked song is saved\" (it counts music videos too)");
     }
 
     #[test]
@@ -1923,13 +1929,16 @@ mod tests {
 
     #[test]
     fn the_mix_view_names_the_parts_in_the_linux_words() {
-        let m = controller::MixState { parts: vec![("drums".into(), 1.0), ("vocals".into(), 0.3)], voice: radiance_core::mix::Voice::NoVocals, effects: radiance_engine::effects::Sound::OFF, plays_parts: true, note: String::new() };
+        let m = controller::MixState { parts: vec![("drums".into(), 1.0), ("vocals".into(), 0.3)], voice: radiance_core::mix::Voice::NoVocals, effects: radiance_engine::effects::Sound::OFF, plays_parts: true, note: String::new(), splitting_for: None };
         let v = mix_view(&m);
         assert_eq!(v.parts.iter().map(|p| p.title.as_str()).collect::<Vec<_>>(), ["Drums", "Vocals"]);
         assert_eq!(v.parts[1].gain, 0.3);
         assert_eq!(v.voice, VoiceMode::NoVocals);
         assert_eq!((v.low_cut, v.high_cut, v.reverb), (20.0, 20000.0, 0.0));
         assert!(v.plays_parts);
+        assert_eq!(v.splitting, "");
+        let waiting = controller::MixState { parts: vec![], voice: radiance_core::mix::Voice::Song, splitting_for: Some(radiance_core::mix::Voice::NoVocals), note: radiance_core::words::FULL_UNTIL_SPLIT.into(), ..m };
+        assert_eq!(mix_view(&waiting).splitting, "Splitting for No vocals…", "the Mixer's loading line");
     }
 
     #[test]

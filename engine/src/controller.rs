@@ -310,11 +310,13 @@ pub struct MixState {
     pub plays_parts: bool,
     /// What the Mixer says under its buttons ("Plays as the full song until it's split."), or nothing.
     pub note: String,
+    /// The voice picked that waits for this song's split (its Mixer shows Song, what's heard, till then), or None.
+    pub splitting_for: Option<Voice>,
 }
 
 impl Default for MixState {
     fn default() -> Self {
-        MixState { parts: Vec::new(), voice: Voice::Song, effects: Sound::OFF, plays_parts: false, note: String::new() }
+        MixState { parts: Vec::new(), voice: Voice::Song, effects: Sound::OFF, plays_parts: false, note: String::new(), splitting_for: None }
     }
 }
 
@@ -665,7 +667,7 @@ impl Controller {
 
     /// Downloading: the liked songs not saved on this computer yet, the ones saving now first (owner, 2026-11-07).
     pub fn downloading(&self) -> Vec<(Track, Saved)> {
-        self.shared.view(|v| shelf::downloading(&v.liked))
+        self.shared.view(|v| shelf::downloading(&v.liked, |f| std::path::Path::new(f).exists()))
     }
 
     /// The oldest note not shown yet (each is given once).
@@ -1732,6 +1734,14 @@ impl Engine {
                 },
             }
         }
+        // No vocals or Vocals only carries on (owner, 2026-11-07: "pag nag next song need ko pa pumunta sa song then
+        // bumalek sa no vocals para lang mag split???"): this song split for it now, the next ahead (GTK's play start)
+        if self.voice.get() != Voice::Song {
+            if !t.video && split::mix_parts(&t).is_empty() {
+                self.split_fast(&t, true);
+            }
+            self.split_next_ahead();
+        }
         self.publish_queue();
         self.publish_now();
         self.prefetch_next();
@@ -2309,8 +2319,34 @@ impl Engine {
         if split::mix_parts(&t).is_empty() && v != Voice::Song {
             self.split_fast(&playing::saved_copy(&self.liked.borrow(), &t), true);
         }
+        if v != Voice::Song {
+            self.split_next_ahead();
+        }
         self.apply_mix();
         self.publish_now();
+    }
+
+    /// With No vocals or Vocals only picked: the next song split ahead, ready by the time it plays (GTK's).
+    fn split_next_ahead(self: &Rc<Self>) {
+        let next = {
+            let q = self.queue.borrow();
+            q.get(q.index() + 1).cloned()
+        };
+        if let Some(n) = next.map(|n| playing::saved_copy(&self.liked.borrow(), &n)) {
+            if !n.video && split::mix_parts(&n).is_empty() {
+                self.split_fast(&n, false);
+            }
+        }
+    }
+
+    /// The song is being split, or waits in line for it (either lane).
+    fn splitting(&self, t: &Track) -> bool {
+        let key = t.key();
+        let q = self.split_q.borrow();
+        self.splitting_two.borrow().as_ref().is_some_and(|x| x.key() == key)
+            || self.two_q.borrow().iter().any(|(x, _)| x.key() == key)
+            || q.now().is_some_and(|x| x.key() == key)
+            || q.waiting().iter().any(|x| x.key() == key)
     }
 
     /// Low cut, High cut, Reverb: one setting for every song, kept.
@@ -2331,10 +2367,15 @@ impl Engine {
         };
         // its parts are loaded (the Mixer is live; all up, the song's own file is what's heard)
         let plays_parts = self.player.borrow().as_ref().is_some_and(|p| p.is_stems());
-        // a voice asked for on a song not split yet: the full song plays till its parts land (GTK's status)
-        let voice = self.voice.get();
-        let note = if voice != Voice::Song && parts.is_empty() && self.current.borrow().is_some() { radiance_core::words::FULL_UNTIL_SPLIT.to_string() } else { String::new() };
-        MixState { parts, voice, effects: effects::now(), plays_parts, note }
+        // a voice asked for on a song not split yet: the full song plays till its parts land (GTK's status), so the
+        // Mixer shows Song (owner, 2026-11-07: "diba dapat automatic sya babalek sa song kase di pa downloaded") and
+        // what it's splitting for; the voice stays picked and is on once they land
+        let wanted = self.voice.get();
+        let cur = self.current.borrow().clone();
+        let waits = wanted != Voice::Song && parts.is_empty() && cur.is_some();
+        let note = if waits { radiance_core::words::FULL_UNTIL_SPLIT.to_string() } else { String::new() };
+        let splitting_for = cur.filter(|t| waits && self.splitting(t)).map(|_| wanted);
+        MixState { parts, voice: if waits { Voice::Song } else { wanted }, effects: effects::now(), plays_parts, note, splitting_for }
     }
 
     // ------------------------------------------------------------------ splitting (stage 3)
@@ -3139,6 +3180,7 @@ impl Engine {
             v.splits = SplitsState { now: now.map(|t| (t, phase)), waiting, two_now, two_waiting, paused, can_split, can_split_two };
         });
         self.shared.tell(Change::Splits);
+        self.publish_now(); // the Mixer's "Splitting for No vocals…" comes and goes with the song's split
     }
 
     /// What's really playing, in the Linux app's words (core's quality): the video's, or the

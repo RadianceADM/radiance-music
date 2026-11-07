@@ -368,6 +368,7 @@ fn nothing_found_and_no_internet_means_offline() {
 #[test]
 fn home_has_the_greeting_and_the_recent_plays() {
     let _l = setup();
+    radiance_engine::library::store(&[]); // none liked, whichever test ran before
     radiance_engine::db::add_play(&song(Source::YouTube, "first", "First"), 1_000);
     radiance_engine::db::add_play(&song(Source::YouTube, "second", "Second"), 2_000);
     let fake = Arc::new(Fake::default());
@@ -815,6 +816,10 @@ fn downloading_lists_a_liked_song_until_its_saved() {
     c.toggle_like(&four.key());
     assert!(until(1.0, || c.downloading().first().is_some_and(|(t, s)| t.key() == four.key() && *s == radiance_core::library::Saved::Saving)), "it isn't listed while saving");
     assert!(until(5.0, || c.downloading().iter().all(|(t, _)| t.key() != four.key())), "still listed once saved");
+    // its file deleted: listed again, as Fix missing counts it
+    let file = c.liked().into_iter().find(|(t, _)| t.key() == four.key()).and_then(|(t, _)| t.file).expect("saved");
+    std::fs::remove_file(&file).unwrap();
+    assert!(c.downloading().iter().any(|(t, s)| t.key() == four.key() && *s == radiance_core::library::Saved::NotSaved), "a liked song whose file is gone isn't listed");
     c.toggle_like(&four.key());
     let _ = toasts_for(&c, &rx, 2.0);
     c.quit();
@@ -1632,6 +1637,7 @@ fn liked_songs_are_split_by_themselves() {
     assert!(got, "liked songs weren't split by themselves: {:?}", started(&fake));
     assert!(started(&fake).iter().all(|(_, two)| !two), "in four parts");
     c.quit();
+    radiance_engine::library::store(&[]); // (Home's test wants none liked)
 }
 
 #[test]
@@ -1905,6 +1911,59 @@ fn no_vocals_on_a_song_not_split_plays_without_the_singer_once_split() {
     assert_eq!(gain(&c, "vocals"), 0.0, "the singer is back: {:?}", c.now().mix.parts);
     assert!(toasts.iter().any(|m| m == &format!("“{}”: no vocals", t.title)), "{toasts:?}");
     c.set_voice(Voice::Song);
+    c.quit();
+}
+
+/// Owner, 2026-11-07, the beta's Mixer pop-up: "pag nag next song need ko pa pumunta sa song then bumalek sa no vocals
+/// para lang mag split???", "diba dapat automatic sya babalek sa song kase di pa downloaded", "walang loading indicator sa
+/// mixer kung splitting pa". No vocals carries on to the next song: it's split by itself (the one after it ahead, as GTK's
+/// play start), the Mixer shows Song (what's heard) and that it's splitting for No vocals till its parts land, then No vocals.
+#[test]
+fn no_vocals_carries_to_the_next_song_and_splits_it() {
+    let _l = setup();
+    let (a, b, n) = (wav("carry-a", 8.0), wav("carry-b", 8.0), wav("carry-n", 8.0));
+    let (c, fake, rx, list) = with_list("voice carries", vec![a.clone(), b.clone(), n.clone()]);
+    fake.split_makes_parts.store(true, Ordering::SeqCst);
+    *fake.split_wait.lock().unwrap() = Duration::from_millis(1500);
+    c.play_from(list, 0, &a.key());
+    assert!(until(4.0, || c.now().playing), "never got going");
+    c.set_voice(Voice::NoVocals);
+    // the next song is split ahead (ready by the time it plays)
+    assert!(until(2.0, || c.splits().two_waiting.iter().chain(c.splits().two_now.iter()).any(|t| t.key() == b.key())), "the next song wasn't split ahead: {:?}", c.splits().two_waiting);
+    c.skip(1);
+    assert!(until(4.0, || now_id(&c) == b.id && c.now().playing), "Next didn't play the next song");
+    // till its parts land: Song shown (it's what's heard), splitting for No vocals said, and the one after it ahead
+    let m = c.now().mix;
+    if !m.plays_parts {
+        assert_eq!((m.voice, m.splitting_for), (Voice::Song, Some(Voice::NoVocals)), "{m:?}");
+    }
+    assert!(until(2.0, || c.splits().two_waiting.iter().chain(c.splits().two_now.iter()).any(|t| t.key() == n.key()) || c.now().mix.plays_parts), "the song after it wasn't split ahead");
+    assert!(until(8.0, || c.now().mix.plays_parts), "the next song was never split (it needed Song, then No vocals again)");
+    let m = c.now().mix;
+    assert_eq!((m.voice, m.splitting_for), (Voice::NoVocals, None), "{m:?}");
+    assert_eq!(gain(&c, "vocals"), 0.0, "the singer is still there: {:?}", m.parts);
+    c.set_voice(Voice::Song);
+    let _ = toasts_for(&c, &rx, 1.0);
+    c.quit();
+}
+
+/// Turned back to Song while the song splits: nothing's waiting for it any more.
+#[test]
+fn song_while_splitting_for_no_vocals_waits_for_nothing() {
+    let _l = setup();
+    let t = wav("carry-off", 8.0);
+    let (c, fake, rx, list) = with_list("voice off", vec![t.clone()]);
+    fake.split_makes_parts.store(true, Ordering::SeqCst);
+    *fake.split_wait.lock().unwrap() = Duration::from_millis(1500);
+    c.play_from(list, 0, &t.key());
+    assert!(until(4.0, || c.now().playing), "never got going");
+    c.set_voice(Voice::NoVocals);
+    assert!(until(1.0, || c.now().mix.splitting_for == Some(Voice::NoVocals)), "{:?}", c.now().mix);
+    c.set_voice(Voice::Song);
+    assert!(until(1.0, || c.now().mix.splitting_for.is_none()), "{:?}", c.now().mix);
+    let m = c.now().mix;
+    assert_eq!((m.voice, m.splitting_for, m.note.as_str()), (Voice::Song, None, ""), "{m:?}");
+    let _ = toasts_for(&c, &rx, 2.0);
     c.quit();
 }
 

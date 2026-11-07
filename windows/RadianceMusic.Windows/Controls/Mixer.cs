@@ -21,6 +21,13 @@ internal sealed class Mixer : StackPanel
     private readonly StackPanel partRows = new() { Spacing = 4 };
     /// <summary>"Plays as the full song until it's split." (a voice asked for on a song not split yet).</summary>
     private readonly TextBlock note = new() { TextWrapping = TextWrapping.Wrap, Visibility = Visibility.Collapsed };
+    /// <summary>
+    /// While the song is split for the voice picked (owner, 2026-11-07: "walang loading indicator sa mixer kung splitting
+    /// pa"): "Splitting for No vocals…", a moving bar, and Turn Off (the song as it is). The buttons show Song meanwhile
+    /// ("diba dapat automatic sya babalek sa song kase di pa downloaded"); the voice comes on by itself once it's split.
+    /// </summary>
+    private readonly StackPanel splitting = new() { Spacing = 6, Visibility = Visibility.Collapsed, Opacity = 0 };
+    private readonly TextBlock splittingWords = new() { TextWrapping = TextWrapping.Wrap, VerticalAlignment = VerticalAlignment.Center };
     private readonly Dictionary<string, (Slider Slider, ProgressBar Meter)> parts = new();
     private readonly Slider[] fx = new Slider[3];
     private readonly DispatcherQueueTimer meters, fxLater;
@@ -43,6 +50,26 @@ internal sealed class Mixer : StackPanel
         };
         var body = this;
         body.Children.Add(voices);
+        {
+            var line = new Grid { ColumnSpacing = 8 };
+            line.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            line.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            splittingWords.Style = (Style)Application.Current.Resources["CaptionTextBlockStyle"];
+            line.Children.Add(splittingWords);
+            var off = new Button { Padding = new Thickness(10, 3, 10, 4) };
+            var offWords = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6 };
+            offWords.Children.Add(new FontIcon { Glyph = "\uE7E8", FontSize = 12 });
+            offWords.Children.Add(new TextBlock { Text = "Turn Off", Style = (Style)Application.Current.Resources["CaptionTextBlockStyle"] });
+            off.Content = offWords;
+            ToolTipService.SetToolTip(off, "Back to the song as it is (the split goes on, for next time)");
+            off.Click += (_, _) => hub.Engine.SetVoice(VoiceMode.Song);
+            Motion.AddPressScale(off);
+            Grid.SetColumn(off, 1);
+            line.Children.Add(off);
+            splitting.Children.Add(line);
+            splitting.Children.Add(new ProgressBar { IsIndeterminate = true });
+            body.Children.Add(splitting);
+        }
         note.Style = (Style)Application.Current.Resources["CaptionTextBlockStyle"];
         note.Foreground = (Brush)Application.Current.Resources["TextFillColorSecondaryBrush"];
         body.Children.Add(note);
@@ -163,6 +190,8 @@ internal sealed class Mixer : StackPanel
                 }
             }
             partRows.Visibility = mix.Parts.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
+            splittingWords.Text = mix.Splitting;
+            Motion.Fade(splitting, mix.Splitting.Length > 0);
             note.Text = mix.Note;
             note.Visibility = mix.Note.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
             foreach (var part in mix.Parts)
