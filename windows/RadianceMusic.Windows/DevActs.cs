@@ -19,6 +19,7 @@ namespace RadianceMusic;
 ///   (rows of its list); queue-menu:N  that queue row's menu; lyric-tap:N  a tap on lyric line N;
 ///   next          the next song (the bar's Next); mixer-open  the bar's Mixer pop-up opened;
 ///   part:NAME:GAIN  a Mixer slider (0..1); splitting  the Splitting… dialog
+///   voice:song|novocals|vocals  a Mixer voice button; mix-log  the Mixer's state in the log (voice, splitting, parts)
 /// </summary>
 internal static class DevActs
 {
@@ -45,6 +46,8 @@ internal static class DevActs
             "next" => Do(() => App.Hub.Engine.Skip(1)),
             "mixer-open" => window.Bar?.OpenMixer() == true,
             "splitting" => window.Content?.XamlRoot is { } sx && Do(() => _ = Dialogs.SplittingDialog.Open(App.Hub, sx)),
+            "voice" => arg switch { "song" => Native.VoiceMode.Song, "novocals" => Native.VoiceMode.NoVocals, "vocals" => Native.VoiceMode.VocalsOnly, _ => (Native.VoiceMode?)null } is { } vm && Do(() => App.Hub.Engine.SetVoice(vm)),
+            "mix-log" => Do(() => { var m = App.Hub.Engine.Now(); Crash.Note($"mix: {m.Song?.Title}: voice {m.Mix.Voice}, splitting '{m.Mix.Splitting}', note '{m.Mix.Note}', parts {m.Mix.Parts.Length}, plays parts {m.Mix.PlaysParts}"); }),
             "part" => arg.Split(':') is [var name, var g] && double.TryParse(g, System.Globalization.CultureInfo.InvariantCulture, out var gain) && Do(() => App.Hub.Engine.SetPart(name, gain)),
             // stage 4a: the Settings page's sections, the app's own pop-ups, a Storage move's confirm
             "settings" => int.TryParse(arg, out var sect) && Do(() => { window.Show("settings"); if (window.Page is Pages.SettingsPage sp) sp.Section = sect; }),
