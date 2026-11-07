@@ -5,6 +5,13 @@
 - **Downloading in the sidebar:** always there, it says how many liked songs aren't saved on this computer yet, e.g. "Downloading (3)". Its page lists them, the ones saving now first, says they play from the internet until they're saved, and has Fix missing to save them now. A click plays the song. Songs that only stream aren't listed: they're never saved. A liked song whose saved file was deleted is listed again, as Fix missing counts it (#66).
 - **Song, No vocals and Vocals only in the Mixer:** the sidebar Mixer now has the three buttons. They were made, but never on screen. Picked, No vocals carries on to the next songs: each is split as it starts (the next one ahead). Until a song is split, the buttons show Song (what you hear) with "Splitting for No vocals…", a spinner and Turn Off; No vocals comes on by itself once it's split (#67).
 - **The Mixer says when the song is splitting, and splits it:** whatever asked for it (liked songs split by themselves, Split from the menu), the Mixer says "Splitting into Music and Vocals…", "Splitting into four parts · 40%" or "Waiting to be split (2 songs first)", and has the split choices of the song's menu: Split: Music + Vocals (Fast), Split: Four Parts (Split in Four Parts once it's in two) (#68).
+- **A pause holds a crossfade:** paused in the middle of a crossfade or DJ mix, the fade waits too (it went on silently before, and Play brought back only the next song).
+- **After a crossfade into the queue's last song, Autoplay still adds songs like it** (the music stopped at that song's end before).
+- **Ready for the Windows app's next step:** when an update brings the new Windows app, the app that opens afterwards is the new one.
+
+## Windows beta 0.8.0-beta.7 — not released yet (#45, stage 4a-2)
+
+- **Crossfade and DJ mix between songs**, as the Linux app's: Settings → Playing → **Between Songs**: No Transition, Crossfade, or DJ Mix (by the Beat), and the crossfade length (1 to 12 seconds). A DJ mix lines up the beats, matches the tempo and swaps the bass halfway (a crossfade when the tempos are too far apart).
 
 ## Windows beta 0.8.0-beta.6 — not released yet (#45)
 

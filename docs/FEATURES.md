@@ -37,7 +37,7 @@ marked 🔜.
 | Queue: see it, move songs, remove | ✅ | ✅ | ✅ | ✅ | drag on the computer, Move up/down on the phone |
 | Played before (go back to a recent song, the queue carries on) | ✅ | ✅ | ✅ | ❌ | |
 | Shuffle, Repeat (all / one) | ✅ | ✅ | ✅ | ✅ | |
-| Crossfade and DJ mix between songs | ✅ | ✅ | 🔜 4 | ❌ | |
+| Crossfade and DJ mix between songs | ✅ | ✅ | ✅ | ❌ | the beta: Settings → Playing → Between Songs (No Transition, Crossfade, DJ Mix (by the Beat), the crossfade length); a pause holds a fade (both computer apps) |
 | Autoplay (similar songs when the queue ends) | ✅ | ✅ | ✅ | ❌ | |
 | Song Radio | ✅ | ✅ | ✅ | ❌ | |
 | Often-skipped songs kept out of mixes | ✅ | ✅ | ✅ | ❌ | the phone has no mixes yet |
