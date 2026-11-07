@@ -175,15 +175,26 @@ impl Relay {
             let last = (pos + piece - 1).min(end);
             piece = (piece * 2).min(PIECE);
             let asked = std::time::Instant::now();
-            let req = if in_address {
-                net::agent().get(&format!("{url}&range={pos}-{last}"))
-            } else {
-                net::agent().get(&url).header("Range", &format!("bytes={pos}-{last}"))
+            let mut tries = 0;
+            let mut resp = loop {
+                let req = if in_address {
+                    net::agent().get(&format!("{url}&range={pos}-{last}"))
+                } else {
+                    net::agent().get(&url).header("Range", &format!("bytes={pos}-{last}"))
+                };
+                match req.call() {
+                    Ok(resp) => break resp,
+                    Err(e) if tries < ASK_AGAIN_AFTER_MS.len() && worth_asking_again(&e) => {
+                        crate::log::note(&format!("relay: {pos}-{last} of {size} ({mime}) refused ({e}): asking again"));
+                        thread::sleep(std::time::Duration::from_millis(ASK_AGAIN_AFTER_MS[tries]));
+                        tries += 1;
+                    }
+                    Err(e) => {
+                        crate::log::note(&format!("relay: {pos}-{last} of {size} ({mime}) refused: {e}"));
+                        return Err(std::io::Error::other(e.to_string()));
+                    }
+                }
             };
-            let mut resp = req.call().map_err(|e| {
-                crate::log::note(&format!("relay: {pos}-{last} of {size} ({mime}) refused: {e}"));
-                std::io::Error::other(e.to_string())
-            })?;
             if std::env::var_os("RADIANCE_DEBUG").is_some() {
                 eprintln!("[relay] {pos}-{last}: answered in {:.2}s", asked.elapsed().as_secs_f64());
             }
@@ -204,9 +215,89 @@ impl Relay {
     }
 }
 
+/// YouTube now and then refuses a stream's piece (403) or is busy (429, 5xx) and answers the same ask a moment
+/// later: asked again after these waits before the song is given up (the beta skipped such songs to the next one;
+/// Previous then played them, 2026-11-07).
+const ASK_AGAIN_AFTER_MS: [u64; 2] = [400, 1000];
+
+fn worth_asking_again(e: &ureq::Error) -> bool {
+    matches!(e, ureq::Error::StatusCode(403 | 429 | 500..=599) | ureq::Error::Io(_) | ureq::Error::Timeout(_))
+}
+
 /// "bytes=100-" / "bytes=100-199".
 fn parse_range(value: &str) -> Option<(u64, Option<u64>)> {
     let spec = value.strip_prefix("bytes=")?;
     let (a, b) = spec.split_once('-')?;
     Some((a.trim().parse().ok()?, b.trim().parse().ok()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    /// A YouTube stand-in on 127.0.0.1: its first `refusals` asks get 403 (as googlevideo answers a stream's first
+    /// piece now and then), the rest the part in their address (&range=a-b) of `body`.
+    fn fake_youtube(body: Vec<u8>, refusals: usize) -> (String, Arc<AtomicUsize>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let asked = Arc::new(AtomicUsize::new(0));
+        let count = asked.clone();
+        thread::spawn(move || {
+            for conn in listener.incoming().flatten() {
+                let n = count.fetch_add(1, Ordering::SeqCst);
+                let mut reader = BufReader::new(conn.try_clone().unwrap());
+                let mut first = String::new();
+                let _ = reader.read_line(&mut first);
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).unwrap_or(0) == 0 || line.trim().is_empty() {
+                        break;
+                    }
+                }
+                let mut out = conn;
+                if n < refusals {
+                    let _ = out.write_all(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+                    continue;
+                }
+                let range = first.split("range=").nth(1).and_then(|r| r.split_whitespace().next()).unwrap_or("0-0");
+                let (a, b) = range.split_once('-').unwrap();
+                let (a, b): (usize, usize) = (a.parse().unwrap(), b.parse::<usize>().unwrap().min(body.len() - 1));
+                let part = &body[a..=b];
+                let _ = out.write_all(format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", part.len()).as_bytes());
+                let _ = out.write_all(part);
+            }
+        });
+        (format!("http://127.0.0.1:{port}/videoplayback?id=1"), asked)
+    }
+
+    fn song(len: u32) -> Vec<u8> {
+        (0..len).map(|i| (i % 251) as u8).collect()
+    }
+
+    /// The owner's beta skipped songs YouTube refused once (403 on the first piece: "won't play", the next song
+    /// started; Previous played it). The relay asks again before giving up.
+    #[test]
+    fn a_refused_piece_is_asked_again() {
+        let body = song(300_000);
+        let (url, asked) = fake_youtube(body.clone(), 1);
+        let relay = Relay::start().unwrap();
+        let address = relay.add(url, body.len() as u64, "audio/webm".into());
+        let got = net::agent().get(&address).call().unwrap().body_mut().read_to_vec().unwrap();
+        assert_eq!(got.len(), body.len());
+        assert!(got == body, "the song came back changed");
+        assert!(asked.load(Ordering::SeqCst) >= 2, "it was never asked again");
+    }
+
+    /// A stream YouTube refuses every time still fails (the song is given up, not waited on forever).
+    #[test]
+    fn a_stream_refused_every_time_still_fails() {
+        let body = song(200_000);
+        let (url, asked) = fake_youtube(body.clone(), usize::MAX);
+        let relay = Relay::start().unwrap();
+        let address = relay.add(url, body.len() as u64, "audio/webm".into());
+        let got = net::agent().get(&address).call().and_then(|mut r| r.body_mut().read_to_vec());
+        assert!(got.map(|b| b.len() < body.len()).unwrap_or(true), "a refused stream came back whole");
+        assert!(asked.load(Ordering::SeqCst) <= 3, "asked {} times", asked.load(Ordering::SeqCst));
+    }
 }
