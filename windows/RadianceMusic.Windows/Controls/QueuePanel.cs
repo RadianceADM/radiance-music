@@ -189,16 +189,21 @@ internal sealed class QueuePanel : Grid
         }
         next.ItemClick += (_, e) =>
         {
-            if (e.ClickedItem is SongRow r) hub.Engine.PlayFrom(ListKind.Queue, first + (uint)next.Items.IndexOf(r), r.Key);
+            if (e.ClickedItem is not SongRow r) return;
+            App.Trace($"queue: clicked {r.Title}");
+            hub.Engine.PlayFrom(ListKind.Queue, first + (uint)next.Items.IndexOf(r), r.Key);
         };
         next.DragItemsStarting += (_, e) =>
         {
             dragged = e.Items.FirstOrDefault();
             dragFrom = dragged == null ? -1 : next.Items.IndexOf(dragged);
+            App.Trace($"queue: drag from row {dragFrom}");
         };
-        next.DragItemsCompleted += (_, _) =>
+        next.DragItemsCompleted += (_, e) =>
         {
-            if (dragged is SongRow r && QueueDrop.Map(first, dragFrom, next.Items.IndexOf(r)) is { } m) hub.Engine.MoveInQueue(m.From, m.To, r.Key);
+            var to = dragged is SongRow d ? next.Items.IndexOf(d) : -1;
+            App.Trace($"queue: drag done ({e.DropResult}), row {dragFrom} now row {to}");
+            if (dragged is SongRow r && QueueDrop.Map(first, dragFrom, to) is { } m) hub.Engine.MoveInQueue(m.From, m.To, r.Key);
             dragged = null;
         };
         queueView.Children.Add(next);
