@@ -53,6 +53,7 @@ marked 🔜.
 | Feature | Linux | Windows | Windows beta | Phone | Notes |
 |---|---|---|---|---|---|
 | Part sliders: Drums, Bass, Other, Vocals | ✅ | ✅ | ✅ | ✅ | |
+| Song / No vocals / Vocals only, carrying on to the next songs (each split as it starts, the next ahead) | 🔜 | 🔜 | ✅ | ✅ | computer: the buttons show Song with "Splitting for No vocals…" and Turn Off till the song is split (#67); Linux and Windows had the buttons built but never on screen |
 | Two-part songs: Music and Vocals sliders | ✅ | ✅ | ✅ | 🔜 | the phone's split (0.5.17, #43); on the computer, songs split before there were four parts |
 | Keeps the loudness when parts are turned down | ✅ | ✅ | ✅ | ✅ | |
 | Low cut, High cut, Reverb (one setting, every song) | ✅ | ✅ | ✅ | ✅ | built into the computer app since 0.7.14 |

@@ -89,6 +89,17 @@ pub fn meter_tip(name: &str, power: Option<f64>) -> String {
     }
 }
 
+/// What the voice buttons show, both computer apps (owner, 2026-11-07, the beta's Mixer: "diba dapat automatic sya
+/// babalek sa song kase di pa downloaded", "walang loading indicator sa mixer kung splitting pa"): the voice picked
+/// once the song is `ready` for it (split); till then Song, what's heard, and the voice it's splitting for while
+/// something `splitting` it (the Mixer's loading line). The voice picked stays picked and comes on once it's split.
+pub fn shown_voice(wanted: Voice, ready: bool, splitting: bool) -> (Voice, Option<Voice>) {
+    if wanted == Voice::Song || ready {
+        return (wanted, None);
+    }
+    (Voice::Song, splitting.then_some(wanted))
+}
+
 #[cfg(test)]
 mod tests {
 
@@ -106,6 +117,18 @@ mod tests {
     }
     use super::*;
     use std::collections::HashMap;
+
+    /// Owner, 2026-11-07: "diba dapat automatic sya babalek sa song kase di pa downloaded". The voice buttons show
+    /// what's heard: Song while the voice picked waits for the song's split, and what it's splitting for (a loading
+    /// line) only while something splits it; the voice picked as it is once the song is ready.
+    #[test]
+    fn the_buttons_show_song_while_the_voice_waits_for_its_split() {
+        assert_eq!(shown_voice(Voice::NoVocals, false, true), (Voice::Song, Some(Voice::NoVocals)), "splitting for it");
+        assert_eq!(shown_voice(Voice::VocalsOnly, false, false), (Voice::Song, None), "waiting, nothing splitting it");
+        assert_eq!(shown_voice(Voice::NoVocals, true, false), (Voice::NoVocals, None), "split: on");
+        assert_eq!(shown_voice(Voice::NoVocals, true, true), (Voice::NoVocals, None), "split already (four parts asked too)");
+        assert_eq!(shown_voice(Voice::Song, false, true), (Voice::Song, None), "Song waits for nothing");
+    }
 
     #[test]
     fn every_part_gets_a_volume() {

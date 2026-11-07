@@ -3,6 +3,7 @@
 ## Next release — not released yet
 
 - **Downloading in the sidebar:** always there, it says how many liked songs aren't saved on this computer yet, e.g. "Downloading (3)". Its page lists them, the ones saving now first, says they play from the internet until they're saved, and has Fix missing to save them now. A click plays the song. Songs that only stream aren't listed: they're never saved. A liked song whose saved file was deleted is listed again, as Fix missing counts it (#66).
+- **Song, No vocals and Vocals only in the Mixer:** the sidebar Mixer now has the three buttons. They were made, but never on screen. Picked, No vocals carries on to the next songs: each is split as it starts (the next one ahead). Until a song is split, the buttons show Song (what you hear) with "Splitting for No vocals…", a spinner and Turn Off; No vocals comes on by itself once it's split (#67).
 
 ## Windows beta 0.8.0-beta.5 — not released yet (#45)
 

@@ -63,6 +63,8 @@ const SIDE_TABS: [(&str, &str); 3] = [("queue", "Queue"), ("lyrics", "Lyrics"), 
 
 const CSS: &str = "
 levelbar.part-meter trough { min-height: 6px; border-radius: 3px; }
+.voice-toggles { font-size: 0.86em; }
+.voice-toggles toggle { padding-left: 6px; padding-right: 6px; min-width: 0; }
 levelbar.part-meter block { min-height: 6px; border-radius: 3px; }
 levelbar.part-meter block.filled { background: #F38A35; }
 :root { --accent-bg-color: #E8782A; --accent-fg-color: #ffffff; --accent-color: #B85A14; }
@@ -762,6 +764,11 @@ pub struct Ui {
     // no vocals / vocals only
     voice: Cell<Voice>,
     voice_group: adw::ToggleGroup,
+    /// While the song is split for the voice picked: "Splitting for No vocals…", a spinner and Turn Off (as the beta's).
+    voice_line: gtk::Revealer,
+    voice_splitting: gtk::Label,
+    /// The voice button the app lit (what's heard): its change notice comes back later, and isn't a click.
+    voice_shown: Cell<Voice>,
     /// The mixer: one slider per part (drums, bass, other, vocals), and whether
     /// the parts are what's playing.
     mixer: gtk::Box,
@@ -1066,7 +1073,10 @@ impl Ui {
             mix_timer: RefCell::default(),
             fade_label: gtk::Label::builder().xalign(0.0).hexpand(true).build(),
             voice: Cell::new(Voice::Song),
-            voice_group: adw::ToggleGroup::builder().halign(gtk::Align::Start).margin_top(6).build(),
+            voice_group: adw::ToggleGroup::builder().halign(gtk::Align::Fill).hexpand(true).margin_top(6).css_classes(["voice-toggles"]).build(),
+            voice_line: gtk::Revealer::builder().transition_type(gtk::RevealerTransitionType::SlideDown).transition_duration(150).build(),
+            voice_splitting: gtk::Label::builder().xalign(0.0).hexpand(true).wrap(true).css_classes(["caption"]).build(),
+            voice_shown: Cell::new(Voice::Song),
             mixer: gtk::Box::builder().orientation(gtk::Orientation::Vertical).spacing(2).margin_top(4).visible(false).build(),
             mixer_list: gtk::ListBox::builder().selection_mode(gtk::SelectionMode::None).css_classes(["boxed-list"]).margin_start(8).margin_end(8).margin_top(8).visible(false).build(),
             part_scales: RefCell::default(),
@@ -1297,6 +1307,10 @@ impl Ui {
         // RADIANCE_SHOT_SETUP=1: the steps acted out (screenshot checks); otherwise never in a screenshot copy
         let acted = std::env::var_os("RADIANCE_SHOT_SETUP").is_some();
         if std::env::var_os("RADIANCE_SHOT").is_some() && !acted {
+            return;
+        }
+        // RADIANCE_SETUP=off: a developer run downloads nothing onto the test computer (the beta's switch, #61 M7)
+        if std::env::var("RADIANCE_SETUP").as_deref() == Ok("off") {
             return;
         }
         if let Some(s) = splash {
@@ -1836,6 +1850,32 @@ impl Ui {
             }
         });
 
+        // Song / No vocals / Vocals only on top (owner, 2026-11-07: the Linux app as the beta; built since 0.7.7 but
+        // never on screen), and while the song is split for the voice picked: what for, a spinner and Turn Off
+        let voice_row = gtk::Box::builder().orientation(gtk::Orientation::Vertical).spacing(6).margin_bottom(6).build();
+        voice_row.append(&self.voice_group);
+        let line = gtk::Box::builder().spacing(8).build();
+        line.append(&adw::Spinner::builder().width_request(16).height_request(16).build());
+        line.append(&self.voice_splitting);
+        let off = gtk::Button::builder()
+            .child(&adw::ButtonContent::builder().icon_name("system-shutdown-symbolic").label("Turn Off").build())
+            .tooltip_text("Back to the song as it is (the split goes on, for next time)")
+            .css_classes(["flat", "caption"])
+            .valign(gtk::Align::Center)
+            .build();
+        let me = Rc::downgrade(self);
+        off.connect_clicked(move |_| {
+            if let Some(me) = me.upgrade() {
+                me.voice.set(Voice::Song);
+                me.voice_changed();
+            }
+        });
+        line.append(&off);
+        self.voice_line.set_child(Some(&line));
+        voice_row.append(&self.voice_line);
+        voice_row.set_widget_name("voice");
+        self.mixer.append(&voice_row);
+
         // six parts or four: ticked song by song (the split again, with Piano and Guitar apart)
         let six = gtk::CheckButton::builder().label("6 parts: Piano and Guitar too").tooltip_text("Split this song again into six parts: the beat's piano and guitar get sliders of their own. Only this song; untick to go back to four.").css_classes(["caption"]).build();
         let six_row = gtk::Box::builder().margin_bottom(2).build();
@@ -2269,10 +2309,14 @@ impl Ui {
                     Some("Vocals only") => Voice::VocalsOnly,
                     _ => Voice::Song,
                 };
-                if v != me.voice.get() {
-                    me.voice.set(v);
-                    me.voice_changed();
+                // the button the app lit itself (show_voice): not a click (GTK can tell of it after the app's done)
+                if v == me.voice_shown.get() {
+                    return;
                 }
+                me.voice_shown.set(v);
+                // (the voice picked pressed again while its buttons show Song: asked again, the buttons back as they were)
+                me.voice.set(v);
+                me.voice_changed();
             }
         });
         // the backdrop drifts only while on screen
@@ -2752,16 +2796,21 @@ impl Ui {
 
     fn voice_changed(self: &Rc<Self>) {
         let v = self.voice.get();
+        // the sliders as the voice has them, every part (as the beta's set_voice): No vocals with Vocals at full
+        // looked wrong on a song split in two (it plays its Music half), and a slider moved then brought the singer back
+        {
+            let mut g = self.part_gains.borrow_mut();
+            for p in split::SIX.iter().chain(["music"].iter()) {
+                g.insert(p.to_string(), mixer::preset(v, p));
+            }
+        }
+        self.show_mixer_values();
         let Some(t) = self.current.borrow().clone() else {
             self.update_voice_status();
             return;
         };
         if split::has_parts(&t) || Self::shown_parts(&t).len() >= 4 {
-            // with the four parts: the buttons are mixer presets
-            let preset = |p: &str| mixer::preset(v, p);
-            for p in split::SIX {
-                self.part_gains.borrow_mut().insert(p.to_string(), preset(p));
-            }
+            // with the four parts: the buttons are mixer presets (set above)
             self.show_mixer_values();
             self.apply_mix();
             self.update_voice_status();
@@ -3300,13 +3349,13 @@ impl Ui {
         while let Some(r) = row {
             let name = r.widget_name();
             r.set_visible(match name.as_str() {
-                "fx" => true, // the app's own effects: every song, every speaker
+                "fx" | "voice" => true, // the app's own effects and the voice buttons: every song, every speaker
                 "six" => split::SIX_PARTS_ON && ((parts && have.len() >= 4) || ticked),
                 n => have.contains(&n),
             });
             row = r.next_sibling();
         }
-        self.mixer_row.set_subtitle(if parts { "Each part as loud as you like, and effects" } else { "Low cut, high cut and reverb" });
+        self.mixer_row.set_subtitle(if parts { "No vocals, each part as loud as you like, and effects" } else { "No vocals, Vocals only, and effects" });
         self.mixer_list.set_visible(true);
         let cur = self.current.borrow().clone();
         let splitting_key = self.split_q.borrow().now().map(|t| t.key());
@@ -3374,6 +3423,62 @@ impl Ui {
         let away = self.show_away(); // your songs in a server's split queue
         self.split_queue_btn.set_visible(busy || away);
         self.split_card.set_visible(busy || away); // nothing to say: no card (paused shows its own line while songs wait)
+        self.show_voice();
+    }
+
+    /// The voice buttons show what's heard (core's shown_voice, as the beta's): Song while the voice picked waits for
+    /// the song's split, with "Splitting for No vocals…", a spinner and Turn Off while something splits it; the voice
+    /// picked once it's split (it comes on by itself).
+    fn show_voice(&self) {
+        let wanted = self.voice.get();
+        let cur = self.current.borrow().clone();
+        let ready = cur.as_ref().is_none_or(|t| !t.video && (split::has_parts(t) || Self::shown_parts(t).len() >= 4 || split::ready(t, wanted).is_some()));
+        let splitting = cur.as_ref().is_some_and(|t| {
+            let q = self.split_q.borrow();
+            self.fast_busy(t) || q.now().is_some_and(|x| x.key() == t.key()) || q.place(&t.key()).is_some()
+        });
+        let (shown, splitting_for) = mixer::shown_voice(wanted, ready, splitting);
+        self.voice_shown.set(shown);
+        if self.voice_group.active_name().as_deref() != Some(shown.label()) {
+            self.voice_group.set_active_name(Some(shown.label()));
+        }
+        if let Some(v) = splitting_for {
+            let text = words::splitting_for(v.label());
+            self.voice_splitting.set_label(&text);
+            self.mixer_row.set_subtitle(&text); // said with the Mixer closed too
+        }
+        // in 150 ms, out 120 ms (the animation blueprint's small things)
+        self.voice_line.set_transition_duration(if splitting_for.is_some() { 150 } else { 120 });
+        self.voice_line.set_reveal_child(splitting_for.is_some());
+    }
+
+    /// A step of RADIANCE_DEV_ACTS (main.rs: a real run acted out on the build server): play, next,
+    /// voice:song|novocals|vocals, mixer (opened), log (the voice buttons' state in the app's log).
+    pub fn dev_act(self: &Rc<Self>, step: &str) {
+        match step.split_once(':').unwrap_or((step, "")) {
+            ("play", _) => self.toggle_play(),
+            ("next", _) => self.skip(1),
+            ("voice", v) => {
+                let v = match v {
+                    "novocals" => Voice::NoVocals,
+                    "vocals" => Voice::VocalsOnly,
+                    _ => Voice::Song,
+                };
+                self.voice_group.set_active_name(Some(v.label()));
+            }
+            ("mixer", _) => self.mixer_row.set_expanded(true),
+            ("log", _) => crate::log::note(&format!(
+                "voice: picked {}, shown {}, line {} '{}', playing {:?}, on its half {}, vocals slider {:?}",
+                self.voice.get().label(),
+                self.voice_group.active_name().unwrap_or_default(),
+                self.voice_line.reveals_child(),
+                self.voice_splitting.label(),
+                self.current.borrow().as_ref().map(|t| t.title.clone()),
+                self.on_half.get().is_some(),
+                self.part_gains.borrow().get("vocals")
+            )),
+            _ => {}
+        }
     }
 
     fn apply_volume(&self) {

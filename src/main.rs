@@ -79,6 +79,23 @@ const ICONS: [(&str, &str); 11] = [
     ("rms-react-wow", include_str!("../data/icons/rms-react-wow.svg")),
 ];
 
+/// RADIANCE_DEV_ACTS: its steps a second apart (wait:N, N seconds more); shot:FILE (the window as a PNG) and quit
+/// here, the rest the window's (Ui::dev_act).
+fn dev_acts(ui: std::rc::Rc<ui::Ui>, app: adw::Application, mut steps: std::collections::VecDeque<String>) {
+    let Some(step) = steps.pop_front() else { return };
+    let more = step.strip_prefix("wait:").and_then(|s| s.parse::<u64>().ok()).unwrap_or(0);
+    glib::timeout_add_local_once(std::time::Duration::from_secs(1 + more), move || {
+        log::note(&format!("act: {step}"));
+        match step.split_once(':').unwrap_or((step.as_str(), "")) {
+            ("shot", file) => shoot(&ui.window, file),
+            ("quit", _) => return app.quit(),
+            ("wait", _) => {}
+            _ => ui.dev_act(&step),
+        }
+        dev_acts(ui, app, steps);
+    });
+}
+
 /// The app's own icons (its logo, hearts, EQ), which the system theme doesn't have.
 /// The window as it is now, into a PNG (screenshot checks).
 fn shoot(w: &adw::ApplicationWindow, path: &str) {
@@ -1277,7 +1294,8 @@ fn main() -> glib::ExitCode {
     // HANDLES_OPEN: a radiancemusic:// link (registered in the .desktop file; on Windows by the
     // installer) comes as "open", to the copy running (on Linux through D-Bus; see one_copy)
     let mut flags = gtk::gio::ApplicationFlags::HANDLES_OPEN;
-    if shot.is_some() {
+    // (a developer run acted out on the build server has no session bus either)
+    if shot.is_some() || std::env::var_os("RADIANCE_DEV_ACTS").is_some() {
         flags |= gtk::gio::ApplicationFlags::NON_UNIQUE;
     }
     let builder = adw::Application::builder().application_id(APP_ID).flags(flags);
@@ -1296,6 +1314,11 @@ fn main() -> glib::ExitCode {
         let ui = ui::Ui::build(app);
         watch::start(&ui.window);
         ui.window.present();
+        // RADIANCE_DEV_ACTS="play;voice:novocals;wait:3;next;mixer;shot:FILE;wait:40;shot:FILE;quit": a real run (it
+        // plays, saves and splits, unlike a screenshot copy) acted out a step a second (checks on the build server)
+        if let (None, Ok(acts)) = (&shot, std::env::var("RADIANCE_DEV_ACTS")) {
+            dev_acts(ui.clone(), app.clone(), acts.split(';').map(String::from).collect());
+        }
         if let Some(path) = shot.clone() {
             // RADIANCE_SHOT_SIZE=WxH: the window that size (responsive checks)
             if let Some((w, h)) = std::env::var("RADIANCE_SHOT_SIZE").ok().and_then(|s| s.split_once('x').map(|(w, h)| (w.parse().ok(), h.parse().ok()))).and_then(|(w, h)| Some((w?, h?))) {

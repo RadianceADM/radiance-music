@@ -2372,10 +2372,10 @@ impl Engine {
         // what it's splitting for; the voice stays picked and is on once they land
         let wanted = self.voice.get();
         let cur = self.current.borrow().clone();
-        let waits = wanted != Voice::Song && parts.is_empty() && cur.is_some();
-        let note = if waits { radiance_core::words::FULL_UNTIL_SPLIT.to_string() } else { String::new() };
-        let splitting_for = cur.filter(|t| waits && self.splitting(t)).map(|_| wanted);
-        MixState { parts, voice: if waits { Voice::Song } else { wanted }, effects: effects::now(), plays_parts, note, splitting_for }
+        let ready = !parts.is_empty() || cur.is_none();
+        let (voice, splitting_for) = radiance_core::mix::shown_voice(wanted, ready, cur.as_ref().is_some_and(|t| self.splitting(t)));
+        let note = if voice != wanted { radiance_core::words::FULL_UNTIL_SPLIT.to_string() } else { String::new() };
+        MixState { parts, voice, effects: effects::now(), plays_parts, note, splitting_for }
     }
 
     // ------------------------------------------------------------------ splitting (stage 3)
