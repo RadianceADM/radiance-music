@@ -22,12 +22,18 @@ internal sealed class Mixer : StackPanel
     /// <summary>"Plays as the full song until it's split." (a voice asked for on a song not split yet).</summary>
     private readonly TextBlock note = new() { TextWrapping = TextWrapping.Wrap, Visibility = Visibility.Collapsed };
     /// <summary>
-    /// While the song is split for the voice picked (owner, 2026-11-07: "walang loading indicator sa mixer kung splitting
-    /// pa"): "Splitting for No vocals…", a moving bar, and Turn Off (the song as it is). The buttons show Song meanwhile
-    /// ("diba dapat automatic sya babalek sa song kase di pa downloaded"); the voice comes on by itself once it's split.
+    /// While the song playing is split, or waits in line for it, whatever asked for it (owner, 2026-11-07/08: "walang
+    /// loading indicator sa mixer kung splitting pa", "bakit di ko paren nakikita sa mixer kung splitting pa lang"):
+    /// what's happening, a bar (how far a four-part split is; moving for the rest), and Turn Off while it's for the
+    /// voice picked (its buttons show Song meanwhile, "diba dapat automatic sya babalek sa song kase di pa downloaded").
     /// </summary>
     private readonly StackPanel splitting = new() { Spacing = 6, Visibility = Visibility.Collapsed, Opacity = 0 };
     private readonly TextBlock splittingWords = new() { TextWrapping = TextWrapping.Wrap, VerticalAlignment = VerticalAlignment.Center };
+    private readonly ProgressBar splitBar = new() { IsIndeterminate = true, Minimum = 0, Maximum = 100 };
+    private readonly Button turnOff = new() { Padding = new Thickness(10, 3, 10, 4) };
+    /// <summary>The song menu's split choices for the song playing ("walang option sa mixer to split 4 ways").</summary>
+    private readonly StackPanel splitChoices = new() { Orientation = Orientation.Horizontal, Spacing = 8, Visibility = Visibility.Collapsed };
+    private string shownChoices = "-";
     private readonly Dictionary<string, (Slider Slider, ProgressBar Meter)> parts = new();
     private readonly Slider[] fx = new Slider[3];
     private readonly DispatcherQueueTimer meters, fxLater;
@@ -56,7 +62,7 @@ internal sealed class Mixer : StackPanel
             line.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
             splittingWords.Style = (Style)Application.Current.Resources["CaptionTextBlockStyle"];
             line.Children.Add(splittingWords);
-            var off = new Button { Padding = new Thickness(10, 3, 10, 4) };
+            var off = turnOff;
             var offWords = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6 };
             offWords.Children.Add(new FontIcon { Glyph = "\uE7E8", FontSize = 12 });
             offWords.Children.Add(new TextBlock { Text = "Turn Off", Style = (Style)Application.Current.Resources["CaptionTextBlockStyle"] });
@@ -67,8 +73,9 @@ internal sealed class Mixer : StackPanel
             Grid.SetColumn(off, 1);
             line.Children.Add(off);
             splitting.Children.Add(line);
-            splitting.Children.Add(new ProgressBar { IsIndeterminate = true });
+            splitting.Children.Add(splitBar);
             body.Children.Add(splitting);
+            body.Children.Add(splitChoices);
         }
         note.Style = (Style)Application.Current.Resources["CaptionTextBlockStyle"];
         note.Foreground = (Brush)Application.Current.Resources["TextFillColorSecondaryBrush"];
@@ -111,6 +118,8 @@ internal sealed class Mixer : StackPanel
         hub.Change += kind =>
         {
             if (kind == ChangeKind.Now) Render();
+            // a four-part split's progress comes as a Splits change
+            else if (kind == ChangeKind.Splits) RenderSplit();
         };
         Render();
     }
@@ -190,8 +199,7 @@ internal sealed class Mixer : StackPanel
                 }
             }
             partRows.Visibility = mix.Parts.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
-            splittingWords.Text = mix.Splitting;
-            Motion.Fade(splitting, mix.Splitting.Length > 0);
+            RenderSplit();
             note.Text = mix.Note;
             note.Visibility = mix.Note.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
             foreach (var part in mix.Parts)
@@ -210,6 +218,42 @@ internal sealed class Mixer : StackPanel
         {
             setting = false;
         }
+    }
+
+    /// <summary>The split line and the split choices for the song playing (engine's mixer_split).</summary>
+    private void RenderSplit()
+    {
+        var s = hub.Engine.MixerSplit();
+        splittingWords.Text = s.Line;
+        splitBar.IsIndeterminate = s.Progress < 0;
+        if (s.Progress >= 0) splitBar.Value = s.Progress * 100;
+        turnOff.Visibility = s.TurnOff ? Visibility.Visible : Visibility.Collapsed;
+        Motion.Fade(splitting, s.Line.Length > 0);
+        var choices = string.Join("|", s.Items.Select(i => i.Label));
+        if (choices != shownChoices)
+        {
+            shownChoices = choices;
+            splitChoices.Children.Clear();
+            foreach (var item in s.Items)
+            {
+                var action = item.Action;
+                var words = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6 };
+                // the fast split: scissors; four parts: four squares
+                words.Children.Add(new FontIcon { Glyph = action is MenuAction.SplitFour ? "\uE80A" : "\uE8C6", FontSize = 12 });
+                words.Children.Add(new TextBlock { Text = item.Label, Style = (Style)Application.Current.Resources["CaptionTextBlockStyle"] });
+                var b = new Button { Content = words, Padding = new Thickness(10, 4, 10, 5) };
+                ToolTipService.SetToolTip(b, action is MenuAction.SplitFour
+                    ? "Drums, Bass, Other and Vocals for the Mixer (about 3 minutes, while it plays)"
+                    : "Into Music and Vocals, a few seconds: then No vocals and Vocals only switch at once");
+                b.Click += (_, _) =>
+                {
+                    if (hub.Engine.Now().Song is { } song) hub.Engine.DoMenu(song.Key, 0, action);
+                };
+                Motion.AddPressScale(b);
+                splitChoices.Children.Add(b);
+            }
+        }
+        splitChoices.Visibility = s.Items.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
     }
 
     /// <summary>Its pop-up opened or closed: the meters run while it's open.</summary>

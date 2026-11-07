@@ -100,6 +100,45 @@ pub fn shown_voice(wanted: Voice, ready: bool, splitting: bool) -> (Voice, Optio
     (Voice::Song, splitting.then_some(wanted))
 }
 
+/// Where the song playing is in the splitting (the Mixer's line): not at all, split in two now, split in four now
+/// (how far, 0..1, when known), or waiting in line (how many songs go first).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum SplitState {
+    None,
+    Two,
+    Four(Option<f64>),
+    Waiting(usize),
+}
+
+/// The Mixer's split line and choices for the song playing: what its split is doing (none: nothing), how far (a
+/// four-part one), whether it's for the voice picked (Turn Off then), and the song menu's split choices.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct MixerSplit {
+    pub line: Option<String>,
+    pub progress: Option<f64>,
+    pub for_voice: bool,
+    pub items: Vec<crate::menu::Item>,
+}
+
+/// Owner, 2026-11-08 (the beta's Mixer): "bakit di ko paren nakikita sa mixer kung splitting pa lang" (any split of
+/// the song playing is said there, not only one for a voice picked) and "walang option sa mixer to split 4 ways"
+/// (the menu's split choices are in the Mixer too). Both computer apps.
+pub fn mixer_split(t: &crate::track::Track, ability: &crate::menu::SplitAbility, splitting_for: Option<Voice>, state: SplitState) -> MixerSplit {
+    use crate::words;
+    let line = match (splitting_for, state) {
+        (Some(v), _) => Some(words::splitting_for(v.label())),
+        (None, SplitState::None) => None,
+        (None, SplitState::Two) => Some(words::SPLITTING_TWO.to_string()),
+        (None, SplitState::Four(p)) => Some(words::splitting_four(p)),
+        (None, SplitState::Waiting(n)) => Some(words::split_waiting(n)),
+    };
+    let progress = match state {
+        SplitState::Four(p) => p,
+        _ => None,
+    };
+    MixerSplit { line, progress, for_voice: splitting_for.is_some(), items: crate::menu::split_items(t, ability) }
+}
+
 #[cfg(test)]
 mod tests {
 
@@ -121,6 +160,35 @@ mod tests {
     /// Owner, 2026-11-07: "diba dapat automatic sya babalek sa song kase di pa downloaded". The voice buttons show
     /// what's heard: Song while the voice picked waits for the song's split, and what it's splitting for (a loading
     /// line) only while something splits it; the voice picked as it is once the song is ready.
+    /// Owner, 2026-11-08 (the beta's Mixer): "bakit di ko paren nakikita sa mixer kung splitting pa lang", "walang option
+    /// sa mixer to split 4 ways". The Mixer says what the song playing's split is doing (any split, not only for a voice
+    /// picked), how far a four-part one is, and offers the menu's split choices (Four Parts too).
+    #[test]
+    fn the_mixer_says_how_the_songs_split_is_going_and_offers_the_splits() {
+        use crate::menu::{Action, SplitAbility};
+        use crate::track::{Source, Track};
+        let t = Track { source: Source::YouTube, id: "s".into(), title: "S".into(), artist: "A".into(), album: String::new(), seconds: 200, art: String::new(), format: String::new(), file: None, video: false, genres: None };
+        let all = SplitAbility { online: true, parts: 0, can_two: true, can_four: true, busy_two: false, busy_four: false };
+        let actions = |m: &MixerSplit| m.items.iter().map(|i| i.action.clone()).collect::<Vec<_>>();
+        let idle = mixer_split(&t, &all, None, SplitState::None);
+        assert_eq!((idle.line.as_deref(), idle.for_voice), (None, false));
+        assert_eq!(actions(&idle), [Action::SplitTwo, Action::SplitFour], "both splits offered in the Mixer");
+        let halves = SplitAbility { parts: 2, ..all };
+        assert_eq!(mixer_split(&t, &halves, None, SplitState::None).items.iter().map(|i| i.label.as_str()).collect::<Vec<_>>(), ["Split in Four Parts"]);
+        let two = mixer_split(&t, &SplitAbility { busy_two: true, ..all }, None, SplitState::Two);
+        assert_eq!((two.line.as_deref(), two.progress), (Some("Splitting into Music and Vocals…"), None));
+        assert_eq!(actions(&two), [Action::SplitFour], "the one splitting isn't offered again");
+        let four = mixer_split(&t, &SplitAbility { busy_four: true, ..all }, None, SplitState::Four(Some(0.4)));
+        assert_eq!((four.line.as_deref(), four.progress), (Some("Splitting into four parts · 40%"), Some(0.4)));
+        assert_eq!(mixer_split(&t, &all, None, SplitState::Four(None)).line.as_deref(), Some("Splitting into four parts…"));
+        assert_eq!(mixer_split(&t, &all, None, SplitState::Waiting(0)).line.as_deref(), Some("Next in line to be split"));
+        assert_eq!(mixer_split(&t, &all, None, SplitState::Waiting(2)).line.as_deref(), Some("Waiting to be split (2 songs first)"));
+        let voice = mixer_split(&t, &all, Some(Voice::NoVocals), SplitState::Two);
+        assert_eq!((voice.line.as_deref(), voice.for_voice), (Some("Splitting for No vocals…"), true), "for the voice picked: Turn Off too");
+        let video = Track { video: true, ..t.clone() };
+        assert!(mixer_split(&video, &all, None, SplitState::None).items.is_empty(), "a video isn't split");
+    }
+
     #[test]
     fn the_buttons_show_song_while_the_voice_waits_for_its_split() {
         assert_eq!(shown_voice(Voice::NoVocals, false, true), (Voice::Song, Some(Voice::NoVocals)), "splitting for it");

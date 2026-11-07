@@ -854,15 +854,7 @@ impl Controller {
         let Some(t) = t else { return Vec::new() };
         let saved = t.file.as_ref().is_some_and(|f| std::path::Path::new(f).exists());
         let lists: Vec<(i64, String)> = crate::db::playlists().into_iter().map(|(id, name, _)| (id, name)).collect();
-        let key = t.key();
-        let split = self.shared.view(|v| menu::SplitAbility {
-            online: v.online,
-            parts: split::mix_parts(&t).len(),
-            can_two: v.splits.can_split_two,
-            can_four: v.splits.can_split,
-            busy_two: v.splits.two_now.as_ref().is_some_and(|x| x.key() == key) || v.splits.two_waiting.iter().any(|x| x.key() == key),
-            busy_four: v.splits.now.as_ref().is_some_and(|(x, _)| x.key() == key) || v.splits.waiting.iter().any(|x| x.key() == key),
-        });
+        let split = self.shared.view(|v| split_ability(v, &t));
         menu::song_menu(&t, place, liked, saved, &lists, &split)
     }
 
@@ -912,6 +904,32 @@ impl Controller {
 
     pub fn now(&self) -> NowState {
         self.shared.view(|v| v.now.clone())
+    }
+
+    /// The Mixer's split line and choices for the song playing (core's mixer_split; owner, 2026-11-08): read again on
+    /// every Now and Splits change (a four-part split's progress comes as a Splits change).
+    pub fn mixer_split(&self) -> radiance_core::mix::MixerSplit {
+        use radiance_core::mix::{self, SplitState};
+        self.shared.view(|v| {
+            let Some(t) = v.now.song.clone() else { return mix::MixerSplit::default() };
+            let key = t.key();
+            let s = &v.splits;
+            let state = if s.two_now.as_ref().is_some_and(|x| x.key() == key) {
+                SplitState::Two
+            } else if let Some((_, p)) = s.now.as_ref().filter(|(x, _)| x.key() == key) {
+                SplitState::Four(match p {
+                    Phase::Splitting(f) => Some(*f),
+                    _ => None,
+                })
+            } else if let Some(i) = s.two_waiting.iter().position(|x| x.key() == key) {
+                SplitState::Waiting(i + usize::from(s.two_now.is_some()))
+            } else if let Some(i) = s.waiting.iter().position(|x| x.key() == key) {
+                SplitState::Waiting(i + usize::from(s.now.is_some()))
+            } else {
+                SplitState::None
+            };
+            mix::mixer_split(&t, &split_ability(v, &t), v.now.mix.splitting_for, state)
+        })
     }
 
     /// The queue's songs and the index of the one playing.
@@ -3839,6 +3857,19 @@ fn pause_poll() -> Duration {
 /// How long after the start updates are looked for (the GTK app's 8 s; RADIANCE_UPDATE_AFTER_MS: tests).
 fn update_after() -> Duration {
     std::env::var("RADIANCE_UPDATE_AFTER_MS").ok().and_then(|v| v.parse().ok()).map(Duration::from_millis).unwrap_or(Duration::from_secs(8))
+}
+
+/// What can be split for `t` now (the song menu's and the Mixer's split choices).
+fn split_ability(v: &View, t: &Track) -> menu::SplitAbility {
+    let key = t.key();
+    menu::SplitAbility {
+        online: v.online,
+        parts: split::mix_parts(t).len(),
+        can_two: v.splits.can_split_two,
+        can_four: v.splits.can_split,
+        busy_two: v.splits.two_now.as_ref().is_some_and(|x| x.key() == key) || v.splits.two_waiting.iter().any(|x| x.key() == key),
+        busy_four: v.splits.now.as_ref().is_some_and(|(x, _)| x.key() == key) || v.splits.waiting.iter().any(|x| x.key() == key),
+    }
 }
 
 /// Fix missing's label (None: nothing missing) and whether a song is saving now.

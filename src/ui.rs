@@ -769,6 +769,11 @@ pub struct Ui {
     voice_splitting: gtk::Label,
     /// The voice button the app lit (what's heard): its change notice comes back later, and isn't a click.
     voice_shown: Cell<Voice>,
+    /// Turn Off (only while the split is for the voice picked), and the Mixer's split choices (the song menu's) with
+    /// what they say now (made again only when that changes).
+    voice_off: gtk::Button,
+    mixer_splits: gtk::Box,
+    mixer_splits_shown: RefCell<String>,
     /// The mixer: one slider per part (drums, bass, other, vocals), and whether
     /// the parts are what's playing.
     mixer: gtk::Box,
@@ -1077,6 +1082,14 @@ impl Ui {
             voice_line: gtk::Revealer::builder().transition_type(gtk::RevealerTransitionType::SlideDown).transition_duration(150).build(),
             voice_splitting: gtk::Label::builder().xalign(0.0).hexpand(true).wrap(true).css_classes(["caption"]).build(),
             voice_shown: Cell::new(Voice::Song),
+            voice_off: gtk::Button::builder()
+                .child(&adw::ButtonContent::builder().icon_name("system-shutdown-symbolic").label("Turn Off").build())
+                .tooltip_text("Back to the song as it is (the split goes on, for next time)")
+                .css_classes(["flat", "caption"])
+                .valign(gtk::Align::Center)
+                .build(),
+            mixer_splits: gtk::Box::builder().orientation(gtk::Orientation::Vertical).spacing(4).build(),
+            mixer_splits_shown: RefCell::new("-".into()),
             mixer: gtk::Box::builder().orientation(gtk::Orientation::Vertical).spacing(2).margin_top(4).visible(false).build(),
             mixer_list: gtk::ListBox::builder().selection_mode(gtk::SelectionMode::None).css_classes(["boxed-list"]).margin_start(8).margin_end(8).margin_top(8).visible(false).build(),
             part_scales: RefCell::default(),
@@ -1857,12 +1870,7 @@ impl Ui {
         let line = gtk::Box::builder().spacing(8).build();
         line.append(&adw::Spinner::builder().width_request(16).height_request(16).build());
         line.append(&self.voice_splitting);
-        let off = gtk::Button::builder()
-            .child(&adw::ButtonContent::builder().icon_name("system-shutdown-symbolic").label("Turn Off").build())
-            .tooltip_text("Back to the song as it is (the split goes on, for next time)")
-            .css_classes(["flat", "caption"])
-            .valign(gtk::Align::Center)
-            .build();
+        let off = self.voice_off.clone();
         let me = Rc::downgrade(self);
         off.connect_clicked(move |_| {
             if let Some(me) = me.upgrade() {
@@ -1873,6 +1881,8 @@ impl Ui {
         line.append(&off);
         self.voice_line.set_child(Some(&line));
         voice_row.append(&self.voice_line);
+        // the song menu's split choices for the song playing ("walang option sa mixer to split 4 ways")
+        voice_row.append(&self.mixer_splits);
         voice_row.set_widget_name("voice");
         self.mixer.append(&voice_row);
 
@@ -3238,6 +3248,7 @@ impl Ui {
                 let Some(me) = me.upgrade() else { break };
                 me.split_progress.set(p);
                 me.show_split_progress();
+                me.show_voice(); // the Mixer's "Splitting into four parts · 40%"
             }
         });
         let me = Rc::downgrade(self);
@@ -3429,7 +3440,7 @@ impl Ui {
     /// The voice buttons show what's heard (core's shown_voice, as the beta's): Song while the voice picked waits for
     /// the song's split, with "Splitting for No vocals…", a spinner and Turn Off while something splits it; the voice
     /// picked once it's split (it comes on by itself).
-    fn show_voice(&self) {
+    fn show_voice(self: &Rc<Self>) {
         let wanted = self.voice.get();
         let cur = self.current.borrow().clone();
         let ready = cur.as_ref().is_none_or(|t| !t.video && (split::has_parts(t) || Self::shown_parts(t).len() >= 4 || split::ready(t, wanted).is_some()));
@@ -3442,18 +3453,96 @@ impl Ui {
         if self.voice_group.active_name().as_deref() != Some(shown.label()) {
             self.voice_group.set_active_name(Some(shown.label()));
         }
-        if let Some(v) = splitting_for {
-            let text = words::splitting_for(v.label());
-            self.voice_splitting.set_label(&text);
-            self.mixer_row.set_subtitle(&text); // said with the Mixer closed too
+        // any split of the song playing, said in the Mixer (owner, 2026-11-08: "bakit di ko paren nakikita sa mixer kung
+        // splitting pa lang"), and its split choices ("walang option sa mixer to split 4 ways"): core's mixer_split
+        let m = match cur.as_ref() {
+            Some(t) => mixer::mixer_split(t, &self.split_ability(t), splitting_for, self.split_state(t)),
+            None => mixer::MixerSplit::default(),
+        };
+        if let Some(text) = &m.line {
+            self.voice_splitting.set_label(text);
+            self.mixer_row.set_subtitle(text); // said with the Mixer closed too
         }
+        self.voice_off.set_visible(m.for_voice);
         // in 150 ms, out 120 ms (the animation blueprint's small things)
-        self.voice_line.set_transition_duration(if splitting_for.is_some() { 150 } else { 120 });
-        self.voice_line.set_reveal_child(splitting_for.is_some());
+        self.voice_line.set_transition_duration(if m.line.is_some() { 150 } else { 120 });
+        self.voice_line.set_reveal_child(m.line.is_some());
+        self.show_mixer_splits(&m.items);
+    }
+
+    /// What can be split for `t` here now (the Mixer's choices; a server's song splits there: none here).
+    fn split_ability(&self, t: &Track) -> radiance_core::menu::SplitAbility {
+        if self.splits_on_server(t).is_some() {
+            return radiance_core::menu::SplitAbility::NONE;
+        }
+        let key = t.key();
+        let q = self.split_q.borrow();
+        radiance_core::menu::SplitAbility {
+            online: self.online.get(),
+            parts: Self::shown_parts(t).len(),
+            can_two: self.can_split_two(),
+            can_four: self.can_split(),
+            busy_two: self.fast_busy(t),
+            busy_four: q.place(&key).is_some(),
+        }
+    }
+
+    /// Where `t` is in the splitting: split in two now, in four now (how far), waiting in line (how many go first).
+    fn split_state(&self, t: &Track) -> mixer::SplitState {
+        let key = t.key();
+        let q = self.split_q.borrow();
+        let two_now = self.splitting_two.borrow().as_ref().map(|x| x.key());
+        if two_now.as_deref() == Some(key.as_str()) {
+            return mixer::SplitState::Two;
+        }
+        if let Some(i) = self.two_queue.borrow().iter().position(|(x, _)| x.key() == key) {
+            return mixer::SplitState::Waiting(i + usize::from(two_now.is_some()));
+        }
+        match q.place(&key) {
+            Some(0) => {
+                let p = self.split_progress.get();
+                mixer::SplitState::Four((0.0..=1.0).contains(&p).then_some(p))
+            }
+            Some(n) => mixer::SplitState::Waiting(n - 1 + usize::from(q.now().is_some())),
+            None => mixer::SplitState::None,
+        }
+    }
+
+    /// The Mixer's split buttons (the song menu's choices), made again only when they change.
+    fn show_mixer_splits(self: &Rc<Self>, items: &[radiance_core::menu::Item]) {
+        let shown = items.iter().map(|i| i.label.as_str()).collect::<Vec<_>>().join("|");
+        if *self.mixer_splits_shown.borrow() == shown {
+            return;
+        }
+        *self.mixer_splits_shown.borrow_mut() = shown;
+        while let Some(c) = self.mixer_splits.first_child() {
+            self.mixer_splits.remove(&c);
+        }
+        for item in items {
+            let four = item.action == radiance_core::menu::Action::SplitFour;
+            let b = gtk::Button::builder()
+                .child(&adw::ButtonContent::builder().icon_name(if four { "view-grid-symbolic" } else { "edit-cut-symbolic" }).label(&item.label).build())
+                .tooltip_text(if four { "Drums, Bass, Other and Vocals for the Mixer (about 3 minutes, while it plays)" } else { "Into Music and Vocals, a few seconds: then No vocals and Vocals only switch at once" })
+                .css_classes(["caption"])
+                .halign(gtk::Align::Start)
+                .build();
+            let me = Rc::downgrade(self);
+            b.connect_clicked(move |_| {
+                if let Some(me) = me.upgrade() {
+                    let t = me.current.borrow().clone();
+                    if let Some(t) = t {
+                        me.split_as(&t, !four);
+                    }
+                }
+            });
+            self.mixer_splits.append(&b);
+        }
+        self.mixer_splits.set_visible(!items.is_empty());
     }
 
     /// A step of RADIANCE_DEV_ACTS (main.rs: a real run acted out on the build server): play, next,
-    /// voice:song|novocals|vocals, mixer (opened), log (the voice buttons' state in the app's log).
+    /// voice:song|novocals|vocals, mixer (opened), split:two|four (the Mixer's split buttons), log (the voice buttons'
+    /// and the split line's state in the app's log).
     pub fn dev_act(self: &Rc<Self>, step: &str) {
         match step.split_once(':').unwrap_or((step, "")) {
             ("play", _) => self.toggle_play(),
@@ -3467,12 +3556,21 @@ impl Ui {
                 self.voice_group.set_active_name(Some(v.label()));
             }
             ("mixer", _) => self.mixer_row.set_expanded(true),
+            // the Mixer's split buttons
+            ("split", how) => {
+                let t = self.current.borrow().clone();
+                if let Some(t) = t {
+                    self.split_as(&t, how != "four");
+                }
+            }
             ("log", _) => crate::log::note(&format!(
-                "voice: picked {}, shown {}, line {} '{}', playing {:?}, on its half {}, vocals slider {:?}",
+                "voice: picked {}, shown {}, line {} '{}', turn off {}, choices [{}], playing {:?}, on its half {}, vocals slider {:?}",
                 self.voice.get().label(),
                 self.voice_group.active_name().unwrap_or_default(),
                 self.voice_line.reveals_child(),
                 self.voice_splitting.label(),
+                self.voice_off.is_visible(),
+                self.mixer_splits_shown.borrow(),
                 self.current.borrow().as_ref().map(|t| t.title.clone()),
                 self.on_half.get().is_some(),
                 self.part_gains.borrow().get("vocals")

@@ -1947,6 +1947,30 @@ fn no_vocals_carries_to_the_next_song_and_splits_it() {
     c.quit();
 }
 
+/// Owner, 2026-11-08 (the beta's Mixer): "bakit di ko paren nakikita sa mixer kung splitting pa lang", "walang option sa
+/// mixer to split 4 ways". Any split of the song playing is said in the Mixer, and it offers the splits (Four Parts too).
+#[test]
+fn the_mixer_says_the_song_is_splitting_and_offers_four_parts() {
+    use radiance_core::menu::Action;
+    let _l = setup();
+    let t = wav("mixer-split", 8.0);
+    let (c, fake, rx, list) = with_list("mixer split", vec![t.clone()]);
+    fake.split_makes_parts.store(true, Ordering::SeqCst);
+    *fake.split_wait.lock().unwrap() = Duration::from_millis(1500);
+    c.play_from(list, 0, &t.key());
+    assert!(until(4.0, || c.now().playing), "never got going");
+    let actions = |c: &Controller| c.mixer_split().items.iter().map(|i| i.action.clone()).collect::<Vec<_>>();
+    assert!(until(2.0, || actions(&c).contains(&Action::SplitFour)), "Four Parts isn't offered: {:?}", c.mixer_split());
+    assert_eq!(c.mixer_split().line, None);
+    c.split(&t.key(), false);
+    assert!(until(1.0, || c.mixer_split().line.is_some_and(|l| l.starts_with("Splitting into four parts"))), "{:?}", c.mixer_split());
+    assert!(!c.mixer_split().for_voice, "no voice waits: no Turn Off");
+    assert!(!actions(&c).contains(&Action::SplitFour), "offered again while it splits");
+    assert!(until(6.0, || c.mixer_split().line.is_none()), "the line stayed once it was split: {:?}", c.mixer_split());
+    let _ = toasts_for(&c, &rx, 1.0);
+    c.quit();
+}
+
 /// Turned back to Song while the song splits: nothing's waiting for it any more.
 #[test]
 fn song_while_splitting_for_no_vocals_waits_for_nothing() {

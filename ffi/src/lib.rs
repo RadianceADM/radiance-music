@@ -408,6 +408,10 @@ impl MusicEngine {
             mix: mix_view(&n.mix),
         }
     }
+    /// The Mixer's split line and choices for the song playing: read again on Now and Splits changes.
+    pub fn mixer_split(&self) -> MixerSplitView {
+        mixer_split_view(self.inner.mixer_split())
+    }
 
     pub fn results(&self) -> ResultsView {
         results_view(self.inner.results(), !self.inner.online(), &Rows::of(&self.inner))
@@ -1085,9 +1089,26 @@ pub struct MixView {
     pub plays_parts: bool,
     /// Under the voice buttons: "Plays as the full song until it's split.", or empty.
     pub note: String,
-    /// The loading line while the song is split for the voice picked ("Splitting for No vocals…"; the voice buttons
-    /// show Song, what's heard, till then), or empty.
-    pub splitting: String,
+}
+
+/// The Mixer's split line and choices for the song playing (owner, 2026-11-07/08): what its split is doing ("Splitting
+/// for No vocals…", "Splitting into four parts · 40%", "Next in line to be split"; empty: nothing), how far (0..1;
+/// -1: not known, a moving bar), Turn Off while it's for the voice picked, and the song menu's split choices.
+#[derive(Clone, Debug, uniffi::Record)]
+pub struct MixerSplitView {
+    pub line: String,
+    pub progress: f64,
+    pub turn_off: bool,
+    pub items: Vec<MenuItemView>,
+}
+
+fn mixer_split_view(m: radiance_core::mix::MixerSplit) -> MixerSplitView {
+    MixerSplitView {
+        line: m.line.unwrap_or_default(),
+        progress: m.progress.unwrap_or(-1.0),
+        turn_off: m.for_voice,
+        items: m.items.into_iter().map(|i| MenuItemView { label: i.label, action: i.action.into() }).collect(),
+    }
 }
 
 fn mix_view(m: &controller::MixState) -> MixView {
@@ -1099,7 +1120,6 @@ fn mix_view(m: &controller::MixState) -> MixView {
         reverb: m.effects.reverb,
         plays_parts: m.plays_parts,
         note: m.note.clone(),
-        splitting: m.splitting_for.map(|v| radiance_core::words::splitting_for(v.label())).unwrap_or_default(),
     }
 }
 
@@ -1936,9 +1956,17 @@ mod tests {
         assert_eq!(v.voice, VoiceMode::NoVocals);
         assert_eq!((v.low_cut, v.high_cut, v.reverb), (20.0, 20000.0, 0.0));
         assert!(v.plays_parts);
-        assert_eq!(v.splitting, "");
-        let waiting = controller::MixState { parts: vec![], voice: radiance_core::mix::Voice::Song, splitting_for: Some(radiance_core::mix::Voice::NoVocals), note: radiance_core::words::FULL_UNTIL_SPLIT.into(), ..m };
-        assert_eq!(mix_view(&waiting).splitting, "Splitting for No vocals…", "the Mixer's loading line");
+    }
+
+    #[test]
+    fn the_mixer_split_view_carries_the_line_its_progress_and_the_choices() {
+        use radiance_core::menu::{Action, Item};
+        let m = radiance_core::mix::MixerSplit { line: Some("Splitting into four parts · 40%".into()), progress: Some(0.4), for_voice: false, items: vec![Item { label: "Split: Music + Vocals (Fast)".into(), action: Action::SplitTwo }] };
+        let v = mixer_split_view(m);
+        assert_eq!((v.line.as_str(), v.progress, v.turn_off), ("Splitting into four parts · 40%", 0.4, false));
+        assert_eq!(v.items.len(), 1);
+        let none = mixer_split_view(radiance_core::mix::MixerSplit { for_voice: true, ..Default::default() });
+        assert_eq!((none.line.as_str(), none.progress, none.turn_off), ("", -1.0, true), "no progress known: -1 (a moving bar)");
     }
 
     #[test]
@@ -2039,7 +2067,7 @@ mod tests {
 
     #[test]
     fn the_versions_and_the_browse_tiles() {
-        assert_eq!(beta_version(), "0.8.0-beta.5");
+        assert_eq!(beta_version(), "0.8.0-beta.6");
         assert_eq!(engine_version(), radiance_engine::VERSION);
         let tiles = browse_tiles();
         assert_eq!(tiles.len(), 12);

@@ -223,6 +223,26 @@ pub const FULL_UNTIL_SPLIT: &str = "Plays as the full song until it's split.";
 pub fn splitting_for(voice: &str) -> String {
     format!("Splitting for {voice}…")
 }
+
+/// The Mixer's line while the song playing is split in two (any reason: Split, liked songs).
+pub const SPLITTING_TWO: &str = "Splitting into Music and Vocals…";
+
+/// The Mixer's line while the song playing is split in four: how far, when it's known.
+pub fn splitting_four(done: Option<f64>) -> String {
+    match done {
+        Some(p) => format!("Splitting into four parts · {:.0}%", p * 100.0),
+        None => "Splitting into four parts…".to_string(),
+    }
+}
+
+/// The Mixer's line while the song playing waits in line to be split (`first`: songs split before it).
+pub fn split_waiting(first: usize) -> String {
+    match first {
+        0 => "Next in line to be split".to_string(),
+        1 => "Waiting to be split (1 song first)".to_string(),
+        n => format!("Waiting to be split ({n} songs first)"),
+    }
+}
 pub const SPLIT_FOUR: &str = "Split: Four Parts";
 pub const SPLIT_FOUR_AFTER_TWO: &str = "Split in Four Parts";
 pub const SHOW_LYRICS: &str = "Show Lyrics";
