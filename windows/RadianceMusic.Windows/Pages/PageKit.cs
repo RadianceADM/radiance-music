@@ -45,6 +45,7 @@ internal static class PageKit
         var b = new Button { Content = content, Padding = new Thickness(14, 6, 14, 6) };
         if (accent) b.Style = (Style)Application.Current.Resources["AccentButtonStyle"];
         b.Click += (_, _) => click();
+        Motion.AddPressScale(b); // (rule 4: 0.97 while pressed)
         return b;
     }
 

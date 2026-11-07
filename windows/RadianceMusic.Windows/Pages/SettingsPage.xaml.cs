@@ -21,7 +21,9 @@ public sealed partial class SettingsPage : Page
     private readonly HelpWords w = Ffi.HelpWords();
     private readonly SelectorBar bar = new();
     private readonly StackPanel body = new() { Spacing = 16 };
-    private readonly StackPanel section = new() { Spacing = 12 };
+    private StackPanel section = new() { Spacing = 12 };
+    /// <summary>Where the section shows: a new one crossfades over the old (rule 16).</summary>
+    private readonly Grid sections = new();
     private int shown;
 
     /// <summary>The section open now (the screenshots' --act section:N).</summary>
@@ -44,10 +46,13 @@ public sealed partial class SettingsPage : Page
         bar.SelectionChanged += (_, _) =>
         {
             shown = Math.Max(0, bar.Items.IndexOf(bar.SelectedItem));
+            section = new StackPanel { Spacing = 12 };
             Render();
+            Motion.Crossfade(sections, section);
         };
         body.Children.Add(bar);
-        body.Children.Add(section);
+        sections.Children.Add(section);
+        body.Children.Add(sections);
         Content = PageKit.Column(body);
     }
 

@@ -173,7 +173,7 @@ internal sealed class QueuePanel : Grid
         {
             var song = rows[i];
             var index = first + (uint)i;
-            var row = new SongRow(hub.Engine, song, heart: false);
+            var row = new SongRow(hub.Engine, song, heart: false, handle: true);
             ToolTipService.SetToolTip(row, "Drag to move it in the queue");
             SongMenu.Attach(row, hub, song.Key, index, new MenuPlace.Queue(), () => hub.Engine.PlayFrom(ListKind.Queue, index, song.Key));
             next.Items.Add(row);

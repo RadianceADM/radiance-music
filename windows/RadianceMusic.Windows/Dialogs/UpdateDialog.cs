@@ -21,7 +21,10 @@ internal static class UpdateDialog
         if (Up) return;
         var w = Ffi.HelpWords();
         var body = new StackPanel { Spacing = 10, Width = 420 };
-        var dialog = new ContentDialog { XamlRoot = root, Title = w.UpdateTitle, Content = body, CornerRadius = new CornerRadius(16) };
+        // a new step crossfades over the last (rule 16); the download's progress redraws in place
+        var host = new Grid();
+        host.Children.Add(body);
+        var dialog = new ContentDialog { XamlRoot = root, Title = w.UpdateTitle, Content = host, CornerRadius = new CornerRadius(16) };
         UpdateStepView shown = UpdateStepView.None;
 
         Button Act(string glyph, string text, Action click, bool accent = false)
@@ -34,13 +37,15 @@ internal static class UpdateDialog
         void Render()
         {
             var u = hub.Engine.Update();
+            var newStep = shown != UpdateStepView.None && u.Step != shown;
             shown = u.Step;
-            body.Children.Clear();
             if (u.Step == UpdateStepView.None)
             {
                 dialog.Hide();
                 return;
             }
+            if (newStep) body = new StackPanel { Spacing = 10, Width = 420 };
+            else body.Children.Clear();
             var mark = new Border { Width = 56, Height = 56, CornerRadius = new CornerRadius(28), HorizontalAlignment = HorizontalAlignment.Left, Background = (Brush)Application.Current.Resources["AccentFillColorDefaultBrush"] };
             var glyph = u.Step switch { UpdateStepView.Downloading => "", UpdateStepView.Failed => "", UpdateStepView.Ready or UpdateStepView.Restarting => "", _ => "" };
             mark.Child = new FontIcon { Glyph = glyph, FontSize = 24, Foreground = (Brush)Application.Current.Resources["TextOnAccentFillColorPrimaryBrush"] };
@@ -77,6 +82,7 @@ internal static class UpdateDialog
                     dialog.CloseButtonText = w.RemindLater;
                     break;
             }
+            if (newStep) Motion.Crossfade(host, body);
         }
 
         void OnChange(ChangeKind kind)

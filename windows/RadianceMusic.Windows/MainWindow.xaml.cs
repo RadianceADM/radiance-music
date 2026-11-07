@@ -199,7 +199,7 @@ public sealed partial class MainWindow : Window
     private void ShowOnline()
     {
         var offline = !hub.Engine.Online();
-        OfflinePill.Visibility = offline ? Visibility.Visible : Visibility.Collapsed;
+        Motion.Fade(OfflinePill, offline); // (rules 1, 15: in 150 ms, out 120 ms)
     }
 
     /// <summary>The engine's notes ("Liked “X”", "Added to “Y”"), one at a time, 4 s each.</summary>

@@ -20,13 +20,13 @@ internal sealed class SongRow : Grid
     /// <summary>The song's title (the screenshots' queue log).</summary>
     public string Title { get; }
 
-    public SongRow(MusicEngine engine, SongView song, bool heart = true)
+    public SongRow(MusicEngine engine, SongView song, bool heart = true, bool handle = false)
     {
         Key = song.Key;
         Title = song.Title;
         ColumnSpacing = 12;
         Padding = new Thickness(0, 6, 0, 6);
-        ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(40) });
+        ColumnDefinitions.Add(new ColumnDefinition { Width = handle ? GridLength.Auto : new GridLength(40) });
         ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
@@ -34,7 +34,17 @@ internal sealed class SongRow : Grid
         ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         var res = Application.Current.Resources;
         cover = new Border { Width = 40, Height = 40, CornerRadius = new CornerRadius(4), Background = (Brush)res["CardBackgroundFillColorDefaultBrush"] };
-        Children.Add(cover);
+        if (handle)
+        {
+            // the queue's Up next: the handle it's dragged by, before the art (the Linux app's list-drag-handle)
+            var grip = new FontIcon { Glyph = "\uE76F", FontSize = 14, Foreground = (Brush)res["TextFillColorTertiaryBrush"], VerticalAlignment = VerticalAlignment.Center };
+            ToolTipService.SetToolTip(grip, "Drag to move it in the queue");
+            var lead = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 10, VerticalAlignment = VerticalAlignment.Center };
+            lead.Children.Add(grip);
+            lead.Children.Add(cover);
+            Children.Add(lead);
+        }
+        else Children.Add(cover);
         var words = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
         words.Children.Add(new TextBlock { Text = song.Title, Style = (Style)res["BodyTextBlockStyle"], TextTrimming = TextTrimming.CharacterEllipsis, TextWrapping = TextWrapping.NoWrap });
         words.Children.Add(new TextBlock { Text = song.Subtitle, Style = (Style)res["CaptionTextBlockStyle"], Foreground = (Brush)res["TextFillColorSecondaryBrush"], TextTrimming = TextTrimming.CharacterEllipsis, TextWrapping = TextWrapping.NoWrap });
