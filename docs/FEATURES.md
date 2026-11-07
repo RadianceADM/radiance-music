@@ -17,7 +17,7 @@ marked 🔜.
 |---|---|---|---|---|---|
 | Search songs: lossless (Internet Archive) first, YouTube Music after | ✅ | ✅ | ✅ | ✅ | |
 | A song played from Search plays, then songs like it (its radio) | ✅ | ✅ | ✅ | ✅ | as YouTube Music; before, the other search results played after it (#47) |
-| Search suggestions as you type | ✅ | ✅ | 🔜 4 | ✅ | the engine has them (YouTube Music's); the beta's box shows them in stage 4 |
+| Search suggestions as you type | ✅ | ✅ | ✅ | ✅ | the beta: in the box's own list, yours (a heart) first |
 | Genre tiles before you type | ✅ | ✅ | ✅ | ❌ | |
 | Made for you mix (songs like your most-played likes) | ✅ | ✅ | ✅ | ❌ | the phone's "Play your mix" shuffles your liked songs |
 | Home rows: recently played, liked songs | ✅ | ✅ | ✅ | ✅ | |
@@ -85,7 +85,7 @@ marked 🔜.
 | Like = save the song, its cover and lyrics | ✅ | ✅ | ✅ | ✅ | |
 | Likes that couldn't be saved are saved later | ✅ | ✅ | ✅ | ✅ | |
 | Unlike removes the saved files | ✅ | ✅ | ✅ | ❌ | the phone keeps the files |
-| Storage page, move the music folder | ✅ | ✅ | 🔜 4 | ❌ | |
+| Storage page, move the music folder | ✅ | ✅ | ✅ | ❌ | the beta: Settings → Storage |
 
 ## Sharing
 
@@ -109,17 +109,17 @@ marked 🔜.
 
 | Feature | Linux | Windows | Windows beta | Phone | Notes |
 |---|---|---|---|---|---|
-| Update pop-up: Update now, Remind me later, Skip | ✅ | ✅ | 🔜 4 | ✅ | |
+| Update pop-up: Update now, Remind me later, Skip | ✅ | ✅ | ✅ | ✅ | the beta: its own installer, its version on the release's asset label |
 | Installs its own update | ✅ | ✅ | 🔜 4 | ✅ | Linux download / Flatpak / Windows installer / Android installer |
-| What's New | ✅ | ✅ | 🔜 4 | ✅ | |
-| How to Use It guide | ✅ | ✅ | 🔜 4 | ✅ | |
+| What's New | ✅ | ✅ | ✅ | ✅ | |
+| How to Use It guide | ✅ | ✅ | ✅ | ✅ | |
 | Start screen with first-open setup and progress | ✅ | ✅ | ✅ | ✅ | the beta: the sunrise holds while splitting gets ready, offline it offers Try Again or Open Radiance Music Now |
 | Looks: Stone, True Black | ✅ | ✅ | Windows' light/dark | ✅ | |
-| Offline sign, things retry when back online | ✅ | ✅ | Search's note ✅, retry 🔜 4 | ✅ | |
-| Report a problem: link to GitHub Issues | ✅ | ✅ | 🔜 4 | ✅ | |
+| Offline sign, things retry when back online | ✅ | ✅ | ✅ | ✅ | |
+| Report a problem: link to GitHub Issues | ✅ | ✅ | ✅ | ✅ | |
 | Email us from the app | ❌ | ❌ | ❌ | ✅ | the computer shows the address only in the README |
-| Report a Problem with the app's log (names removed) | ✅ | ✅ | 🔜 4 | 🔜 | computer since 0.7.15; the phone's comes with 0.5.16 |
-| Rating pop-up ("Are you enjoying…?") | ✅ | ✅ | 🔜 4 | 🔜 | computer since 0.7.15; the phone's comes with 0.5.16 |
+| Report a Problem with the app's log (names removed) | ✅ | ✅ | ✅ | 🔜 | computer since 0.7.15; the phone's comes with 0.5.16 |
+| Rating pop-up ("Are you enjoying…?") | ✅ | ✅ | ✅ | 🔜 | computer since 0.7.15; the phone's comes with 0.5.16 |
 
 ## Gaps to close (keeps the three in step)
 

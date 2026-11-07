@@ -7,6 +7,17 @@
 - **Sharing with the phone carries its two-part split:** a song the phone split in two (Music + Vocals, its new fast split) comes to the computer with both parts, and the computer sends a song's Music part along too. The computer's mixer plays two-part songs with two sliders (#43).
 - **Next right after opening starts the next song from its start:** with last time's song shown (picked up at its saved place), pressing Next, picking another song in the queue, Play again, or removing that song from the queue started the next one at the old song's place, and the first Pause then started it over (#46).
 
+## Windows beta 0.8.0-beta.4 — not released yet (#45, stage 4a)
+
+The native Windows app gets its own updates, help and settings:
+- **Settings** in the sidebar: **Playing** (Autoplay When the Queue Ends), **Storage** (where your songs are kept, Change… moves them, Open the Music Folder, the space each kind of file uses) and **Help** (How to Use It, What's New, Look for Updates, Report a Problem…, Rate Radiance Music, About).
+- **It updates itself:** a newer beta pops up when the window is free (never over the start's sunrise, the guide or another pop-up): Update Now with its size downloads it while music plays; Restart to Update puts it on where the beta is and opens it again. Remind Me Later and Skip This Version, as the Linux app's.
+- **How to Use It** the first time, and **What's New** from Help.
+- **Report a Problem** shows exactly what will be sent (the app's log with your name, home folder and email addresses taken out) before you press Send; **Rate Radiance Music** pops up now and then, as the Linux app's.
+- **The Offline sign** in the title bar; back online it says so, searches again and gets what was missing.
+- **Search suggestions as you type:** your artists and songs first (a heart before them), then YouTube Music's; your artists as soon as you click the box.
+- Stage 3's small fixes (#61): the Linux app's Mixer says Music and Vocals for a song split in two (it said "its four parts"); Tap Timing stamps where the song really is; pausing and resuming splitting say so.
+
 ## Windows beta 0.8.0-beta.3 — not released yet (#45, stage 3)
 
 The native Windows app gets the song's parts, splitting and the lyrics tools:

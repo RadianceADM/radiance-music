@@ -1980,7 +1980,7 @@ mod tests {
 
     #[test]
     fn the_versions_and_the_browse_tiles() {
-        assert_eq!(beta_version(), "0.8.0-beta.3");
+        assert_eq!(beta_version(), "0.8.0-beta.4");
         assert_eq!(engine_version(), radiance_engine::VERSION);
         let tiles = browse_tiles();
         assert_eq!(tiles.len(), 12);
