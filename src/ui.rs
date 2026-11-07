@@ -664,6 +664,10 @@ pub struct Ui {
     // where you left off
     history: RefCell<Vec<(Track, i64)>>,
     history_box: gtk::Box,
+    /// Downloading: the liked songs not saved yet; its sidebar label (with how many); what it shows (drawn again only when that changes).
+    downloading_box: gtk::Box,
+    downloading_nav: gtk::Label,
+    downloading_shown: RefCell<String>,
     /// The last session's song is shown but not loaded yet (play loads it).
     restored: Cell<bool>,
     restore_at: Cell<Option<f64>>,
@@ -973,6 +977,9 @@ impl Ui {
             group_back: RefCell::new("albums".into()),
             history: RefCell::default(),
             history_box: gtk::Box::builder().orientation(gtk::Orientation::Vertical).spacing(24).margin_top(18).margin_bottom(24).margin_start(28).margin_end(28).build(),
+            downloading_box: gtk::Box::builder().orientation(gtk::Orientation::Vertical).spacing(14).margin_top(18).margin_bottom(24).margin_start(28).margin_end(28).build(),
+            downloading_nav: gtk::Label::builder().label(shelf::downloading_title(0)).xalign(0.0).build(),
+            downloading_shown: RefCell::new("-".into()),
             restored: Cell::new(false),
             restore_at: Cell::new(None),
             last_save: Cell::new(None),
@@ -1754,6 +1761,7 @@ impl Ui {
         self.stack.add_titled_with_icon(&self.grid_page("Genres", &self.genres_flow), Some("genres"), "Genres", "view-grid-symbolic");
         self.stack.add_named(&self.group_page(), Some("group"));
         self.stack.add_titled_with_icon(&self.history_page(), Some("history"), "History", "document-open-recent-symbolic");
+        self.stack.add_titled_with_icon(&self.downloading_page(), Some("downloading"), "Downloading", "folder-download-symbolic");
 
         // Now playing: art and lyrics over the art's own colours
         // two halves sharing the room: the art centred in one, the lyrics in the other (one, when narrow)
@@ -4505,14 +4513,70 @@ impl Ui {
         (songs.len(), videos)
     }
 
-    /// The "Fix missing" button: shown with how many are missing, while any are.
-    fn show_missing(&self) {
+    /// The "Fix missing" button: shown with how many are missing, while any are (and Downloading, which has it too).
+    fn show_missing(self: &Rc<Self>) {
         let (songs, videos) = self.missing();
         let n = songs.max(videos);
         self.fix_button.set_visible(n > 0 && std::env::var_os("RADIANCE_SHOT").is_none());
         let busy = !self.saving.borrow().is_empty() || self.extras_running.get();
         self.fix_button.set_label(&words::fix_label(n, busy));
         self.fix_button.set_sensitive(!busy);
+        self.render_downloading((n > 0).then(|| words::fix_label(n, busy)), busy);
+    }
+
+    fn downloading_page(&self) -> gtk::ScrolledWindow {
+        let clamp = adw::Clamp::builder().maximum_size(1240).tightening_threshold(900).child(&self.downloading_box).build();
+        gtk::ScrolledWindow::builder().hscrollbar_policy(gtk::PolicyType::Never).vexpand(true).child(&clamp).build()
+    }
+
+    /// Downloading (owner, 2026-11-07: "pede ba may downloading den sa sidebar", then "for download not yet saved but
+    /// liked"): the liked songs not saved on this computer yet, the ones saving now first, each as Liked Songs shows it,
+    /// with Fix missing's button while any are missing ([fix]: its label; [busy]: at work). The sidebar says how many.
+    fn render_downloading(self: &Rc<Self>, fix: Option<String>, busy: bool) {
+        let liked: Vec<(Track, Saved)> = self.liked.borrow().iter().map(|t| (t.clone(), self.saved(t))).collect();
+        let list = shelf::downloading(&liked);
+        let saving = list.iter().filter(|(_, s)| *s == Saved::Saving).count();
+        self.downloading_nav.set_label(&shelf::downloading_title(list.len()));
+        let shown = format!("{fix:?}{busy}{}", list.iter().map(|(t, s)| format!("{}{s:?}", t.key())).collect::<String>());
+        if *self.downloading_shown.borrow() == shown {
+            return;
+        }
+        *self.downloading_shown.borrow_mut() = shown;
+        crate::watch::doing("listing Downloading");
+        let page = &self.downloading_box;
+        while let Some(c) = page.first_child() {
+            page.remove(&c);
+        }
+        page.append(&gtk::Label::builder().label("Downloading").xalign(0.0).css_classes(["page-title"]).build());
+        page.append(&gtk::Label::builder().label(shelf::downloading_note(saving, list.len() - saving)).xalign(0.0).wrap(true).css_classes(["dim-label"]).build());
+        if let Some(label) = fix {
+            let save = gtk::Button::builder().child(&adw::ButtonContent::builder().icon_name("folder-download-symbolic").label(label).build()).halign(gtk::Align::Start).sensitive(!busy).css_classes(["pill-button"]).build();
+            if !busy {
+                save.add_css_class("suggested-action");
+            }
+            let me = Rc::downgrade(self);
+            save.connect_clicked(move |_| {
+                if let Some(me) = me.upgrade() {
+                    me.fix_missing();
+                }
+            });
+            page.append(&save);
+        }
+        if list.is_empty() {
+            return;
+        }
+        // a click plays it in Liked Songs (A to Z), as there
+        let all = self.liked_shown.borrow().clone();
+        let group = adw::PreferencesGroup::new();
+        for (t, s) in &list {
+            let row = match all.iter().position(|x| x.key() == t.key()) {
+                Some(i) => self.track_row(t, Place::Liked(all.clone(), i)),
+                None => self.track_row(t, Place::List(Rc::new(vec![t.clone()]), 0)),
+            };
+            row.set_subtitle(&shelf::row_subtitle(&t.byline(), *s));
+            group.add(&row);
+        }
+        page.append(&group);
     }
 
     /// Saves what's missing: the songs first (one at a time), then each one's
@@ -4650,12 +4714,24 @@ impl Ui {
 
     fn liked_row(self: &Rc<Self>, t: &Track, list: Rc<Vec<Track>>, i: usize) -> adw::ActionRow {
         let row = self.track_row(t, Place::Liked(list, i));
-        if self.saving.borrow().contains(&t.key()) {
-            row.set_subtitle(&shelf::row_subtitle(&t.byline(), Saved::Saving));
-        } else if t.file.is_none() {
-            row.set_subtitle(&shelf::row_subtitle(&t.byline(), if library::saves(t) { Saved::NotSaved } else { Saved::Streams }));
+        let saved = self.saved(t);
+        if saved != Saved::Saved {
+            row.set_subtitle(&shelf::row_subtitle(&t.byline(), saved));
         }
         row
+    }
+
+    /// A liked song: on this computer, saving now, not saved yet, or one that streams (it isn't saved at all).
+    fn saved(&self, t: &Track) -> Saved {
+        if self.saving.borrow().contains(&t.key()) {
+            Saved::Saving
+        } else if t.file.is_some() {
+            Saved::Saved
+        } else if library::saves(t) {
+            Saved::NotSaved
+        } else {
+            Saved::Streams
+        }
     }
 
     /// The liked songs by album, by each credited artist, or by genre (A to Z).

@@ -663,6 +663,11 @@ impl Controller {
         self.shared.view(|v| v.liked.clone())
     }
 
+    /// Downloading: the liked songs not saved on this computer yet, the ones saving now first (owner, 2026-11-07).
+    pub fn downloading(&self) -> Vec<(Track, Saved)> {
+        self.shared.view(|v| shelf::downloading(&v.liked))
+    }
+
     /// The oldest note not shown yet (each is given once).
     pub fn toast(&self) -> Option<String> {
         self.shared.view(|v| v.toasts.pop_front())
@@ -674,17 +679,19 @@ impl Controller {
         let liked = self.shared.view(|v| v.liked.clone());
         let songs = shown_liked(&liked, q);
         let shown: Vec<Track> = songs.iter().map(|(t, _)| t.clone()).collect();
-        let tracks: Vec<Track> = liked.iter().map(|(t, _)| t.clone()).collect();
-        let (missing, videos) = liking::missing(&tracks);
-        let n = missing.len().max(videos);
-        let fixing = liked.iter().any(|(_, s)| *s == Saved::Saving);
+        let (fix, fixing) = fix_state(&liked);
         LikedPage {
             note: shelf::liked_note(liked.len(), &crate::library::music_dir().display().to_string(), q.trim(), songs.len()),
             letters: shelf::letters(&shown),
-            fix: (n > 0).then(|| words::fix_label(n, fixing)),
+            fix,
             fixing,
             songs,
         }
+    }
+
+    /// Fix missing's label (None: nothing missing) and whether it's at work: Liked Songs' and Downloading's.
+    pub fn fix_missing_state(&self) -> (Option<String>, bool) {
+        self.shared.view(|v| fix_state(&v.liked))
     }
 
     /// The Albums, Artists or Genres page's tiles (A to Z).
@@ -3790,6 +3797,15 @@ fn pause_poll() -> Duration {
 /// How long after the start updates are looked for (the GTK app's 8 s; RADIANCE_UPDATE_AFTER_MS: tests).
 fn update_after() -> Duration {
     std::env::var("RADIANCE_UPDATE_AFTER_MS").ok().and_then(|v| v.parse().ok()).map(Duration::from_millis).unwrap_or(Duration::from_secs(8))
+}
+
+/// Fix missing's label (None: nothing missing) and whether a song is saving now.
+fn fix_state(liked: &[(Track, Saved)]) -> (Option<String>, bool) {
+    let tracks: Vec<Track> = liked.iter().map(|(t, _)| t.clone()).collect();
+    let (missing, videos) = liking::missing(&tracks);
+    let n = missing.len().max(videos);
+    let fixing = liked.iter().any(|(_, s)| *s == Saved::Saving);
+    ((n > 0).then(|| words::fix_label(n, fixing)), fixing)
 }
 
 /// How long getting splitting ready waits before trying again (GTK's 30 s; RADIANCE_SETUP_RETRY_MS: the tests').

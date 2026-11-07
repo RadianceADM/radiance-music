@@ -804,6 +804,22 @@ fn unliking_while_saving_leaves_nothing() {
     assert_eq!(saved_files("Liked Three"), 0, "nothing left behind");
 }
 
+/// Downloading (owner, 2026-11-07): a liked song being saved is listed until it's saved.
+#[test]
+fn downloading_lists_a_liked_song_until_its_saved() {
+    let _g = setup();
+    let four = song(Source::Archive, "https://example.invalid/liked-four.flac", "Liked Four");
+    let (c, fake, rx) = with_lossless("liking four", vec![four.clone()]);
+    *fake.download_wait.lock().unwrap() = Duration::from_millis(800);
+    assert!(c.downloading().iter().all(|(t, _)| t.key() != four.key()));
+    c.toggle_like(&four.key());
+    assert!(until(1.0, || c.downloading().first().is_some_and(|(t, s)| t.key() == four.key() && *s == radiance_core::library::Saved::Saving)), "it isn't listed while saving");
+    assert!(until(5.0, || c.downloading().iter().all(|(t, _)| t.key() != four.key())), "still listed once saved");
+    c.toggle_like(&four.key());
+    let _ = toasts_for(&c, &rx, 2.0);
+    c.quit();
+}
+
 #[test]
 fn the_bar_heart_follows_the_song() {
     let _g = setup();

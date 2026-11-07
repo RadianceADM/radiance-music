@@ -13,6 +13,7 @@ public sealed partial class MainWindow : Window
     private readonly DispatcherTimer noticeTimer = new() { Interval = TimeSpan.FromSeconds(10) };
     private readonly DispatcherTimer toastTimer = new() { Interval = TimeSpan.FromSeconds(4) };
     private readonly Queue<string> toasts = new();
+    private readonly NavigationViewItem downloadingItem;
     private string page = "home";
     private readonly Controls.QueuePanel side;
     private object? what;
@@ -53,6 +54,9 @@ public sealed partial class MainWindow : Window
         Toast.Closed += (_, _) => { toastTimer.Stop(); NextToast(); };
         RenderPlaylists();
         // Splitting… (stage 3): the cores it may use, Pause Splitting, at the sidebar's foot
+        // Downloading (owner, 2026-11-07): the liked songs not saved yet, with how many; always there
+        downloadingItem = new NavigationViewItem { Content = hub.Engine.Downloading().Title, Tag = "downloading", Icon = new FontIcon { Glyph = "\uE896" } };
+        Nav.FooterMenuItems.Add(downloadingItem);
         Nav.FooterMenuItems.Add(new NavigationViewItem { Content = Native.Native.BetaWords().SplittingDialog, Tag = "splitting", Icon = new FontIcon { Glyph = "\uE8C6" }, SelectsOnInvoked = false });
         // "New Playlist" isn't a page (it asks for the name): it acts when clicked, it's never selected
         Nav.ItemInvoked += (_, e) =>
@@ -153,6 +157,7 @@ public sealed partial class MainWindow : Window
             "genres" => (typeof(LibraryPage), new PageArgs(hub, GroupKind.Genres)),
             "group" => (typeof(GroupPage), new PageArgs(hub, subject)),
             "settings" => (typeof(SettingsPage), hub),
+            "downloading" => (typeof(DownloadingPage), hub),
             _ when name.StartsWith("playlist:") && long.TryParse(name["playlist:".Length..], out var id) => (typeof(PlaylistPage), new PageArgs(hub, id)),
             _ => (typeof(HomePage), hub),
         };
@@ -163,7 +168,7 @@ public sealed partial class MainWindow : Window
         if (moved) Pages.Navigate(type, args, new Microsoft.UI.Xaml.Media.Animation.EntranceNavigationTransitionInfo());
         // an album's, artist's or genre's songs: its grid's item stays the one lit
         var lit = name == "group" && subject is ValueTuple<GroupKind, string> g ? LibraryPage.KindName(g.Item1).ToLowerInvariant() : name;
-        foreach (var item in Nav.MenuItems.OfType<NavigationViewItem>())
+        foreach (var item in Nav.MenuItems.OfType<NavigationViewItem>().Concat(Nav.FooterMenuItems.OfType<NavigationViewItem>()))
             if ((string)item.Tag == lit && !ReferenceEquals(Nav.SelectedItem, item)) Nav.SelectedItem = item;
     }
 
@@ -291,6 +296,7 @@ public sealed partial class MainWindow : Window
     private void OnChange(ChangeKind what)
     {
         if (what == ChangeKind.Playlists) RenderPlaylists();
+        if (what == ChangeKind.Liked) downloadingItem.Content = hub.Engine.Downloading().Title;
         if (what == ChangeKind.Online) ShowOnline();
         if (what == ChangeKind.Toast)
         {

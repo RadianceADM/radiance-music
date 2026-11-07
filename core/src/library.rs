@@ -83,6 +83,31 @@ pub enum Saved {
     Saved,
 }
 
+/// Downloading (owner, 2026-11-07: "pede ba may downloading den sa sidebar", then "for download not yet saved but
+/// liked"): the liked songs not saved on this computer yet, the ones saving now first. A song that streams (a
+/// public build's YouTube song) isn't one: it isn't saved at all.
+pub fn downloading(liked: &[(Track, Saved)]) -> Vec<(Track, Saved)> {
+    let mut out: Vec<(Track, Saved)> = liked.iter().filter(|(_, s)| *s == Saved::Saving).cloned().collect();
+    out.extend(liked.iter().filter(|(_, s)| *s == Saved::NotSaved).cloned());
+    out
+}
+
+/// The sidebar's Downloading, with how many while any wait.
+pub fn downloading_title(n: usize) -> String {
+    if n == 0 { "Downloading".to_string() } else { format!("Downloading ({n})") }
+}
+
+/// Downloading's line under its title: `saving` being saved now, `waiting` not yet.
+pub fn downloading_note(saving: usize, waiting: usize) -> String {
+    let n = saving + waiting;
+    if n == 0 {
+        return "Every liked song is saved on this computer.".to_string();
+    }
+    let (songs, is, plays, it) = if n == 1 { ("song", "isn't", "It plays", "it's") } else { ("songs", "aren't", "They play", "they're") };
+    let now = if saving > 0 { format!(": {saving} saving now") } else { String::new() };
+    format!("{n} liked {songs} {is} saved on this computer yet{now}. {plays} from the internet until {it} saved.")
+}
+
 /// A liked song's row's second line.
 pub fn row_subtitle(byline: &str, s: Saved) -> String {
     match s {
@@ -163,6 +188,25 @@ mod tests {
             video: false,
             genres: genres.map(|g| g.into_iter().map(String::from).collect()),
         }
+    }
+
+    /// Downloading (owner, 2026-11-07): the liked songs not saved on this computer yet, the ones saving first.
+    #[test]
+    fn downloading_lists_the_liked_songs_not_saved_yet() {
+        let liked = vec![
+            (song("a", "A", "X", "", None), Saved::Saved),
+            (song("b", "B", "X", "", None), Saved::NotSaved),
+            (song("c", "C", "X", "", None), Saved::Streams),
+            (song("d", "D", "X", "", None), Saved::Saving),
+        ];
+        let list = downloading(&liked);
+        let got: Vec<&str> = list.iter().map(|(t, _)| t.id.as_str()).collect();
+        assert_eq!(got, ["d", "b"], "saving first, then waiting; saved and streamed ones aren't downloads");
+        assert_eq!(downloading_title(0), "Downloading");
+        assert_eq!(downloading_title(3), "Downloading (3)");
+        assert_eq!(downloading_note(0, 0), "Every liked song is saved on this computer.");
+        assert_eq!(downloading_note(1, 2), "3 liked songs aren't saved on this computer yet: 1 saving now. They play from the internet until they're saved.");
+        assert_eq!(downloading_note(0, 1), "1 liked song isn't saved on this computer yet. It plays from the internet until it's saved.");
     }
 
     #[test]

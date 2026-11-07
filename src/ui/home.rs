@@ -6,7 +6,7 @@ use super::*;
 use crate::session;
 
 /// The sidebar: (page, label, icon, heading above it).
-const NAV: [(&str, &str, &str, Option<&str>); 8] = [
+const NAV: [(&str, &str, &str, Option<&str>); 9] = [
     ("home", "Home", "go-home-symbolic", None),
     ("search", "Search", "system-search-symbolic", None),
     ("playing", "Now Playing", "audio-x-generic-symbolic", None),
@@ -15,6 +15,8 @@ const NAV: [(&str, &str, &str, Option<&str>); 8] = [
     ("albums", "Albums", "media-optical-symbolic", None),
     ("artists", "Artists", "avatar-default-symbolic", None),
     ("genres", "Genres", "view-grid-symbolic", None),
+    // the liked songs not saved on this computer yet (owner, 2026-11-07); its label says how many
+    ("downloading", "Downloading", "folder-download-symbolic", None),
     // (Speaker EQ, a separate app, had an entry here: gone 2026-11-02; the Mixer's
     // low cut, high cut and reverb are the app's own now, fx.rs)
 ];
@@ -142,7 +144,11 @@ impl Ui {
             }
             let line = gtk::Box::builder().spacing(12).build();
             line.append(&gtk::Image::from_icon_name(icon));
-            line.append(&gtk::Label::builder().label(label).xalign(0.0).build());
+            if page == "downloading" {
+                line.append(&self.downloading_nav);
+            } else {
+                line.append(&gtk::Label::builder().label(label).xalign(0.0).build());
+            }
             let row = gtk::ListBoxRow::builder().child(&line).name(page).build();
             self.nav.append(&row);
         }

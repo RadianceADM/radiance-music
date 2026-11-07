@@ -609,6 +609,29 @@ pub struct LikedPageView {
     pub fixing: bool,
 }
 
+/// Downloading (owner, 2026-11-07): the sidebar's title ("Downloading (3)"), the line under the page's title, the
+/// liked songs not saved yet (saving first), and Save Them Now's label (Fix missing's) and whether it's at work.
+#[derive(Clone, Debug, uniffi::Record)]
+pub struct DownloadingView {
+    pub title: String,
+    pub note: String,
+    pub songs: Vec<SongView>,
+    pub fix: Option<String>,
+    pub fixing: bool,
+}
+
+fn downloading_view(list: &[(radiance_core::track::Track, radiance_core::library::Saved)], fix: Option<String>, fixing: bool, rows: &Rows) -> DownloadingView {
+    use radiance_core::library as shelf;
+    let saving = list.iter().filter(|(_, s)| *s == shelf::Saved::Saving).count();
+    DownloadingView {
+        title: shelf::downloading_title(list.len()),
+        note: shelf::downloading_note(saving, list.len() - saving),
+        songs: list.iter().map(|(t, _)| rows.song(t)).collect(),
+        fix,
+        fixing,
+    }
+}
+
 #[derive(Clone, Debug, uniffi::Record)]
 pub struct TileView {
     pub name: String,
@@ -774,6 +797,12 @@ impl MusicEngine {
     pub fn liked_page(&self, q: String) -> LikedPageView {
         let rows = Rows::of(&self.inner);
         liked_page_view(self.inner.liked_page(&q), &rows)
+    }
+    /// The sidebar's Downloading: the liked songs not saved on this computer yet.
+    pub fn downloading(&self) -> DownloadingView {
+        let rows = Rows::of(&self.inner);
+        let (fix, fixing) = self.inner.fix_missing_state();
+        downloading_view(&self.inner.downloading(), fix, fixing, &rows)
     }
     pub fn library(&self, kind: GroupKind) -> Vec<TileView> {
         self.inner.library(kind.into()).into_iter().map(|t| TileView { name: t.name, sub: t.sub, art: t.art, round: t.round }).collect()
@@ -1847,6 +1876,19 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn downloading_says_how_many_and_lists_them() {
+        use radiance_core::library::Saved;
+        let song = |id: &str| radiance_core::track::Track { source: radiance_core::track::Source::YouTube, id: id.into(), title: id.into(), artist: "X".into(), album: String::new(), seconds: 0, art: String::new(), format: String::new(), file: None, video: false, genres: None };
+        let v = downloading_view(&[(song("a"), Saved::Saving), (song("b"), Saved::NotSaved)], Some("Fix missing (2)".into()), true, &Rows::default());
+        assert_eq!(v.title, "Downloading (2)");
+        assert_eq!(v.note, "2 liked songs aren't saved on this computer yet: 1 saving now. They play from the internet until they're saved.");
+        assert_eq!(v.songs.len(), 2);
+        assert_eq!((v.fix.as_deref(), v.fixing), (Some("Fix missing (2)"), true));
+        let none = downloading_view(&[], None, false, &Rows::default());
+        assert_eq!((none.title.as_str(), none.songs.len()), ("Downloading", 0));
+    }
 
     #[test]
     fn liked_page_view_carries_letters() {
