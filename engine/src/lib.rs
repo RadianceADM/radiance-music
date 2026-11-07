@@ -42,6 +42,7 @@ pub mod report;
 pub mod servers;
 pub mod session;
 pub mod settings;
+pub mod firewall;
 pub mod setup;
 pub mod share;
 pub mod sources;

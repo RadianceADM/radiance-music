@@ -218,53 +218,10 @@ fn draw_qr(cr: &gtk::cairo::Context, w: i32, h: i32, text: Option<&str>) {
     }
 }
 
-/// Ubuntu's firewall (ufw) is switched on.
-#[cfg(unix)]
 fn firewall_on() -> bool {
-    std::fs::read_to_string("/etc/ufw/ufw.conf").is_ok_and(|c| c.lines().any(|l| l.trim() == "ENABLED=yes"))
+    radiance_engine::firewall::blocks()
 }
 
-/// Windows' firewall: on, and our rule isn't there yet. (Windows asks the first time the app
-/// listens; a "no" there blocks the phone, and nothing on this side would say: 2026-10-31 audit.)
-#[cfg(windows)]
-fn firewall_on() -> bool {
-    let mut cmd = std::process::Command::new("netsh");
-    cmd.args(["advfirewall", "firewall", "show", "rule", &format!("name={WIN_RULE}")]);
-    crate::setup::quiet_window(&mut cmd, false);
-    !cmd.output().is_ok_and(|o| o.status.success())
-}
-
-#[cfg(windows)]
-const WIN_RULE: &str = "Radiance Music (songs to and from a phone)";
-
-/// Windows: lets the phone in. The app's own rules go first (Windows makes one from its
-/// question, a block if it was told no, and a block wins over an allow), then the sharing
-/// ports from the home network, on any network type (Windows calls a new Wi-Fi "public").
-/// One Windows prompt to allow it; worker thread.
-#[cfg(windows)]
 fn open_firewall() -> bool {
-    let Ok(exe) = std::env::current_exe() else { return false };
-    let exe = exe.display().to_string();
-    let rules = format!(
-        "netsh advfirewall firewall delete rule name=all dir=in program=\"{exe}\" & netsh advfirewall firewall add rule name=\"{WIN_RULE}\" dir=in action=allow program=\"{exe}\" protocol=TCP localport={}-{} remoteip=localsubnet profile=any",
-        share::PORTS.start(),
-        share::PORTS.end()
-    );
-    // PowerShell asks Windows to run it as administrator (the prompt), and says how it went
-    let script = format!("$p = Start-Process -Verb RunAs -Wait -PassThru -WindowStyle Hidden cmd -ArgumentList '/c {}'; exit $p.ExitCode", rules.replace('\'', "''"));
-    let mut cmd = std::process::Command::new("powershell");
-    cmd.args(["-NoProfile", "-NonInteractive", "-Command", &script]);
-    crate::setup::quiet_window(&mut cmd, false);
-    cmd.status().is_ok_and(|s| s.success()) && !firewall_on()
-}
-
-/// Lets the phone in: the sharing ports, from home networks only (asks for the password; worker thread).
-#[cfg(unix)]
-fn open_firewall() -> bool {
-    let ports = format!("{}:{}", share::PORTS.start(), share::PORTS.end());
-    let rules: Vec<String> = ["192.168.0.0/16", "10.0.0.0/8", "172.16.0.0/12"]
-        .iter()
-        .map(|net| format!("ufw allow proto tcp from {net} to any port {ports} comment 'Radiance Music: songs from and to a phone'"))
-        .collect();
-    std::process::Command::new("pkexec").args(["sh", "-c", &rules.join(" && ")]).status().is_ok_and(|s| s.success())
+    radiance_engine::firewall::let_in()
 }

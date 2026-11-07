@@ -1759,6 +1759,101 @@ fn dj_mix_mixes_click_tracks() {
     c.quit();
 }
 
+// ------------------------------------------------------------------ sharing (stage 4b)
+
+/// A request to the share as the phone makes it: the reply's body.
+fn phone(port: u16, method: &str, path: &str, body: &[u8]) -> String {
+    use std::io::{Read, Write};
+    let mut s = std::net::TcpStream::connect(("127.0.0.1", port)).expect("the share listens");
+    write!(s, "{method} {path} HTTP/1.1\r\nHost: test\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len()).unwrap();
+    s.write_all(body).unwrap();
+    let mut out = String::new();
+    let _ = s.read_to_string(&mut out);
+    out.split_once("\r\n\r\n").map(|(_, b)| b.to_string()).unwrap_or(out)
+}
+
+/// A value from the QR's text (radiancemusic://share?v=1&m=…&k=…&p=…).
+fn ticket_part(qr: &str, name: &str) -> String {
+    qr.split(['?', '&']).find_map(|p| p.strip_prefix(&format!("{name}="))).unwrap_or_default().to_string()
+}
+
+/// The phone's plan for one song: its key, its track, and its song file's size.
+fn phone_plan(key: &str, id: &str, title: &str, artist: &str, size: usize) -> String {
+    serde_json::json!({"songs": [{"key": key, "track": {"source": "youtube", "id": id, "title": title, "artist": artist, "album": "", "seconds": 3, "art": "", "format": "m4a"}, "files": {"song": {"name": format!("{title}.m4a"), "size": size}}}]}).to_string()
+}
+
+/// Stage 4b (the Linux app's Share Songs with a Phone, From the Phone): a phone's song comes by the share's protocol
+/// (plan, only what's missing, the file, done) and is a liked song here with its file; the share closed stops.
+#[test]
+fn a_phone_puts_a_song_and_it_is_liked() {
+    let _l = setup();
+    radiance_engine::library::store(&[]);
+    let (c, _f, rx) = with_songs("from the phone", vec![]);
+    c.share_start(false, false);
+    assert!(until(3.0, || c.share().qr.is_some()), "no QR: {:?}", c.share());
+    let qr = c.share().qr.unwrap();
+    assert!(qr.starts_with("radiancemusic://share?") && qr.contains("m=put"), "{qr}");
+    let (port, key): (u16, String) = (ticket_part(&qr, "p").parse().unwrap(), ticket_part(&qr, "k"));
+    let song = b"not really audio: the share doesn't look".to_vec();
+    let plan = phone_plan("yt:phone-1", "phone-1", "From The Phone", "Ana", song.len());
+    let want = phone(port, "POST", &format!("/plan?k={key}"), plan.as_bytes());
+    assert!(want.contains(r#""yt:phone-1":["song"]"#), "{want}");
+    assert_eq!(phone(port, "PUT", &format!("/file?k={key}&key=yt:phone-1&kind=song"), &song), "ok");
+    assert_eq!(phone(port, "POST", &format!("/done?k={key}&key=yt:phone-1"), b""), "ok");
+    assert!(until(3.0, || c.liked().iter().any(|(t, _)| t.id == "phone-1" && t.file.is_some())), "it isn't in Liked with its file");
+    assert!(until(1.0, || c.share().progress.as_deref() == Some("Done: 1 song here")), "{:?}", c.share().progress);
+    let again = phone(port, "POST", &format!("/plan?k={key}"), plan.as_bytes());
+    assert!(again.contains(r#""want":{}"#), "the same song again: nothing's missing now: {again}");
+    c.share_stop();
+    assert!(until(2.0, || std::net::TcpStream::connect(("127.0.0.1", port)).is_err()), "the share still listens once closed");
+    radiance_engine::library::store(&[]);
+    let _ = toasts_for(&c, &rx, 0.5);
+    c.quit();
+}
+
+/// A song from the phone that's already liked here gets its file, never a second row (review focus 2).
+#[test]
+fn a_song_already_liked_gets_its_file_not_a_second_row() {
+    let _l = setup();
+    let liked = song(Source::YouTube, "phone-2", "Already Liked");
+    let (c, _rx) = with_liked(&[liked], Arc::new(Fake::default()));
+    c.share_start(false, false);
+    assert!(until(3.0, || c.share().qr.is_some()), "no QR: {:?}", c.share());
+    let qr = c.share().qr.unwrap();
+    let (port, key): (u16, String) = (ticket_part(&qr, "p").parse().unwrap(), ticket_part(&qr, "k"));
+    let song = b"the phone's copy".to_vec();
+    let plan = phone_plan("yt:phone-2", "phone-2", "Already Liked", "Test Artist", song.len());
+    assert!(phone(port, "POST", &format!("/plan?k={key}"), plan.as_bytes()).contains("yt:phone-2"));
+    assert_eq!(phone(port, "PUT", &format!("/file?k={key}&key=yt:phone-2&kind=song"), &song), "ok");
+    assert_eq!(phone(port, "POST", &format!("/done?k={key}&key=yt:phone-2"), b""), "ok");
+    assert!(until(3.0, || c.liked().iter().any(|(t, _)| t.id == "phone-2" && t.file.is_some())), "no file: {:?}", c.liked());
+    assert_eq!(c.liked().iter().filter(|(t, _)| t.title == "Already Liked").count(), 1, "a second row");
+    c.share_stop();
+    radiance_engine::library::store(&[]);
+    c.quit();
+}
+
+/// To the Phone: the liked songs saved here are offered (the phone takes only what it hasn't got).
+#[test]
+fn to_the_phone_offers_the_saved_liked_songs() {
+    let _l = setup();
+    let saved = liked_song("share-saved", "Saved Here", "Someone", "", None);
+    let (c, _rx) = with_liked(&[saved], Arc::new(Fake::default()));
+    c.share_start(true, false);
+    assert!(until(3.0, || c.share().qr.is_some()), "no QR: {:?}", c.share());
+    let st = c.share();
+    let qr = st.qr.unwrap();
+    assert!(qr.contains("m=get"), "{qr}");
+    assert!(st.caption.contains("It takes your 1 liked songs"), "{}", st.caption);
+    let (port, key): (u16, String) = (ticket_part(&qr, "p").parse().unwrap(), ticket_part(&qr, "k"));
+    let list = phone(port, "GET", &format!("/list?k={key}"), b"");
+    assert!(list.contains("Saved Here") && list.contains(r#""song""#), "{list}");
+    assert_eq!(phone(port, "GET", "/list?k=wrong", b""), "not this share");
+    c.share_stop();
+    radiance_engine::library::store(&[]);
+    c.quit();
+}
+
 #[test]
 fn the_guide_is_seen_once() {
     let _l = setup();

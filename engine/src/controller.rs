@@ -75,6 +75,25 @@ pub enum Change {
     Storage,
     /// Search suggestions for what's typed (yours at once, YouTube Music's after).
     Suggestions,
+    /// Share Songs with a Phone: its QR, how far, a song received (stage 4b).
+    Share,
+}
+
+/// Share Songs with a Phone as its dialog shows it (stage 4b, the Linux app's src/ui/sharing.rs): which way, the QR's
+/// text (none: no network, or it couldn't get ready), the line under it, how far (0..1; -1: not known), done, going
+/// gently (Bluetooth), and whether the firewall row shows (this app's rule isn't there yet).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ShareState {
+    pub on: bool,
+    pub to_phone: bool,
+    pub videos: bool,
+    pub qr: Option<String>,
+    pub caption: String,
+    pub progress: Option<String>,
+    pub fraction: f64,
+    pub done: bool,
+    pub gentle: bool,
+    pub firewall: bool,
 }
 
 /// Storage as its section shows it: where the songs are, and the space used (None: counting…).
@@ -429,6 +448,7 @@ struct View {
     report: ReportState,
     rating: RatingState,
     storage: StorageState,
+    share: ShareState,
     autoplay: bool,
     guide_seen: bool,
     /// Between songs (stage 4a-2): the transition, the crossfade length, and a mix under way.
@@ -541,6 +561,7 @@ impl Controller {
                 report: ReportState::default(),
                 rating: RatingState::default(),
                 storage: StorageState::default(),
+                share: ShareState::default(),
                 autoplay: true,
                 guide_seen: false,
                 transition: Transition::Off,
@@ -1129,6 +1150,26 @@ impl Controller {
         self.shared.view(|v| v.mixing)
     }
 
+    /// Share Songs with a Phone (stage 4b): opens a share, To the Phone (its saved liked songs, with music videos or
+    /// not) or From the Phone; a new one replaces the last (its QR stops working).
+    pub fn share_start(&self, to_phone: bool, videos: bool) {
+        self.post(move |e| e.share_start(to_phone, videos));
+    }
+
+    /// Closes the share (the dialog closed): its listener and its transfers stop.
+    pub fn share_stop(&self) {
+        self.post(|e| e.share_stop());
+    }
+
+    pub fn share(&self) -> ShareState {
+        self.shared.view(|v| v.share.clone())
+    }
+
+    /// Let It In: this app's firewall rule for the sharing ports (one prompt), then the row goes.
+    pub fn share_let_in(&self) {
+        self.post(|e| e.share_let_in());
+    }
+
     /// The first-start guide was seen (in the settings both apps share).
     pub fn guide_seen(&self) -> bool {
         self.shared.view(|v| v.guide_seen)
@@ -1343,6 +1384,9 @@ struct Engine {
     /// The list ran out while Autoplay's songs were on their way.
     ran_out: Cell<bool>,
     autoplay_for: RefCell<Option<String>>,
+    /// Share Songs with a Phone: the share open now, and which one (a closed one's events are let go).
+    share: RefCell<Option<crate::share::Share>>,
+    share_gen: Cell<u64>,
     /// Between songs (stage 4a-2, GTK's transitions): the DJ plan for (this song, the next), the pair being analysed,
     /// the song cued for the mix (its key, cued beat-matched, where it plays from), and a mix about to start.
     mix_plan: RefCell<Option<(String, String, beat::Plan)>>,
@@ -1451,6 +1495,8 @@ impl Engine {
             sound_tries: Cell::new(0),
             ran_out: Cell::new(false),
             autoplay_for: RefCell::default(),
+            share: RefCell::default(),
+            share_gen: Cell::new(0),
             mix_plan: RefCell::default(),
             analysing: RefCell::default(),
             cued: RefCell::default(),
@@ -2902,6 +2948,103 @@ impl Engine {
         settings::save(&self.settings.borrow());
         self.shared.view(|v| v.fade = s);
         self.replan();
+    }
+
+    // ------------------------------------------------------------------ Share Songs with a Phone (stage 4b)
+
+    fn set_share(&self, f: impl FnOnce(&mut ShareState)) {
+        self.shared.view(|v| f(&mut v.share));
+        self.shared.tell(Change::Share);
+    }
+
+    fn share_start(self: &Rc<Self>, to_phone: bool, videos: bool) {
+        use radiance_core::share_words as sw;
+        self.share.replace(None); // the old QR stops working
+        let gen = self.share_gen.get() + 1;
+        self.share_gen.set(gen);
+        let (tx, rx) = async_channel::unbounded();
+        let saved: Vec<Track> = self.liked.borrow().iter().filter(|t| t.file.as_deref().is_some_and(|f| std::path::Path::new(f).exists())).cloned().collect();
+        let opened = if to_phone { crate::share::Share::send(saved.clone(), videos, tx) } else { crate::share::Share::receive(tx) };
+        let mut st = ShareState { on: true, to_phone, videos, fraction: -1.0, ..Default::default() };
+        match opened {
+            Ok(share) => {
+                match share.ticket(&sw::device_name(&glib::host_name())) {
+                    Some(t) => {
+                        st.qr = Some(t);
+                        st.caption = if to_phone { sw::to_phone_caption(saved.len()) } else { sw::FROM_PHONE_CAPTION.to_string() };
+                    }
+                    None => st.caption = sw::NO_NETWORK.to_string(),
+                }
+                self.share.replace(Some(share));
+            }
+            Err(e) => st.caption = sw::couldnt_get_ready(&e),
+        }
+        self.set_share(|s| *s = st);
+        let me = Rc::downgrade(self);
+        glib::spawn_future_local(async move {
+            while let Ok(ev) = rx.recv().await {
+                let Some(e) = me.upgrade() else { break };
+                if e.share_gen.get() != gen {
+                    break; // a newer share, or closed
+                }
+                e.share_event(ev);
+            }
+        });
+        // the firewall row: this app's rule isn't there yet (netsh on Windows: a worker)
+        self.bg(crate::firewall::blocks, move |e, blocks| {
+            if e.share_gen.get() == gen {
+                e.set_share(|s| s.firewall = blocks);
+            }
+        });
+    }
+
+    fn share_event(self: &Rc<Self>, ev: crate::share::Event) {
+        use crate::share::Event;
+        use radiance_core::share_words as sw;
+        match ev {
+            Event::Progress { bytes, total, songs, of, now } => {
+                let done = of > 0 && songs == of;
+                self.set_share(|s| {
+                    s.progress = Some(if done { sw::done(of) } else { sw::progress(songs, of, bytes, total, now.as_deref()) });
+                    s.fraction = if total > 0 { (bytes as f64 / total as f64).min(1.0) } else { -1.0 };
+                    s.done = done;
+                });
+            }
+            Event::Received(t) => self.received_from_phone(t),
+            Event::Gentle(on) => self.set_share(|s| s.gentle = on),
+        }
+    }
+
+    /// A song from the phone: the liked one it is gets its file (same key, or the same title and artist), or it's
+    /// liked here, first (the Linux app's received_from_phone).
+    fn received_from_phone(self: &Rc<Self>, t: Track) {
+        let key = t.key();
+        {
+            let mut liked = self.liked.borrow_mut();
+            match liked.iter_mut().find(|x| x.key() == key || x.same_song(&t)) {
+                Some(x) => x.file = t.file.clone(),
+                None => liked.insert(0, t.clone()),
+            }
+        }
+        crate::library::store(&self.liked.borrow());
+        crate::log::note(&format!("from the phone: {}", t.title));
+        self.liked_changed();
+    }
+
+    fn share_stop(&self) {
+        self.share_gen.set(self.share_gen.get() + 1);
+        self.share.replace(None);
+        self.set_share(|s| *s = ShareState::default());
+    }
+
+    fn share_let_in(self: &Rc<Self>) {
+        let gen = self.share_gen.get();
+        self.bg(crate::firewall::let_in, move |e, ok| {
+            if ok && e.share_gen.get() == gen {
+                e.set_share(|s| s.firewall = false);
+                e.toast(radiance_core::share_words::LET_IN_TOAST.to_string());
+            }
+        });
     }
 
     fn set_guide_seen(&self) {

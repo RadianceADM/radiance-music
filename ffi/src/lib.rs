@@ -41,6 +41,8 @@ pub enum ChangeKind {
     Rating,
     Storage,
     Suggestions,
+    /// Share Songs with a Phone: its QR, how far, a song received (stage 4b).
+    Share,
 }
 
 impl From<Change> for ChangeKind {
@@ -66,6 +68,7 @@ impl From<Change> for ChangeKind {
             Change::Report => ChangeKind::Report,
             Change::Rating => ChangeKind::Rating,
             Change::Storage => ChangeKind::Storage,
+            Change::Share => ChangeKind::Share,
             Change::Suggestions => ChangeKind::Suggestions,
         }
     }
