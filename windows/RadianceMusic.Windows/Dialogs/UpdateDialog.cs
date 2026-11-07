@@ -84,10 +84,11 @@ internal static class UpdateDialog
             if (kind == ChangeKind.Update) Render();
         }
 
-        dialog.CloseButtonClick += (_, _) =>
+        dialog.Closing += (_, e) =>
         {
-            // Remind Me Later on Out, Ready or Failed; Hide while it downloads (it goes on)
-            if (shown is UpdateStepView.Out or UpdateStepView.Ready or UpdateStepView.Failed) hub.Engine.UpdateLater();
+            // Remind Me Later (or Esc) on Out, Ready or Failed; Hide while it downloads (it goes on). On
+            // Closing, not CloseButtonClick: Esc counts whichever way WinUI raises it.
+            if (e.Result == ContentDialogResult.None && shown is UpdateStepView.Out or UpdateStepView.Ready or UpdateStepView.Failed) hub.Engine.UpdateLater();
         };
         Render();
         Up = true;

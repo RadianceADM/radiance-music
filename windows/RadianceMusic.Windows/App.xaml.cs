@@ -259,10 +259,17 @@ public partial class App : Application
         var seen = Hub.Engine.GuideSeen() || Program.Dev.Shot != null || Program.Dev.Behind;
         if (!UpdateGate.MayShow(Window.Seen, sunrise, Dialogs.GuideDialog.Up, seen, dialogOpen))
         {
-            popTimer ??= Later(UpdateGate.RetrySeconds, () => { popTimer = null; PopUps(); }, "looked again for a free moment");
+            // the rating's moment is let go (kept, it would pop up later, mid-song: GTK's feedback_moment);
+            // the update looks again
+            if (wantsRating) Hub.Engine.RatingMissed();
+            if (wantsUpdate) popTimer ??= Later(UpdateGate.RetrySeconds, () => { popTimer = null; PopUps(); }, "looked again for a free moment");
             return;
         }
-        if (wantsUpdate) _ = Dialogs.UpdateDialog.Show(Hub, root);
+        if (wantsUpdate)
+        {
+            _ = Dialogs.UpdateDialog.Show(Hub, root);
+            if (wantsRating) Hub.Engine.RatingMissed(); // (the update first; the rating's moment has gone by when it closes)
+        }
         else _ = Dialogs.RatingDialog.Show(Hub, root, true);
     }
 

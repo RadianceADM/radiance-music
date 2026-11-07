@@ -1106,6 +1106,12 @@ impl Controller {
         self.post(|e| e.rating_shown());
     }
 
+    /// The free moment passed with the window not free (minimised, in the tray, a dialog up): let
+    /// go, as GTK's feedback_moment; not counted as asked (the next free moment may ask).
+    pub fn rating_missed(&self) {
+        self.post(|e| e.set_rating(|r| r.due = false));
+    }
+
     /// Don't Ask Again.
     pub fn rating_never(&self) {
         self.post(|_| crate::feedback::never_again());
@@ -2711,9 +2717,10 @@ impl Engine {
         );
     }
 
-    /// The fast split's files fetched quietly if missing (never in a screenshot or test copy run).
+    /// The fast split's files fetched quietly if missing (never in a screenshot or test copy run,
+    /// nor a beta developer run: RADIANCE_SETUP=off).
     fn fetch_two_part(self: &Rc<Self>) {
-        if std::env::var_os("RADIANCE_SHOT").is_some() {
+        if std::env::var_os("RADIANCE_SHOT").is_some() || std::env::var("RADIANCE_SETUP").as_deref() == Ok("off") {
             return;
         }
         let sources = self.shared.sources.clone();

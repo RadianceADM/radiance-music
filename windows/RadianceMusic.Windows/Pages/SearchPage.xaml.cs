@@ -39,11 +39,6 @@ public sealed partial class SearchPage : Page
         {
             if (Box.Text.Trim().Length == 0) hub.Engine.Suggest("");
         };
-        Box.SuggestionChosen += (_, e) =>
-        {
-            if (e.SelectedItem is not string chosen) return;
-            Search(chosen.StartsWith(Mine) ? chosen[Mine.Length..] : chosen);
-        };
         Tiles.ItemsSource = Ffi.BrowseTiles().Select(Tile).ToList();
         Render();
     }
@@ -101,7 +96,13 @@ public sealed partial class SearchPage : Page
         if (e.Reason == AutoSuggestionBoxTextChangeReason.UserInput) debounce?.Poke(sender.Text);
     }
 
-    private void OnSubmit(AutoSuggestBox sender, AutoSuggestBoxQuerySubmittedEventArgs e) => hub?.Engine.Search(sender.Text);
+    /// <summary>Enter, the search button, or a suggestion clicked or picked with the arrow keys and Enter
+    /// (SuggestionChosen fires on every arrow key's highlight: not searched there).</summary>
+    private void OnSubmit(AutoSuggestBox sender, AutoSuggestBoxQuerySubmittedEventArgs e)
+    {
+        if (e.ChosenSuggestion is string chosen) Search(chosen.StartsWith(Mine) ? chosen[Mine.Length..] : chosen);
+        else hub?.Engine.Search(sender.Text);
+    }
 
     private void OnPlay(object sender, ItemClickEventArgs e)
     {

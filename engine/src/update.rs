@@ -30,6 +30,8 @@ use serde_json::{json, Value};
 use crate::net;
 
 const LATEST: &str = "https://api.github.com/repos/RadianceADM/radiance-music/releases/latest";
+/// The beta looks through the newest releases for the one carrying its installer.
+const RELEASES: &str = "https://api.github.com/repos/RadianceADM/radiance-music/releases?per_page=20";
 /// "Remind me later": a day (owner, 2026-10-31).
 pub const LATER: Duration = Duration::from_secs(24 * 60 * 60);
 /// The count of updates (no name, no address: the platform and the version).
@@ -211,16 +213,26 @@ pub fn newer(a: &str, b: &str) -> bool {
 /// The newest release, with this install's file. (Worker thread.)
 pub fn latest(install: &Install) -> Result<Release, String> {
     // RADIANCE_UPDATE_FEED: another answer in GitHub's shape (end-to-end tests of updating)
-    let feed = std::env::var("RADIANCE_UPDATE_FEED").unwrap_or_else(|_| LATEST.into());
+    let feed = std::env::var("RADIANCE_UPDATE_FEED").unwrap_or_else(|_| (if beta().is_some() { RELEASES } else { LATEST }).into());
     let mut resp = net::agent().get(&feed).header("Accept", "application/vnd.github+json").call().map_err(|e| format!("couldn't reach GitHub ({e})"))?;
     let j: Value = resp.body_mut().read_json().map_err(|e| format!("GitHub's answer didn't read ({e})"))?;
+    if beta().is_some() {
+        // no beta on the newest releases: nothing newer (the version on now)
+        return Ok(beta_from(&j).unwrap_or_else(|| Release { version: version_here(), ..Default::default() }));
+    }
     release_from(&j, install).ok_or_else(|| "the newest release didn't read".into())
 }
 
-fn release_from(j: &Value, install: &Install) -> Option<Release> {
-    if beta().is_some() {
-        return release_from_beta(j);
+/// The beta's release: the newest of `j` (GitHub's list, newest first; or one release) that
+/// carries its labelled installer.
+fn beta_from(j: &Value) -> Option<Release> {
+    match j.as_array() {
+        Some(list) => list.iter().find_map(release_from_beta),
+        None => release_from_beta(j),
     }
+}
+
+fn release_from(j: &Value, install: &Install) -> Option<Release> {
     let version = j["tag_name"].as_str()?.trim_start_matches('v').to_string();
     let asset = install.asset().and_then(|name| j["assets"].as_array()?.iter().find(|a| a["name"].as_str() == Some(name)));
     Some(Release {
@@ -361,9 +373,20 @@ pub fn clean() {
 /// made from it), of the version on now or older, or older than the newest found. The other
 /// app's (the GTK app and the beta share the folder) is never touched.
 fn stale(name: &str, asset: &str, here: &str, newest: Option<&str>) -> bool {
-    let Some(at) = name.find(&format!("-{asset}")) else { return false };
-    let version = &name[..at];
+    let Some(version) = own_version(name, asset) else { return false };
     !newer(version, here) || newest.is_some_and(|n| newer(n, version))
+}
+
+/// The version of this app's own download `name` (its installer, half downloaded, or its log:
+/// "{version}-{asset's name}…"); None for the other app's.
+fn own_version<'a>(name: &'a str, asset: &str) -> Option<&'a str> {
+    let stem = asset.rsplit_once('.').map(|(s, _)| s).unwrap_or(asset);
+    name.find(&format!("-{stem}.")).map(|at| &name[..at])
+}
+
+/// Before a download: this app's files of other versions go (the other app's stay).
+fn leftover(name: &str, version: &str, asset: &str) -> bool {
+    own_version(name, asset).is_some_and(|v| v != version)
 }
 
 /// Already downloaded and checked (from an earlier "Update now").
@@ -384,10 +407,11 @@ pub fn download(r: &Release, install: &Install, stop: &AtomicBool, mut progress:
         return Ok(done);
     }
     fs::create_dir_all(folder()).map_err(|e| format!("couldn't make room for it ({e})"))?;
-    // leftovers of other versions aren't needed any more
+    // this app's leftovers of other versions aren't needed any more (the other app's stay)
     if let Ok(dir) = fs::read_dir(folder()) {
+        let asset = install.asset().unwrap_or("download");
         for f in dir.flatten() {
-            if !f.file_name().to_string_lossy().starts_with(&format!("{}-", r.version)) {
+            if leftover(&f.file_name().to_string_lossy(), &r.version, asset) {
                 let _ = fs::remove_file(f.path());
             }
         }
@@ -808,6 +832,35 @@ mod tests {
         assert!(release_from_beta(&release(vec![asset("")])).is_none(), "no label");
         let r = release_from_beta(&release(vec![asset("Radiance Music (beta) 0.8.0-beta.4")])).unwrap();
         assert_eq!((r.version.as_str(), r.url.as_str(), r.size, r.sha256.as_str()), ("0.8.0-beta.4", "https://x/b.exe", 149, "abc"));
+    }
+
+    /// Final review: the beta read only the newest release; one without the beta's installer hid a
+    /// beta on the release before it (and Look for Updates said the release "didn't read").
+    #[test]
+    fn the_beta_finds_its_installer_on_an_older_release() {
+        let asset = |label: &str| serde_json::json!({ "name": BETA_ASSET, "label": label, "browser_download_url": "https://x/b.exe", "size": 149, "digest": "sha256:abc" });
+        let release = |tag: &str, assets: Vec<Value>| serde_json::json!({ "tag_name": tag, "body": "- one", "html_url": "https://x/r", "assets": assets });
+        let list = serde_json::json!([release("v0.7.22", vec![]), release("v0.7.21", vec![asset("Radiance Music (beta) 0.8.0-beta.5")])]);
+        assert_eq!(beta_from(&list).map(|r| r.version), Some("0.8.0-beta.5".to_string()));
+        assert!(beta_from(&serde_json::json!([release("v0.7.22", vec![])])).is_none(), "none yet: nothing newer");
+        // one release on its own (a test feed's answer)
+        assert_eq!(beta_from(&release("v0.7.22", vec![asset("Radiance Music (beta) 0.8.0-beta.6")])).map(|r| r.version), Some("0.8.0-beta.6".to_string()));
+    }
+
+    /// Final review: a download cleared the shared folder of everything not its version, the other
+    /// app's waiting installer too (the beta's took the GTK app's 0.7.21, and the other way round).
+    #[test]
+    fn a_download_leaves_the_other_apps_files() {
+        assert!(!leftover("0.7.21-RadianceMusic-Setup.exe", "0.8.0-beta.5", BETA_ASSET), "the GTK app's");
+        assert!(leftover("0.8.0-beta.4-RadianceMusic-Beta-Setup.exe", "0.8.0-beta.5", BETA_ASSET));
+        assert!(leftover("0.8.0-beta.4-RadianceMusic-Beta-Setup.part", "0.8.0-beta.5", BETA_ASSET), "a half download of another version");
+        assert!(!leftover("0.8.0-beta.5-RadianceMusic-Beta-Setup.part", "0.8.0-beta.5", BETA_ASSET), "its own, picked up where it stopped");
+        assert!(!leftover("0.8.0-beta.4-RadianceMusic-Beta-Setup.exe", "0.7.22", "RadianceMusic-Setup.exe"), "the beta's");
+        assert!(leftover("0.7.21-RadianceMusic-Setup.exe", "0.7.22", "RadianceMusic-Setup.exe"));
+        // and the clean-up at the start takes this app's old half downloads and logs too
+        assert!(stale("0.8.0-beta.3-RadianceMusic-Beta-Setup.part", BETA_ASSET, "0.8.0-beta.3", None));
+        assert!(stale("0.8.0-beta.3-RadianceMusic-Beta-Setup.log", BETA_ASSET, "0.8.0-beta.3", None));
+        assert!(!stale("0.7.21-RadianceMusic-Setup.log", BETA_ASSET, "0.8.0-beta.3", None));
     }
 
     #[test]

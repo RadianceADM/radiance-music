@@ -127,19 +127,34 @@ fn move_file(from: &Path, to: &Path) -> Result<(), String> {
 /// file of the same name already there is left as it is, the old one kept
 /// too. `report(done, total)` as it goes. Returns (moved, kept back).
 pub fn move_library(from: &Path, to: &Path, report: impl Fn(usize, usize)) -> Result<(usize, usize), String> {
+    move_library_with(from, to, report, move_file, true)
+}
+
+/// move_library with its way of moving one file; `undo`: a failure puts the files already moved
+/// back (the database still names the old folder: they'd be missing). The sweep after the switch
+/// doesn't undo (the database names the new folder by then).
+fn move_library_with(from: &Path, to: &Path, report: impl Fn(usize, usize), mover: impl Fn(&Path, &Path) -> Result<(), String>, undo: bool) -> Result<(usize, usize), String> {
     if to.starts_with(from) || from == to {
         return Err("Pick a folder outside the current one.".into());
     }
     fs::create_dir_all(to).map_err(|e| e.to_string())?;
     let files: Vec<PathBuf> = fs::read_dir(from).map_err(|e| e.to_string())?.filter_map(|e| e.ok()).map(|e| e.path()).filter(|p| p.is_file()).collect();
     let (mut moved, mut kept) = (0, 0);
+    let mut done: Vec<(&Path, PathBuf)> = vec![];
     for (i, f) in files.iter().enumerate() {
         let Some(name) = f.file_name() else { continue };
         let target = to.join(name);
         if target.exists() {
             kept += 1;
         } else {
-            move_file(f, &target)?;
+            if let Err(why) = mover(f, &target) {
+                if !undo {
+                    return Err(why);
+                }
+                let stuck = done.iter().rev().filter(|(back, went)| move_file(went, back).is_err()).count();
+                return Err(if stuck == 0 { why } else { format!("{why} ({stuck} files couldn't go back to {})", from.display()) });
+            }
+            done.push((f, target));
             moved += 1;
         }
         report(i + 1, files.len());
@@ -158,14 +173,14 @@ pub fn target(chosen: &Path) -> PathBuf {
 
 /// Moves the songs' folder, as the GTK app's confirm_move (moved here, issue #45): every file,
 /// then the folder switched (`set_dir`) and the database's paths (`relocate`), then whatever was
-/// written meanwhile (a split finishing). On a failure the old folder stays the one used and the
-/// database isn't touched (files already moved stay where they went: the next move finds them).
+/// written meanwhile (a split finishing). On a failure the old folder stays the one used, the
+/// database isn't touched and the files already moved go back to it.
 pub fn move_and_switch(from: &Path, to: &Path, set_dir: impl Fn(Option<PathBuf>), relocate: impl Fn(&Path, &Path)) -> Result<(usize, usize), String> {
     match move_library(from, to, |_, _| {}) {
         Ok(done) => {
             set_dir(Some(to.to_path_buf()));
             relocate(from, to);
-            let _ = move_library(from, to, |_, _| {});
+            let _ = move_library_with(from, to, |_, _| {}, move_file, false);
             Ok(done)
         }
         Err(e) => {
@@ -224,6 +239,31 @@ mod tests {
         assert_eq!(*dir.borrow(), Some(from.clone()), "the old folder is the one used");
         assert!(!*relocated.borrow(), "the database wasn't changed");
         assert!(from.join("A.opus").exists());
+        let _ = fs::remove_dir_all(&b);
+    }
+
+    /// Final review: a move that failed half-way (on Windows, the song playing can't be moved) left
+    /// the songs moved before it in the new folder while the database still named the old one, so
+    /// they didn't play. They go back; the old folder is as it was.
+    #[test]
+    fn a_move_that_fails_half_way_puts_the_moved_songs_back() {
+        let b = base("halfway");
+        let (from, to) = (b.join("old/Radiance Music"), b.join("new/Radiance Music"));
+        fs::create_dir_all(&from).unwrap();
+        for n in ["A.opus", "B.opus", "C.opus"] {
+            fs::write(from.join(n), n).unwrap();
+        }
+        let tries = RefCell::new(0);
+        let in_use = |a: &Path, t: &Path| {
+            *tries.borrow_mut() += 1;
+            if *tries.borrow() == 3 { Err("in use".to_string()) } else { move_file(a, t) }
+        };
+        let got = move_library_with(&from, &to, |_, _| {}, in_use, true);
+        assert!(got.is_err());
+        for n in ["A.opus", "B.opus", "C.opus"] {
+            assert!(from.join(n).exists(), "{n} isn't back in the old folder");
+            assert!(!to.join(n).exists(), "{n} stayed in the new folder");
+        }
         let _ = fs::remove_dir_all(&b);
     }
 

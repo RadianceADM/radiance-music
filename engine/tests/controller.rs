@@ -1462,6 +1462,29 @@ fn the_rating_waits_for_a_free_moment() {
     c.quit();
 }
 
+/// Final review: a due rating the window couldn't show then (minimised, in the tray, a dialog up)
+/// waited and popped up later, mid-song. That moment is let go, as GTK's feedback_moment, and not
+/// counted as asked: the next free moment may ask.
+#[test]
+fn a_rating_moment_the_window_misses_is_let_go() {
+    let _l = setup();
+    let t = wav("rating-missed", 3.0);
+    let (c, fake, _rx, list) = with_list("rating missed", vec![t.clone()]);
+    fake.rating_due.store(true, Ordering::SeqCst);
+    c.play_from(list, 0, &t.key());
+    assert!(until(2.0, || c.now().playing), "never got going");
+    c.toggle_play();
+    assert!(until(2.0, || c.rating().due), "a pause is a free moment");
+    c.rating_missed();
+    assert!(until(1.0, || !c.rating().due), "still due after the moment passed");
+    c.toggle_play();
+    assert!(until(2.0, || c.now().playing));
+    assert!(!c.rating().due, "due again mid-song");
+    c.toggle_play();
+    assert!(until(2.0, || c.rating().due), "the next free moment may ask (it wasn't counted as asked)");
+    c.quit();
+}
+
 #[test]
 fn a_rating_without_sign_in_asks_for_one_then_sends() {
     let _l = setup();
@@ -1651,6 +1674,8 @@ fn a_developer_run_downloads_no_splitter() {
     std::env::remove_var("RADIANCE_SETUP");
     assert_eq!(fake.installs.load(Ordering::SeqCst), 0, "it downloaded a splitter");
     assert_eq!(c.setup(), SetupState::NotNeeded, "it held the start for a splitter");
+    // (final review: nor the fast split's files, about 50 MB onto the test computer's C:)
+    assert_eq!(fake.two_part_fetches.load(Ordering::SeqCst), 0, "it fetched the fast split's files");
     c.quit();
 }
 

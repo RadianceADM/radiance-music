@@ -1568,6 +1568,11 @@ impl MusicEngine {
     pub fn rating_shown(&self) {
         self.inner.rating_shown();
     }
+
+    /// The rating's free moment passed with the window not free: let go (not counted as asked).
+    pub fn rating_missed(&self) {
+        self.inner.rating_missed();
+    }
     pub fn rating_never(&self) {
         self.inner.rating_never();
     }

@@ -153,19 +153,20 @@ pub fn recent_log() -> String {
 
 /// Home folder → "~", the user's name → "you", email addresses → "(email)".
 pub fn scrub(text: &str, home: &str, user: &str) -> String {
-    let mut out = if home.len() > 1 { text.replace(home, "~") } else { text.to_string() };
-    // the same folder as a file:// address (spaces and all written %20), and on Windows written
-    // with forward slashes too (C:/Users/…, as GStreamer's file:///C:/Users/… addresses have it)
+    let mut out = text.to_string();
+    // the folder as written, as a file:// address writes it (spaces as %20, letters like ñ as
+    // %C3%B1), and on Windows with forward slashes too (C:/Users/…, as GStreamer's addresses);
+    // in any case (Windows' c:\users\… is the same folder)
     if home.len() > 1 {
         let forward = home.replace('\\', "/");
-        for form in [home.replace(' ', "%20"), forward.clone(), forward.replace(' ', "%20")] {
-            if form != home {
-                out = out.replace(&form, "~");
-            }
+        for form in [home.to_string(), home.replace(' ', "%20"), forward.clone(), forward.replace(' ', "%20"), percent(&forward)] {
+            out = replace_any_case(&out, &form, "~");
         }
     }
     if user.len() >= 3 {
-        out = out.replace(user, "you");
+        for form in [user.to_string(), percent(user)] {
+            out = replace_any_case(&out, &form, "you");
+        }
     }
     out.split_inclusive(char::is_whitespace)
         .map(|word| {
@@ -179,6 +180,34 @@ pub fn scrub(text: &str, home: &str, user: &str) -> String {
             }
         })
         .collect()
+}
+
+/// `s` as a file:// address writes it (GLib's g_filename_to_uri: these kept, the rest %XX).
+fn percent(s: &str) -> String {
+    s.bytes()
+        .map(|b| if b.is_ascii_alphanumeric() || b"-._~!$&'()*+,;=:@/".contains(&b) { (b as char).to_string() } else { format!("%{b:02X}") })
+        .collect()
+}
+
+/// Every `find` in `text` (letters in either case) as `with`.
+fn replace_any_case(text: &str, find: &str, with: &str) -> String {
+    let (t, f) = (text.as_bytes(), find.as_bytes());
+    if f.is_empty() {
+        return text.to_string();
+    }
+    let (mut out, mut i, mut last) = (String::with_capacity(text.len()), 0, 0);
+    while i + f.len() <= t.len() {
+        if t[i..i + f.len()].eq_ignore_ascii_case(f) && text.is_char_boundary(i) && text.is_char_boundary(i + f.len()) {
+            out.push_str(&text[last..i]);
+            out.push_str(with);
+            i += f.len();
+            last = i;
+        } else {
+            i += 1;
+        }
+    }
+    out.push_str(&text[last..]);
+    out
 }
 
 /// The last `most` bytes of `text`, starting at a whole line.
@@ -207,6 +236,18 @@ mod tests {
         assert!(!out.contains("Bassi"), "{out}");
         assert!(out.contains("file:///~/Music/Radiance%20Music/a.flac"), "{out}");
         assert!(out.contains("saved ~\\Music\\x.flac") && out.contains("~/AppData/y"), "{out}");
+    }
+
+    /// Final review: a name with ñ (common here) left the report in file:// addresses (written
+    /// Ni%C3%B1o), and the home folder written in another case (c:\users\…) did too.
+    #[test]
+    fn names_with_accents_and_other_cases_are_scrubbed() {
+        let log = "load file:///C:/Users/Ni%C3%B1o%20Cruz/Music/a.flac\nopen c:\\users\\niño cruz\\Music\\b.flac\nuser Niño Cruz here\nlower ni%c3%b1o%20cruz\nnamed O'Neil: file:///C:/Users/Jos%C3%A9%20O'Neil/x\n";
+        let out = scrub(log, "C:\\Users\\Niño Cruz", "Niño Cruz");
+        assert!(!out.to_lowercase().contains("ni%c3%b1o") && !out.to_lowercase().contains("niño"), "{out}");
+        assert!(out.contains("file:///~/Music/a.flac") && out.contains("open ~\\Music\\b.flac"), "{out}");
+        let out = scrub(log, "C:\\Users\\José O'Neil", "José O'Neil");
+        assert!(out.contains("file:///~/x") && !out.contains("Jos%C3%A9"), "{out}");
     }
 
     /// The beta's report: its own version, and its own log (beta-crash.log) after the engine's, scrubbed.
