@@ -36,6 +36,8 @@ internal static class DevActs
             "liked-search" => window.Page is Pages.LikedPage liked && Do(() => liked.SearchFor(arg)),
             "queue-move" => arg.Split(':') is [var a, var b] && int.TryParse(a, out var from) && int.TryParse(b, out var to) && window.SidePanel.Drop(from, to),
             "queue-menu" => int.TryParse(arg, out var row) && window.SidePanel.OpenMenu(row),
+            // the queue's order now, in the log (a real drag's check: before and after)
+            "queue-log" => Do(() => Crash.Note("queue now: " + window.SidePanel.Titles())),
             "lyric-tap" => window.Page is Pages.NowPlayingPage np && int.TryParse(arg, out var line) && np.TapLyric(line),
             "fullscreen" => Fullscreen(window),
             "next" => Do(() => App.Hub.Engine.Skip(1)),
