@@ -16,6 +16,9 @@ The native Windows app gets its own updates, help and settings:
 - **Report a Problem** shows exactly what will be sent (the app's log with your name, home folder and email addresses taken out) before you press Send; **Rate Radiance Music** pops up now and then, as the Linux app's.
 - **The Offline sign** in the title bar; back online it says so, searches again and gets what was missing.
 - **Search suggestions as you type:** your artists and songs first (a heart before them), then YouTube Music's; your artists as soon as you click the box.
+- **A song YouTube refuses for a moment plays anyway:** now and then YouTube turns down a song's first piece; the beta took that as "won't play" and went on to the next song (Previous then played it). It asks again first (#65). The Linux and Windows apps get this with their next release too.
+- **The queue shows how to reorder it:** each song in Up next has the handle it's dragged by, as in the Linux app.
+- **Motion as the Radiance animation blueprint has it (#64):** the Offline sign fades in and out, a Settings section or an update step crossfades over the last, and buttons give a little under a press. Windows' Animation effects setting turns it all off.
 - Stage 3's small fixes (#61): the Linux app's Mixer says Music and Vocals for a song split in two (it said "its four parts"); Tap Timing stamps where the song really is; pausing and resuming splitting say so.
 
 ## Windows beta 0.8.0-beta.3 — not released yet (#45, stage 3)
