@@ -59,6 +59,10 @@ decode. Stage 3 (2026-11-07, ribs03, GTX 1060 6GB, a stream playing, % of one co
 | A song being split in four (the app's own share; the splitter at Idle priority on its cores) | 10.3 % | | |
 | Now Playing, a music video (stage 2) | 7.1 % | | |
 
+Stage 4a (2026-11-07, idle, nothing playing): Settings 0.1 %; Home 0.1 % (one run of three spun at
+70-85 % from the start, shown, minimized and in the tray alike: two unnamed threads and the UI
+thread, #61; the developer runs now name an unnamed thread's start file).
+
 The developer runs log their busiest threads by name when over a fifth of a core (`busy:` in
 beta-crash.log): with the Mixer open, most of it is the compositor's thread (the pop-up's meters) and
 GStreamer's mixing the parts.

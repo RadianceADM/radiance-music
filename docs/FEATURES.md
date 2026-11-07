@@ -110,7 +110,7 @@ marked 🔜.
 | Feature | Linux | Windows | Windows beta | Phone | Notes |
 |---|---|---|---|---|---|
 | Update pop-up: Update now, Remind me later, Skip | ✅ | ✅ | ✅ | ✅ | the beta: its own installer, its version on the release's asset label |
-| Installs its own update | ✅ | ✅ | 🔜 4 | ✅ | Linux download / Flatpak / Windows installer / Android installer |
+| Installs its own update | ✅ | ✅ | ✅ | ✅ | Linux download / Flatpak / Windows installer / Android installer; the beta: its own installer where it is (checked on ribs03 from a local feed, 2026-11-07) |
 | What's New | ✅ | ✅ | ✅ | ✅ | |
 | How to Use It guide | ✅ | ✅ | ✅ | ✅ | |
 | Start screen with first-open setup and progress | ✅ | ✅ | ✅ | ✅ | the beta: the sunrise holds while splitting gets ready, offline it offers Try Again or Open Radiance Music Now |

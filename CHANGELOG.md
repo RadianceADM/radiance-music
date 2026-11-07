@@ -11,7 +11,7 @@
 
 The native Windows app gets its own updates, help and settings:
 - **Settings** in the sidebar: **Playing** (Autoplay When the Queue Ends), **Storage** (where your songs are kept, Change… moves them, Open the Music Folder, the space each kind of file uses) and **Help** (How to Use It, What's New, Look for Updates, Report a Problem…, Rate Radiance Music, About).
-- **It updates itself:** a newer beta pops up when the window is free (never over the start's sunrise, the guide or another pop-up): Update Now with its size downloads it while music plays; Restart to Update puts it on where the beta is and opens it again. Remind Me Later and Skip This Version, as the Linux app's.
+- **It updates itself:** a newer beta pops up when the window is free (never over the start's sunrise, the guide or another pop-up): Update Now with its size downloads it while music plays; Restart to Update closes the app, puts the new version on where the beta is and opens it again. Remind Me Later and Skip This Version, as the Linux app's.
 - **How to Use It** the first time, and **What's New** from Help.
 - **Report a Problem** shows exactly what will be sent (the app's log with your name, home folder and email addresses taken out) before you press Send; **Rate Radiance Music** pops up now and then, as the Linux app's.
 - **The Offline sign** in the title bar; back online it says so, searches again and gets what was missing.
