@@ -52,6 +52,14 @@ public sealed partial class SearchPage : Page
 
     public void FocusBox() => Box.Focus(FocusState.Programmatic);
 
+    /// <summary>YouTube Music's first song played, as a click on it (developer runs: a queue for the screenshots).</summary>
+    public bool PlayFirstSong()
+    {
+        if (hub?.Engine.Results().Songs is not { Length: > 0 } songs) return false;
+        hub.Engine.PlayFrom(ListKind.Songs, 0, songs[0].Key);
+        return true;
+    }
+
     /// <summary>`q` in the box and its suggestions asked for, as typing it would (screenshots).</summary>
     public void Typed(string q)
     {
