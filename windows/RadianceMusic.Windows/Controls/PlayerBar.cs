@@ -4,6 +4,7 @@ using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Controls.Primitives;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
+using Microsoft.UI.Xaml.Media.Animation;
 using RadianceMusic.Native;
 
 namespace RadianceMusic.Controls;
@@ -28,8 +29,12 @@ internal sealed class PlayerBar : Grid
     private readonly FontIcon heartIcon = new() { Glyph = "\uEB51", FontSize = 15 };
     private readonly FontIcon playIcon = new() { Glyph = "\uE768", FontSize = 18 };
     /// <summary>Spins round the Play button while the song loads (owner, 2026-11-08: "yung play pause button paikotin mo
-    /// pag loading"), as the phone's: a soft ring, gone the moment it plays.</summary>
-    private readonly ProgressRing playRing = new() { Width = 50, Height = 50, IsActive = false, IsHitTestVisible = false };
+    /// pag loading"), as the phone's: a soft ring, gone the moment it plays.
+    /// The ring is drawn here (a rounded arc turning once a second), not WinUI's ProgressRing: that one's animated player
+    /// didn't draw in the VM's check (2026-11-08), so its arc may not show where it matters.</summary>
+    private readonly Microsoft.UI.Xaml.Shapes.Path playRing = LoadingArc(50);
+    private readonly Storyboard playSpin;
+    private bool spinning;
     private readonly FontIcon repeatIcon = new() { Glyph = "\uE8EE", FontSize = 15 };
     private readonly FontIcon muteIcon = new() { Glyph = "\uE767", FontSize = 15 };
     private readonly Slider bar = new() { Minimum = 0, Maximum = 1, StepFrequency = 0.1, IsThumbToolTipEnabled = false, VerticalAlignment = VerticalAlignment.Center };
@@ -101,6 +106,7 @@ internal sealed class PlayerBar : Grid
         play.VerticalAlignment = VerticalAlignment.Center;
         playSlot.Children.Add(play);
         playSlot.Children.Add(playRing);
+        playSpin = Spin(playRing);
         foreach (var b in new FrameworkElement[] { shuffle, previous, playSlot, next, repeat }) controls.Children.Add(b);
         var timeline = new Grid { ColumnSpacing = 8 };
         timeline.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
@@ -181,6 +187,62 @@ internal sealed class PlayerBar : Grid
         return true;
     }
 
+    /// <summary>A rounded arc a little over a quarter of a circle, round [side], in the accent colour, hidden until a song
+    /// loads.</summary>
+    private static Microsoft.UI.Xaml.Shapes.Path LoadingArc(double side)
+    {
+        const double thick = 3;
+        var r = (side - thick) / 2;
+        var c = side / 2;
+        double At(double degrees, Func<double, double> f) => f(degrees * Math.PI / 180);
+        var figure = new PathFigure { StartPoint = new Windows.Foundation.Point(c, c - r), IsClosed = false, IsFilled = false };
+        figure.Segments.Add(new ArcSegment
+        {
+            Point = new Windows.Foundation.Point(c + r * At(10, Math.Cos), c + r * At(10, Math.Sin)),
+            Size = new Windows.Foundation.Size(r, r),
+            SweepDirection = SweepDirection.Clockwise,
+            IsLargeArc = false,
+        });
+        var geometry = new PathGeometry();
+        geometry.Figures.Add(figure);
+        return new Microsoft.UI.Xaml.Shapes.Path
+        {
+            Data = geometry,
+            Width = side,
+            Height = side,
+            Stroke = (Brush)Application.Current.Resources["AccentFillColorDefaultBrush"],
+            StrokeThickness = thick,
+            StrokeStartLineCap = PenLineCap.Round,
+            StrokeEndLineCap = PenLineCap.Round,
+            IsHitTestVisible = false,
+            Visibility = Visibility.Collapsed,
+            RenderTransform = new RotateTransform { CenterX = c, CenterY = c },
+        };
+    }
+
+    /// <summary>Turns [arc] once a second, for as long as it runs.</summary>
+    private static Storyboard Spin(UIElement arc)
+    {
+        var turn = new DoubleAnimation { From = 0, To = 360, Duration = new Duration(TimeSpan.FromSeconds(1)), RepeatBehavior = RepeatBehavior.Forever };
+        Storyboard.SetTarget(turn, arc.RenderTransform);
+        Storyboard.SetTargetProperty(turn, "Angle");
+        var board = new Storyboard();
+        board.Children.Add(turn);
+        return board;
+    }
+
+    /// <summary>The ring round Play shown and turning while the song loads, gone once it plays (only on a change).</summary>
+    private void ShowLoading(bool loading)
+    {
+        if (loading == spinning) return;
+        spinning = loading;
+        playRing.Visibility = loading ? Visibility.Visible : Visibility.Collapsed;
+        if (loading) playSpin.Begin();
+        else playSpin.Stop();
+        AutomationProperties.SetHelpText(play, loading ? "Loading the song" : "");
+        if (Program.Dev.Shot != null) Crash.Note(loading ? "bar: the ring round Play turns (loading)" : "bar: the ring round Play stops");
+    }
+
     private static Button Round(FontIcon icon, string tip, Action click, bool accent = false)
     {
         var b = new Button
@@ -238,8 +300,7 @@ internal sealed class PlayerBar : Grid
         previous.IsEnabled = now.CanPrevious;
         next.IsEnabled = now.CanNext;
         playIcon.Glyph = now.Playing ? "\uE769" : "\uE768";
-        playRing.IsActive = now.Loading && song != null;
-        AutomationProperties.SetHelpText(play, playRing.IsActive ? "Loading the song" : "");
+        ShowLoading(now.Loading && song != null);
         ToolTipService.SetToolTip(play, now.Playing ? "Pause" : "Play");
         ToolTipService.SetToolTip(shuffle, now.Shuffle ? "Shuffle: on" : "Shuffle");
         Tint(shuffle, now.Shuffle);
