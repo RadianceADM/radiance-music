@@ -1726,7 +1726,8 @@ fn the_first_start_gets_splitting_ready_with_progress() {
     let _l = setup();
     let c = first_start(Arc::new(Fake::default()));
     let mut steps: Vec<String> = vec![];
-    let end = Instant::now() + Duration::from_secs(4);
+    // (15 s: the whole suite on a 4-core VM took longer than 4 s now and then; it's done as soon as it's Ready)
+    let end = Instant::now() + Duration::from_secs(15);
     while Instant::now() < end && c.setup() != SetupState::Ready {
         if let SetupState::Getting { step, .. } = c.setup() {
             if !step.is_empty() && steps.last() != Some(&step) {
