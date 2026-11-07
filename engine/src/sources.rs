@@ -67,6 +67,11 @@ pub trait Sources: Send + Sync + 'static {
     fn count_update(&self, r: &crate::update::Release, install: &crate::update::Install) {
         crate::update::counted(r, install)
     }
+    /// Restart to Update: the installer arranged to run once this app has closed (Windows: a script
+    /// that waits for it, puts it on and opens the new version).
+    fn put_on_update(&self, install: &crate::update::Install, file: &std::path::Path) -> Result<(), String> {
+        crate::update::put_on(install, file)
+    }
     /// Is there a network at all (GIO's monitor; read at the start).
     fn network_available(&self) -> bool {
         use gio::prelude::*;

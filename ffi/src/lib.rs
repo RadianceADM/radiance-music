@@ -1356,6 +1356,8 @@ pub struct UpdateView {
     pub main: String,
     /// Under the download's bar ("75 MB of 150 MB").
     pub progress: String,
+    /// Restart to Update arranged it: the app closes now.
+    pub quit: bool,
 }
 
 fn update_view(u: &controller::UpdateState, playing: bool) -> UpdateView {
@@ -1391,6 +1393,7 @@ fn update_view(u: &controller::UpdateState, playing: bool) -> UpdateView {
         title,
         text,
         main,
+        quit: u.quit,
     }
 }
 
@@ -1797,7 +1800,7 @@ mod tests {
     fn the_update_pop_up_says_each_step_as_the_linux_app() {
         use radiance_engine::controller::{UpdateState, UpdateStep};
         let r = radiance_engine::update::Release { version: "0.8.0-beta.4".into(), notes: "- **One**\n- two\n- three\n- four\n- five".into(), size: 150_000_000, ..Default::default() };
-        let mut u = UpdateState { step: UpdateStep::Out, release: Some(r), asks: true, page_only: false, installer: true, current: "0.8.0-beta.3".into() };
+        let mut u = UpdateState { step: UpdateStep::Out, release: Some(r), asks: true, page_only: false, installer: true, current: "0.8.0-beta.3".into(), quit: false };
         let v = update_view(&u, false);
         assert_eq!((v.step, v.title.as_str(), v.main.as_str()), (UpdateStepView::Out, "Radiance Music 0.8.0-beta.4 is out", "Update Now (150 MB)"));
         assert_eq!(v.bullets, ["One", "two", "three", "four"]);

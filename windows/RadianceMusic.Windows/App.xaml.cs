@@ -113,6 +113,9 @@ public partial class App : Application
         Hub.Change += kind =>
         {
             if (kind is ChangeKind.Update or ChangeKind.Rating) PopUps();
+            // Restart to Update arranged it: a moment for the pop-up to say so, then close (the new
+            // version waits for this one), as the Linux app's
+            if (kind == ChangeKind.Update && !quitting && Hub.Engine.Update().Quit) closeForUpdate ??= Later(0.6, Quit, "closed for the update");
         };
         PopUps(); // (one found while the app was starting up told before it listened)
         // --offline: no internet as far as the app knows (screenshots of the Offline sign)
@@ -219,6 +222,7 @@ public partial class App : Application
     private static DispatcherQueueTimer? popTimer;
 
     private static bool popWaitsForLoad;
+    private static DispatcherQueueTimer? closeForUpdate;
 
     /// <summary>
     /// The update pop-up or the rating, when one wants to show by itself: only with the window seen, the sunrise

@@ -79,6 +79,8 @@ pub struct Fake {
     /// Updates (stage 4a): the newest release found, and a download that waits until it's stopped.
     pub release: Mutex<Option<radiance_engine::update::Release>>,
     pub download_waits: std::sync::atomic::AtomicBool,
+    /// Updates arranged to go on once the app has closed (Restart to Update).
+    pub put_on: AtomicUsize,
     /// Report a Problem and the rating (stage 4a): notes sent, whether a free moment asks, the
     /// account (none: a sign-in first), the answers sent.
     pub reports: Mutex<Vec<String>>,
@@ -171,6 +173,10 @@ impl Sources for Fake {
         Ok(std::env::temp_dir().join(format!("{}-{}", r.version, radiance_engine::update::BETA_ASSET)))
     }
     fn count_update(&self, _: &radiance_engine::update::Release, _: &radiance_engine::update::Install) {}
+    fn put_on_update(&self, _: &radiance_engine::update::Install, _: &std::path::Path) -> Result<(), String> {
+        self.put_on.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    }
     fn send_report(&self, _: &radiance_engine::report::Report, note: &str) -> Result<String, radiance_engine::feedback::Failure> {
         self.reports.lock().unwrap().push(note.to_string());
         Ok("RM-0042".into())
@@ -1375,6 +1381,33 @@ fn update_now_downloads_then_ready() {
     assert!(until(2.0, || c.update().step == UpdateStep::Out));
     c.update_now();
     assert!(until(2.0, || c.update().step == UpdateStep::Ready), "{:?}", c.update().step);
+    radiance_engine::update::forget();
+    c.quit();
+}
+
+/// The real update test on ribs03 (2026-11-07) found the beta never closed on Restart to Update: the
+/// installer's script waited for it and forced it shut. Once the update is arranged, the app is told
+/// to close, as the Linux app's quit_app.
+#[test]
+fn restart_to_update_tells_the_app_to_close() {
+    let _l = setup();
+    radiance_engine::update::forget();
+    let (c, fake, _rx) = with_songs("update restart", vec![]);
+    *fake.release.lock().unwrap() = Some(newer_release());
+    c.look_for_updates(true);
+    assert!(until(2.0, || c.update().step == UpdateStep::Out));
+    c.update_now();
+    assert!(until(2.0, || c.update().step == UpdateStep::Ready), "{:?}", c.update().step);
+    let r = c.update().release.unwrap();
+    let file = radiance_engine::update::file(&r, &radiance_engine::update::Install::Beta(std::env::temp_dir().join("rm-fake-beta")));
+    std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+    std::fs::write(&file, b"the installer").unwrap();
+    assert!(!c.update().quit, "told to close before Restart to Update");
+    c.update_restart();
+    assert!(until(2.0, || c.update().quit), "never told to close: {:?}", c.update().step);
+    assert_eq!(c.update().step, UpdateStep::Restarting);
+    assert_eq!(fake.put_on.load(Ordering::SeqCst), 1);
+    let _ = std::fs::remove_file(&file);
     radiance_engine::update::forget();
     c.quit();
 }

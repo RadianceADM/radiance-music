@@ -148,11 +148,13 @@ pub struct UpdateState {
     pub installer: bool,
     /// The version on now.
     pub current: String,
+    /// Restart to Update arranged the update: the app closes now (the new version waits for it).
+    pub quit: bool,
 }
 
 impl Default for UpdateState {
     fn default() -> Self {
-        UpdateState { step: UpdateStep::None, release: None, asks: false, page_only: false, installer: false, current: crate::update::version_here() }
+        UpdateState { step: UpdateStep::None, release: None, asks: false, page_only: false, installer: false, current: crate::update::version_here(), quit: false }
     }
 }
 
@@ -3047,8 +3049,11 @@ impl Engine {
         }
         self.set_update(|u| u.step = UpdateStep::Restarting);
         self.save_session();
-        match crate::update::put_on(&install, &file) {
-            Ok(()) => crate::log::note(&format!("update: {} goes on once this app has closed", r.version)),
+        match self.shared.sources.put_on_update(&install, &file) {
+            Ok(()) => {
+                crate::log::note(&format!("update: {} goes on once this app has closed", r.version));
+                self.set_update(|u| u.quit = true);
+            }
             Err(why) => self.set_update(|u| u.step = UpdateStep::Failed(format!("Couldn't update: {why}"))),
         }
     }
