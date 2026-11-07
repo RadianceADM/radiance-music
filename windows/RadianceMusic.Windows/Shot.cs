@@ -94,8 +94,9 @@ internal static class Shot
         Win32.GetWindowRect(hwnd, out var rect);
         Crash.Note($"shot: window {rect.Right - rect.Left}x{rect.Bottom - rect.Top} at {rect.Left},{rect.Top}{(hidden ? " (hidden: PrintWindow)" : "")}");
         // hidden: the window's own picture, behind whatever the owner has in front; else the screen where it is
-        int w, h;
-        var bits = hidden ? Win32.Print(hwnd, out w, out h) : Win32.Grab(rect, out w, out h);
+        int w, h, popups = 0;
+        var bits = hidden ? Win32.PrintWithPopups(hwnd, out w, out h, out popups) : Win32.Grab(rect, out w, out h);
+        if (popups > 0) Crash.Note($"shot: {popups} pop-up window(s) drawn over it");
         using var file = File.Create(path);
         var encoder = await BitmapEncoder.CreateAsync(BitmapEncoder.PngEncoderId, file.AsRandomAccessStream());
         encoder.SetPixelData(BitmapPixelFormat.Bgra8, BitmapAlphaMode.Ignore, (uint)w, (uint)h, 96, 96, bits);

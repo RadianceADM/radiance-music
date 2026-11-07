@@ -112,6 +112,52 @@ internal static partial class Win32
         return bits;
     }
 
+    [LibraryImport("user32.dll")]
+    private static partial nint FindWindowExW(nint parent, nint after, nint cls, nint title);
+
+    [LibraryImport("user32.dll")]
+    private static partial uint GetWindowThreadProcessId(nint hwnd, out uint pid);
+
+    [LibraryImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool IsWindowVisible(nint hwnd);
+
+    /// <summary>The window's picture with this app's own pop-up windows over it (Search's suggestion list,
+    /// a menu that may leave the window: WinUI gives them windows of their own, which PrintWindow of the
+    /// main one leaves out). Hidden screenshot runs.</summary>
+    public static byte[] PrintWithPopups(nint hwnd, out int w, out int h, out int popups)
+    {
+        var bits = Print(hwnd, out w, out h);
+        GetWindowRect(hwnd, out var main);
+        popups = 0;
+        var me = (uint)Environment.ProcessId;
+        for (var other = FindWindowExW(0, 0, 0, 0); other != 0; other = FindWindowExW(0, other, 0, 0))
+        {
+            if (other == hwnd || !IsWindowVisible(other)) continue;
+            GetWindowThreadProcessId(other, out var pid);
+            if (pid != me) continue;
+            GetWindowRect(other, out var r);
+            if (r.Right <= main.Left || r.Left >= main.Right || r.Bottom <= main.Top || r.Top >= main.Bottom) continue;
+            var over = Print(other, out var ow, out var oh);
+            for (var y = 0; y < oh; y++)
+            {
+                var ty = r.Top - main.Top + y;
+                if (ty < 0 || ty >= h) continue;
+                for (var x = 0; x < ow; x++)
+                {
+                    var tx = r.Left - main.Left + x;
+                    if (tx < 0 || tx >= w) continue;
+                    var from = (y * ow + x) * 4;
+                    // (a pop-up's rounded corners and shadow come out empty: the window shows there)
+                    if (over[from] == 0 && over[from + 1] == 0 && over[from + 2] == 0) continue;
+                    Array.Copy(over, from, bits, (ty * w + tx) * 4, 4);
+                }
+            }
+            popups++;
+        }
+        return bits;
+    }
+
     public static byte[] Grab(Rect rect, out int w, out int h)
     {
         w = rect.Right - rect.Left;
