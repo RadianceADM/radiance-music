@@ -26,7 +26,7 @@ marked 🔜.
 | History | ✅ | ✅ | ✅ | ✅ | computer keeps 1000, phone 300 |
 | Liked Songs: A to Z rail, own search, Play, Shuffle | ✅ | ✅ | ✅ | ✅ | |
 | Downloading: the liked songs not saved yet, with how many, in the sidebar | 🔜 | 🔜 | ✅ | ❌ | always there; the ones saving now first, Fix missing on its page (#66) |
-| Music videos: watch in the app | ✅ | ✅ | ✅ | ✅ | phone since 1.0.2: Video on the album art swaps in the music video from the same spot (kept inside the app, out of Gallery; not saved: streamed); beta: on the compositor, 16:9, fullscreen; some streamed videos are refused by YouTube (#48) |
+| Music videos: watch in the app | ✅ | ✅ | ✅ | ➖ | phone: none, by the owner's ruling (2026-11-08, "final na walang music video sa mobile"; 🔜 1.0.5 takes out the Video button and deletes the kept videos, android#32); beta: on the compositor, 16:9, fullscreen; some streamed videos are refused by YouTube (#48) |
 | Songs from a Radiance Music Server | ✅ | ✅ | 🔜 4 | ✅ | |
 
 ## Playback
@@ -128,7 +128,6 @@ marked 🔜.
 Phone:
 - Albums, Artists and Genres pages; Playlists
 - Made for you mix, Song Radio, Autoplay, Crossfade / DJ mix, Played before
-- Watch music videos in the app
 - Word-by-word lyrics with every word timed (MMS), the lyrics editor, Find Lyrics Again
 - Liked songs split by themselves; Unlike removes the saved files; a Storage page
 - Genre tiles in Search

@@ -23,10 +23,7 @@ impl Ui {
         way.set_active_name(Some("to"));
         body.append(&way);
 
-        let options = gtk::ListBox::builder().css_classes(["boxed-list"]).selection_mode(gtk::SelectionMode::None).build();
-        let videos = adw::SwitchRow::builder().title(sw::WITH_VIDEOS).subtitle(sw::WITH_VIDEOS_SUB).build();
-        options.append(&videos);
-        body.append(&options);
+        // no "With music videos": phones have no music videos (owner, 2026-11-08: "final na walang music video sa mobile")
 
         let qr = gtk::DrawingArea::builder().content_width(280).content_height(280).halign(gtk::Align::Center).build();
         let text: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
@@ -81,18 +78,17 @@ impl Ui {
         let (tx, rx) = async_channel::unbounded::<Event>();
         let name = sw::device_name(&glib::host_name());
 
-        // a new QR for the way picked (and the videos switch, for sending)
+        // a new QR for the way picked
         let show = {
-            let (me, share, text, qr, caption, bar, note, way, videos, tx) = (Rc::downgrade(self), share.clone(), text.clone(), qr.downgrade(), caption.downgrade(), bar.downgrade(), note.downgrade(), way.downgrade(), videos.downgrade(), tx.clone());
+            let (me, share, text, qr, caption, bar, note, way, tx) = (Rc::downgrade(self), share.clone(), text.clone(), qr.downgrade(), caption.downgrade(), bar.downgrade(), note.downgrade(), way.downgrade(), tx.clone());
             Rc::new(move || {
-                let (Some(me), Some(qr), Some(caption), Some(bar), Some(note), Some(way), Some(videos)) = (me.upgrade(), qr.upgrade(), caption.upgrade(), bar.upgrade(), note.upgrade(), way.upgrade(), videos.upgrade()) else { return };
+                let (Some(me), Some(qr), Some(caption), Some(bar), Some(note), Some(way)) = (me.upgrade(), qr.upgrade(), caption.upgrade(), bar.upgrade(), note.upgrade(), way.upgrade()) else { return };
                 share.borrow_mut().take(); // the old QR stops working
                 bar.set_visible(false);
                 note.set_visible(false);
                 let to_phone = way.active_name().as_deref() == Some("to");
-                videos.set_sensitive(to_phone);
                 let saved: Vec<Track> = me.liked.borrow().iter().filter(|t| t.file.as_ref().is_some_and(|f| Path::new(f).exists())).cloned().collect();
-                let opened = if to_phone { Share::send(saved.clone(), videos.is_active(), tx.clone()) } else { Share::receive(tx.clone()) };
+                let opened = if to_phone { Share::send(saved.clone(), tx.clone()) } else { Share::receive(tx.clone()) };
                 match opened.as_ref().map(|s| s.ticket(&name)) {
                     Ok(Some(words)) => {
                         *text.borrow_mut() = Some(words);
@@ -118,8 +114,6 @@ impl Ui {
         show();
         let s = show.clone();
         way.connect_active_name_notify(move |_| s());
-        let s = show.clone();
-        videos.connect_active_notify(move |_| s());
 
         let (me, bar_w, note_w) = (Rc::downgrade(self), bar.downgrade(), note.downgrade());
         glib::spawn_future_local(async move {

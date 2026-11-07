@@ -9,12 +9,15 @@
 - **After a crossfade into the queue's last song, Autoplay still adds songs like it** (the music stopped at that song's end before).
 - **Sharing with a phone on Windows uses a truly random key** for its QR (it was based on the clock there).
 - **Ready for the Windows app's next step:** when an update brings the new Windows app, the app that opens afterwards is the new one.
+- **The Play button spins while a song loads** (owner: "yung play pause button paikotin mo pag loading"): a soft ring goes round Play from the moment you pick a song until its music starts, as on the phone. The bar doesn't move when it shows.
+- **Share Songs with a Phone sends songs without music videos:** phones have no music videos now, so the "With music videos" switch is gone and a phone gets the song, its parts, lyrics and cover.
 
 ## Windows beta 0.8.0-beta.8 — not released yet (#45, stage 4b)
 
-- **Share Songs with a Phone**, as the Linux app's: Settings → Help → Share Songs with a Phone…: To the Phone (your saved liked songs, with music videos or not) or From the Phone, by the phone's QR; only what the other side hasn't got goes, with the songs' parts, lyrics and covers. When Windows' firewall may keep the phone out, Let It In asks Windows once (the beta has its own rule).
+- **Share Songs with a Phone**, as the Linux app's: Settings → Help → Share Songs with a Phone…: To the Phone (your saved liked songs, without music videos: phones have none) or From the Phone, by the phone's QR; only what the other side hasn't got goes, with the songs' parts, lyrics and covers. When Windows' firewall may keep the phone out, Let It In asks Windows once (the beta has its own rule).
 - **Copy Link** in a song's menu: its page on the web (YouTube Music, the Internet Archive, or its server).
 - **How to Use It** has its fifth card (On Your Phone Too).
+- **The Play button spins while a song loads**, as the Linux app's and the phone's (above).
 
 ## Windows beta 0.8.0-beta.7 — not released yet (#45, stage 4a-2)
 

@@ -86,7 +86,6 @@ pub enum Change {
 pub struct ShareState {
     pub on: bool,
     pub to_phone: bool,
-    pub videos: bool,
     pub qr: Option<String>,
     pub caption: String,
     pub progress: Option<String>,
@@ -1160,10 +1159,10 @@ impl Controller {
         self.shared.view(|v| v.mixing)
     }
 
-    /// Share Songs with a Phone (stage 4b): opens a share, To the Phone (its saved liked songs, with music videos or
-    /// not) or From the Phone; a new one replaces the last (its QR stops working).
-    pub fn share_start(&self, to_phone: bool, videos: bool) {
-        self.post(move |e| e.share_start(to_phone, videos));
+    /// Share Songs with a Phone (stage 4b): opens a share, To the Phone (its saved liked songs; never music videos,
+    /// phones have none) or From the Phone; a new one replaces the last (its QR stops working).
+    pub fn share_start(&self, to_phone: bool) {
+        self.post(move |e| e.share_start(to_phone));
     }
 
     /// Closes the share (the dialog closed): its listener and its transfers stop.
@@ -2967,15 +2966,15 @@ impl Engine {
         self.shared.tell(Change::Share);
     }
 
-    fn share_start(self: &Rc<Self>, to_phone: bool, videos: bool) {
+    fn share_start(self: &Rc<Self>, to_phone: bool) {
         use radiance_core::share_words as sw;
         self.share.replace(None); // the old QR stops working
         let gen = self.share_gen.get() + 1;
         self.share_gen.set(gen);
         let (tx, rx) = async_channel::unbounded();
         let saved: Vec<Track> = self.liked.borrow().iter().filter(|t| t.file.as_deref().is_some_and(|f| std::path::Path::new(f).exists())).cloned().collect();
-        let opened = if to_phone { crate::share::Share::send(saved.clone(), videos, tx) } else { crate::share::Share::receive(tx) };
-        let mut st = ShareState { on: true, to_phone, videos, fraction: -1.0, ..Default::default() };
+        let opened = if to_phone { crate::share::Share::send(saved.clone(), tx) } else { crate::share::Share::receive(tx) };
+        let mut st = ShareState { on: true, to_phone, fraction: -1.0, ..Default::default() };
         match opened {
             Ok(share) => {
                 match share.ticket(&sw::device_name(&glib::host_name())) {

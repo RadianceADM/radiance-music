@@ -27,6 +27,9 @@ internal sealed class PlayerBar : Grid
     private readonly Button shuffle, previous, play, next, repeat, mute, heart;
     private readonly FontIcon heartIcon = new() { Glyph = "\uEB51", FontSize = 15 };
     private readonly FontIcon playIcon = new() { Glyph = "\uE768", FontSize = 18 };
+    /// <summary>Spins round the Play button while the song loads (owner, 2026-11-08: "yung play pause button paikotin mo
+    /// pag loading"), as the phone's: a soft ring, gone the moment it plays.</summary>
+    private readonly ProgressRing playRing = new() { Width = 50, Height = 50, IsActive = false, IsHitTestVisible = false };
     private readonly FontIcon repeatIcon = new() { Glyph = "\uE8EE", FontSize = 15 };
     private readonly FontIcon muteIcon = new() { Glyph = "\uE767", FontSize = 15 };
     private readonly Slider bar = new() { Minimum = 0, Maximum = 1, StepFrequency = 0.1, IsThumbToolTipEnabled = false, VerticalAlignment = VerticalAlignment.Center };
@@ -93,7 +96,12 @@ internal sealed class PlayerBar : Grid
         next = Round(new FontIcon { Glyph = "\uE893", FontSize = 15 }, "Next", () => hub.Engine.Skip(1));
         repeat = Round(repeatIcon, "Repeat: off", () => hub.Engine.CycleRepeat());
         var controls = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, HorizontalAlignment = HorizontalAlignment.Center };
-        foreach (var b in new[] { shuffle, previous, play, next, repeat }) controls.Children.Add(b);
+        var playSlot = new Grid { Width = 50, Height = 50, VerticalAlignment = VerticalAlignment.Center };
+        play.HorizontalAlignment = HorizontalAlignment.Center;
+        play.VerticalAlignment = VerticalAlignment.Center;
+        playSlot.Children.Add(play);
+        playSlot.Children.Add(playRing);
+        foreach (var b in new FrameworkElement[] { shuffle, previous, playSlot, next, repeat }) controls.Children.Add(b);
         var timeline = new Grid { ColumnSpacing = 8 };
         timeline.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         timeline.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
@@ -230,6 +238,8 @@ internal sealed class PlayerBar : Grid
         previous.IsEnabled = now.CanPrevious;
         next.IsEnabled = now.CanNext;
         playIcon.Glyph = now.Playing ? "\uE769" : "\uE768";
+        playRing.IsActive = now.Loading && song != null;
+        AutomationProperties.SetHelpText(play, playRing.IsActive ? "Loading the song" : "");
         ToolTipService.SetToolTip(play, now.Playing ? "Pause" : "Play");
         ToolTipService.SetToolTip(shuffle, now.Shuffle ? "Shuffle: on" : "Shuffle");
         Tint(shuffle, now.Shuffle);

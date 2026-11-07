@@ -720,6 +720,9 @@ pub struct Ui {
     bar_quality: gtk::Label,
     bar_heart: gtk::Button,
     play: gtk::Button,
+    /// Spins round Play while the song loads ("Loading…"), as the phone's and the Windows beta's (owner, 2026-11-08:
+    /// "yung play pause button paikotin mo pag loading"); gone the moment it plays.
+    play_ring: adw::Spinner,
     prev: gtk::Button,
     next: gtk::Button,
     shuffle: gtk::ToggleButton,
@@ -1038,6 +1041,7 @@ impl Ui {
             bar_quality: gtk::Label::builder().css_classes(["pill", "compressed"]).valign(gtk::Align::Center).visible(false).build(),
             bar_heart: button("heart-outline-symbolic", "Like: saves the song"),
             play: button("media-playback-start-symbolic", "Play"),
+            play_ring: adw::Spinner::builder().width_request(42).height_request(42).halign(gtk::Align::Center).valign(gtk::Align::Center).can_target(false).visible(false).build(),
             prev: button("media-skip-backward-symbolic", "Previous"),
             next: button("media-skip-forward-symbolic", "Next"),
             shuffle: gtk::ToggleButton::builder()
@@ -2118,7 +2122,12 @@ impl Ui {
         self.play.add_css_class("suggested-action");
         controls.append(&self.shuffle);
         controls.append(&self.prev);
-        controls.append(&self.play);
+        // Play with its loading ring round it: the slot keeps the ring's size, so the bar doesn't move when it shows
+        let play_slot = gtk::Overlay::builder().width_request(42).height_request(42).valign(gtk::Align::Center).build();
+        self.play.set_halign(gtk::Align::Center);
+        play_slot.set_child(Some(&self.play));
+        play_slot.add_overlay(&self.play_ring);
+        controls.append(&play_slot);
         controls.append(&self.next);
         controls.append(&self.repeat_button);
         self.repeat_button.set_opacity(0.55);
@@ -5350,6 +5359,7 @@ impl Ui {
     }
 
     fn set_quality(&self, text: Option<&str>, lossless: bool) {
+        self.play_ring.set_visible(text.is_some_and(|t| t == quality::text(Heard::Loading)));
         for l in [&self.bar_quality, &self.np_quality] {
             l.set_visible(text.is_some());
             l.set_label(text.unwrap_or_default());

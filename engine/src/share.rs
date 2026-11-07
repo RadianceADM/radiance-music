@@ -83,8 +83,9 @@ fn file_at(path: PathBuf) -> Option<File> {
     Some(File { name, size, path })
 }
 
-/// [songs] as offered: each saved song with its parts, lyrics, cover (and video).
-fn offer(songs: &[Track], videos: bool) -> Vec<Item> {
+/// [songs] as offered: each saved song with its parts, lyrics and cover. Never its music video: phones have none
+/// (owner, 2026-11-08: "final na walang music video sa mobile").
+fn offer(songs: &[Track]) -> Vec<Item> {
     songs
         .iter()
         .filter_map(|t| {
@@ -102,11 +103,6 @@ fn offer(songs: &[Track], videos: bool) -> Vec<Item> {
             }
             if let Some(f) = file_at(library::beside(song, "jpg")) {
                 files.push(("cover".into(), f));
-            }
-            if videos {
-                if let Some(f) = ["video.mkv", "video.webm", "video.mp4"].iter().find_map(|e| file_at(library::beside(song, e))) {
-                    files.push(("video".into(), f));
-                }
             }
             Some(Item { key: t.key(), track: track_json(t), files })
         })
@@ -350,9 +346,9 @@ pub struct Share {
 }
 
 impl Share {
-    /// Shows [songs] (with their videos if [videos]) for a phone to take.
-    pub fn send(songs: Vec<Track>, videos: bool, events: async_channel::Sender<Event>) -> Result<Share, String> {
-        Self::open("get", Some(Arc::new(offer(&songs, videos))), events)
+    /// Shows [songs] for a phone to take.
+    pub fn send(songs: Vec<Track>, events: async_channel::Sender<Event>) -> Result<Share, String> {
+        Self::open("get", Some(Arc::new(offer(&songs))), events)
     }
 
     /// Lets a phone send its songs here.
@@ -594,9 +590,11 @@ mod tests {
             fs::write(dir.join(format!("Artist - Song.{p}.ogg")), p.repeat(1000)).unwrap();
         }
         fs::write(dir.join("Artist - Song.lrc"), "[00:01.00]Hello").unwrap();
+        // its music video beside it: phones have no music videos (owner, 2026-11-08), so it never goes
+        fs::write(dir.join("Artist - Song.video.mp4"), "video").unwrap();
         let t = Track::from_json(&json!({ "source": "youtube", "id": "abc123", "title": "Song", "artist": "Artist", "file": song.to_string_lossy() })).unwrap();
         let (tx, _rx) = async_channel::unbounded();
-        let share = Share::send(vec![t], false, tx).unwrap();
+        let share = Share::send(vec![t], tx).unwrap();
         let (port, key) = (share.port, share.key.clone());
 
         let (code, _) = ask(port, "GET /list?k=0000 HTTP/1.1\r\nHost: x\r\n\r\n", b"");
@@ -612,7 +610,7 @@ mod tests {
         let files = item["files"].as_object().unwrap();
         let mut kinds: Vec<&str> = files.keys().map(String::as_str).collect();
         kinds.sort();
-        assert_eq!(kinds, ["bass", "drums", "lyrics", "other", "song", "vocals"]);
+        assert_eq!(kinds, ["bass", "drums", "lyrics", "other", "song", "vocals"], "no music video for a phone");
         assert_eq!(files["song"]["size"], 300_000);
 
         let (code, got) = ask(port, &format!("GET /file?k={key}&key=yt%3Aabc123&kind=song HTTP/1.1\r\nHost: x\r\n\r\n"), b"");
@@ -643,7 +641,7 @@ mod tests {
         }
         let t = Track::from_json(&json!({ "source": "youtube", "id": "halves1", "title": "Song", "artist": "Artist", "file": song.to_string_lossy() })).unwrap();
         // the computer offers it to a phone
-        let offered = offer(&[t], false);
+        let offered = offer(&[t]);
         let mut kinds: Vec<&str> = offered[0].files.iter().map(|(k, _)| k.as_str()).collect();
         kinds.sort();
         assert_eq!(kinds, ["music", "song", "vocals"]);
@@ -653,7 +651,7 @@ mod tests {
             fs::write(dir.join(format!("Four - Parts.{p}.ogg")), p).unwrap();
         }
         let four = Track::from_json(&json!({ "source": "youtube", "id": "four1", "title": "Parts", "artist": "Four", "file": dir.join("Four - Parts.m4a").to_string_lossy() })).unwrap();
-        let mut kinds: Vec<String> = offer(&[four], false)[0].files.iter().map(|(k, _)| k.clone()).collect();
+        let mut kinds: Vec<String> = offer(&[four])[0].files.iter().map(|(k, _)| k.clone()).collect();
         kinds.sort();
         assert_eq!(kinds, ["bass", "drums", "other", "song", "vocals"]);
         // a phone's Music is taken (its plan isn't filtered out) and kept beside the song

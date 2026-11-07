@@ -912,8 +912,8 @@ impl MusicEngine {
         self.inner.song_link(&key, place.into())
     }
     /// Share Songs with a Phone (stage 4b).
-    pub fn share_start(&self, to_phone: bool, videos: bool) {
-        self.inner.share_start(to_phone, videos);
+    pub fn share_start(&self, to_phone: bool) {
+        self.inner.share_start(to_phone);
     }
     pub fn share_stop(&self) {
         self.inner.share_stop();
@@ -923,7 +923,7 @@ impl MusicEngine {
     }
     pub fn share(&self) -> ShareView {
         let s = self.inner.share();
-        ShareView { on: s.on, to_phone: s.to_phone, videos: s.videos, qr: s.qr.unwrap_or_default(), caption: s.caption, progress: s.progress.unwrap_or_default(), fraction: s.fraction, done: s.done, gentle: s.gentle, firewall: s.firewall }
+        ShareView { on: s.on, to_phone: s.to_phone, qr: s.qr.unwrap_or_default(), caption: s.caption, progress: s.progress.unwrap_or_default(), fraction: s.fraction, done: s.done, gentle: s.gentle, firewall: s.firewall }
     }
     pub fn song_menu(&self, key: String, place: MenuPlace) -> Vec<MenuSectionView> {
         self.inner
@@ -1779,7 +1779,6 @@ pub fn guide_cards() -> Vec<GuideCardView> {
 pub struct ShareView {
     pub on: bool,
     pub to_phone: bool,
-    pub videos: bool,
     pub qr: String,
     pub caption: String,
     pub progress: String,
@@ -1808,8 +1807,6 @@ pub struct ShareWords {
     pub menu: String,
     pub to_phone: String,
     pub from_phone: String,
-    pub with_videos: String,
-    pub with_videos_sub: String,
     pub firewall_title: String,
     pub firewall_sub: String,
     pub let_it_in: String,
@@ -1826,8 +1823,6 @@ pub fn share_words() -> ShareWords {
         menu: w::MENU.into(),
         to_phone: w::TO_PHONE.into(),
         from_phone: w::FROM_PHONE.into(),
-        with_videos: w::WITH_VIDEOS.into(),
-        with_videos_sub: w::WITH_VIDEOS_SUB.into(),
         firewall_title: w::FIREWALL_WINDOWS.into(),
         firewall_sub: w::firewall_sub(true, *ports.start(), *ports.end()),
         let_it_in: w::LET_IT_IN.into(),

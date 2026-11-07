@@ -1789,7 +1789,7 @@ fn a_phone_puts_a_song_and_it_is_liked() {
     let _l = setup();
     radiance_engine::library::store(&[]);
     let (c, _f, rx) = with_songs("from the phone", vec![]);
-    c.share_start(false, false);
+    c.share_start(false);
     assert!(until(3.0, || c.share().qr.is_some()), "no QR: {:?}", c.share());
     let qr = c.share().qr.unwrap();
     assert!(qr.starts_with("radiancemusic://share?") && qr.contains("m=put"), "{qr}");
@@ -1817,7 +1817,7 @@ fn a_song_already_liked_gets_its_file_not_a_second_row() {
     let _l = setup();
     let liked = song(Source::YouTube, "phone-2", "Already Liked");
     let (c, _rx) = with_liked(&[liked], Arc::new(Fake::default()));
-    c.share_start(false, false);
+    c.share_start(false);
     assert!(until(3.0, || c.share().qr.is_some()), "no QR: {:?}", c.share());
     let qr = c.share().qr.unwrap();
     let (port, key): (u16, String) = (ticket_part(&qr, "p").parse().unwrap(), ticket_part(&qr, "k"));
@@ -1839,7 +1839,7 @@ fn to_the_phone_offers_the_saved_liked_songs() {
     let _l = setup();
     let saved = liked_song("share-saved", "Saved Here", "Someone", "", None);
     let (c, _rx) = with_liked(&[saved], Arc::new(Fake::default()));
-    c.share_start(true, false);
+    c.share_start(true);
     assert!(until(3.0, || c.share().qr.is_some()), "no QR: {:?}", c.share());
     let st = c.share();
     let qr = st.qr.unwrap();

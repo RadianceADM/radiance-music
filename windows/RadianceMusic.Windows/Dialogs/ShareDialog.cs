@@ -9,7 +9,7 @@ namespace RadianceMusic.Dialogs;
 
 /// <summary>
 /// Share Songs with a Phone, as the Linux app's (src/ui/sharing.rs, the engine's share; stage 4b): To the Phone (this
-/// computer's saved liked songs, with music videos or not) or From the Phone, the QR the phone scans (round dots and
+/// computer's saved liked songs; never music videos, phones have none) or From the Phone, the QR the phone scans (round dots and
 /// rounded eyes on white, so every camera reads it), what's happening under it, how far, going gently while music plays
 /// to Bluetooth, and Let It In when Windows' firewall may keep the phone out. Closing it stops the share.
 /// </summary>
@@ -22,8 +22,6 @@ internal static class ShareDialog
         way.Items.Add(new SelectorBarItem { Text = w.ToPhone, Icon = new FontIcon { Glyph = "" } });
         way.Items.Add(new SelectorBarItem { Text = w.FromPhone, Icon = new FontIcon { Glyph = "" } });
         way.SelectedItem = way.Items[toPhone ? 0 : 1];
-        var videos = new ToggleSwitch { Header = w.WithVideos, IsOn = false };
-        var videosSub = new TextBlock { Text = w.WithVideosSub, Style = (Style)Application.Current.Resources["CaptionTextBlockStyle"], Foreground = (Brush)Application.Current.Resources["TextFillColorSecondaryBrush"] };
         var qr = new Canvas { Width = 248, Height = 248 };
         var qrCard = new Border { Child = qr, Background = new SolidColorBrush(Microsoft.UI.Colors.White), CornerRadius = new CornerRadius(22), Padding = new Thickness(16), HorizontalAlignment = HorizontalAlignment.Center };
         var caption = new TextBlock { TextWrapping = TextWrapping.Wrap, TextAlignment = TextAlignment.Center };
@@ -45,8 +43,6 @@ internal static class ShareDialog
         form.Children.Add(bar);
         form.Children.Add(progress);
         form.Children.Add(gentle);
-        form.Children.Add(videos);
-        form.Children.Add(videosSub);
         var dialog = new ContentDialog
         {
             XamlRoot = root,
@@ -80,16 +76,13 @@ internal static class ShareDialog
         }
         void Start()
         {
-            var to = way.SelectedItem == way.Items[0];
-            videos.IsEnabled = to;
-            hub.Engine.ShareStart(to, to && videos.IsOn);
+            hub.Engine.ShareStart(way.SelectedItem == way.Items[0]);
         }
         void OnChange(ChangeKind kind)
         {
             if (kind == ChangeKind.Share) Render();
         }
         way.SelectionChanged += (_, _) => Start();
-        videos.Toggled += (_, _) => Start();
         hub.Change += OnChange;
         dialog.Closed += (_, _) =>
         {
