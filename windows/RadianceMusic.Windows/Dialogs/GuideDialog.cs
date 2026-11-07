@@ -8,8 +8,8 @@ namespace RadianceMusic.Dialogs;
 /// <summary>
 /// How to Use It, as the Linux app's guide (src/ui/guide.rs, core's cards): cards to page through (a FlipView
 /// with pips), Skip, Next, and Start Listening on the last; closing it any way counts as seen (the shared
-/// settings' guide_seen). The fifth card (sharing with a phone, "main menu") waits for the beta's sharing
-/// (stage 4b). The first start shows it once the sunrise has gone.
+/// settings' guide_seen). All five cards since stage 4b: the fifth says Share Songs with a Phone is in Settings → Help
+/// (the Linux app's says "main menu"). The first start shows it once the sunrise has gone.
 /// </summary>
 internal static class GuideDialog
 {
@@ -22,7 +22,7 @@ internal static class GuideDialog
     {
         if (Up) return;
         var w = Ffi.HelpWords();
-        var cards = Ffi.GuideCards().Take(4).ToArray();
+        var cards = Ffi.GuideCards().ToArray(); // all five: the fifth says where the beta keeps Share Songs with a Phone (stage 4b)
         var flip = new FlipView { Height = 300, Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent) };
         for (var i = 0; i < cards.Length; i++)
         {

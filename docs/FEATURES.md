@@ -93,9 +93,9 @@ marked 🔜.
 
 | Feature | Linux | Windows | Windows beta | Phone | Notes |
 |---|---|---|---|---|---|
-| Copy or share a song's link | ✅ | ✅ | 🔜 4 | ✅ | |
+| Copy or share a song's link | ✅ | ✅ | ✅ | ✅ | the beta: Copy Link in a song's menu (stage 4b) |
 | Story cards and story videos with lyrics (Instagram, Facebook…) | ❌ | ❌ | ❌ | ✅ | sharing is the main way people find us |
-| Share songs with a phone (QR, both ways, only what's missing) | ✅ | ✅ | 🔜 4 | ✅ | a song's parts go along; the two-part split's Music too (🔜 next computer release, #43) |
+| Share songs with a phone (QR, both ways, only what's missing) | ✅ | ✅ | ✅ | ✅ | a song's parts go along; the two-part split's Music too (🔜 next computer release, #43) |
 | Gentle transfer while Bluetooth audio plays | ✅ | ❌ | ❌ | ✅ | |
 | Works without shared Wi-Fi (Wi-Fi Direct) | ➖ | ➖ | ➖ | ✅ | |
 
@@ -104,7 +104,7 @@ marked 🔜.
 | Feature | Linux | Windows | Windows beta | Phone | Notes |
 |---|---|---|---|---|---|
 | Join a server, browse, save, add your songs | ✅ | ✅ | 🔜 4 | ✅ | |
-| radiancemusic:// invite links | ✅ | ✅ | 🔜 4 | ✅ | |
+| radiancemusic:// invite links | ✅ | ✅ | 🔜 4c | ✅ | the beta: with servers (an invite opens the Servers dialog) |
 | Listening parties: in sync, reactions, host controls | ✅ | ✅ | 🔜 4 | ✅ | |
 
 ## The app itself

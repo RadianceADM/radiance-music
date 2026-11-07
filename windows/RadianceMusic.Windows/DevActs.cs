@@ -21,6 +21,7 @@ namespace RadianceMusic;
 ///   part:NAME:GAIN  a Mixer slider (0..1); splitting  the Splitting… dialog
 ///   voice:song|novocals|vocals  a Mixer voice button; mix-log  the Mixer's state in the log (voice, splitting, parts)
 ///   transition:off|crossfade|dj, fade:N  Between Songs (Settings → Playing); seek-end:N  N seconds before the song's end
+///   share:to|from  Share Songs with a Phone open that way; share-log  its state in the log
 /// </summary>
 internal static class DevActs
 {
@@ -49,6 +50,8 @@ internal static class DevActs
             "splitting" => window.Content?.XamlRoot is { } sx && Do(() => _ = Dialogs.SplittingDialog.Open(App.Hub, sx)),
             "voice" => arg switch { "song" => Native.VoiceMode.Song, "novocals" => Native.VoiceMode.NoVocals, "vocals" => Native.VoiceMode.VocalsOnly, _ => (Native.VoiceMode?)null } is { } vm && Do(() => App.Hub.Engine.SetVoice(vm)),
             "transition" => arg switch { "crossfade" => Native.TransitionMode.Crossfade, "dj" => Native.TransitionMode.DjMix, "off" => Native.TransitionMode.Off, _ => (Native.TransitionMode?)null } is { } tm && Do(() => App.Hub.Engine.SetTransition(tm)),
+            "share" => window.Content?.XamlRoot is { } shx && Do(() => _ = Dialogs.ShareDialog.Show(App.Hub, shx, arg != "from")),
+            "share-log" => Do(() => { var s = App.Hub.Engine.Share(); Crash.Note($"share: on {s.On}, to {s.ToPhone}, qr '{s.Qr}', caption '{s.Caption}', progress '{s.Progress}', firewall {s.Firewall}"); }),
             "seek-end" => double.TryParse(arg, System.Globalization.CultureInfo.InvariantCulture, out var before) && App.Hub.Engine.Now() is { Length: > 0 } sn && Do(() => App.Hub.Engine.Seek(Math.Max(0, sn.Length - before))),
             "fade" => double.TryParse(arg, System.Globalization.CultureInfo.InvariantCulture, out var fs) && Do(() => App.Hub.Engine.SetFade(fs)),
             "mix-log" => Do(() => { var m = App.Hub.Engine.Now(); var sp = App.Hub.Engine.MixerSplit(); Crash.Note($"mix: {m.Song?.Title}: voice {m.Mix.Voice}, splitting '{sp.Line}' ({sp.Progress:F2}, turn off {sp.TurnOff}), choices [{string.Join(", ", sp.Items.Select(i => i.Label))}], note '{m.Mix.Note}', parts {m.Mix.Parts.Length}, plays parts {m.Mix.PlaysParts}"); }),

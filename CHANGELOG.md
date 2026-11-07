@@ -7,7 +7,14 @@
 - **The Mixer says when the song is splitting, and splits it:** whatever asked for it (liked songs split by themselves, Split from the menu), the Mixer says "Splitting into Music and Vocals…", "Splitting into four parts · 40%" or "Waiting to be split (2 songs first)", and has the split choices of the song's menu: Split: Music + Vocals (Fast), Split: Four Parts (Split in Four Parts once it's in two) (#68).
 - **A pause holds a crossfade:** paused in the middle of a crossfade or DJ mix, the fade waits too (it went on silently before, and Play brought back only the next song).
 - **After a crossfade into the queue's last song, Autoplay still adds songs like it** (the music stopped at that song's end before).
+- **Sharing with a phone on Windows uses a truly random key** for its QR (it was based on the clock there).
 - **Ready for the Windows app's next step:** when an update brings the new Windows app, the app that opens afterwards is the new one.
+
+## Windows beta 0.8.0-beta.8 — not released yet (#45, stage 4b)
+
+- **Share Songs with a Phone**, as the Linux app's: Settings → Help → Share Songs with a Phone…: To the Phone (your saved liked songs, with music videos or not) or From the Phone, by the phone's QR; only what the other side hasn't got goes, with the songs' parts, lyrics and covers. When Windows' firewall may keep the phone out, Let It In asks Windows once (the beta has its own rule).
+- **Copy Link** in a song's menu: its page on the web (YouTube Music, the Internet Archive, or its server).
+- **How to Use It** has its fifth card (On Your Phone Too).
 
 ## Windows beta 0.8.0-beta.7 — not released yet (#45, stage 4a-2)
 

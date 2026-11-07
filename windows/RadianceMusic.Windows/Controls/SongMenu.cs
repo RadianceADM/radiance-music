@@ -65,7 +65,7 @@ internal static class SongMenu
             {
                 var action = item.Action;
                 var mi = new MenuFlyoutItem { Text = item.Label, Icon = new FontIcon { Glyph = Glyph(action) } };
-                mi.Click += (_, _) => Do(hub, row, key, index, action, play);
+                mi.Click += (_, _) => Do(hub, row, key, index, place, action, play);
                 if (action is MenuAction.AddToPlaylist or MenuAction.NewPlaylistWith)
                 {
                     if (lists == null)
@@ -84,12 +84,22 @@ internal static class SongMenu
         return menu;
     }
 
-    private static void Do(EngineHub hub, FrameworkElement row, string key, uint index, MenuAction action, Action? play)
+    private static void Do(EngineHub hub, FrameworkElement row, string key, uint index, MenuPlace place, MenuAction action, Action? play)
     {
         switch (action)
         {
             case MenuAction.Play:
                 play?.Invoke();
+                break;
+            case MenuAction.CopyLink:
+                // the song's page on the web (stage 4b, the Linux menu's Copy Link)
+                if (hub.Engine.SongLink(key, place) is { } link)
+                {
+                    var data = new Windows.ApplicationModel.DataTransfer.DataPackage();
+                    data.SetText(link);
+                    Windows.ApplicationModel.DataTransfer.Clipboard.SetContent(data);
+                    App.Window?.Say(Ffi.ShareWords().LinkCopied);
+                }
                 break;
             case MenuAction.NewPlaylistWith:
                 _ = Dialogs.NameDialog.NewPlaylist(hub, row.XamlRoot, key);
@@ -131,6 +141,7 @@ internal static class SongMenu
         MenuAction.ShowLyrics => "\uE8D2",
         MenuAction.EditLyrics => "\uE70F",
         MenuAction.FindLyricsAgain => "\uE72C",
+        MenuAction.CopyLink => "\uE71B",
         _ => "",
     };
 }

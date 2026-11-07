@@ -44,6 +44,8 @@ pub enum Action {
     ShowLyrics,
     EditLyrics,
     FindLyricsAgain,
+    /// The song's page on the web to the clipboard (the app does it: stage 4b, the Linux menu's Copy Link).
+    CopyLink,
 }
 
 /// What splitting can do for a song now, for its menu (stage 3): online, how many parts it has
@@ -83,7 +85,13 @@ pub fn split_items(t: &Track, s: &SplitAbility) -> Vec<Item> {
 
 /// The lyrics section: Show Lyrics, Edit Lyrics…, Find Lyrics Again.
 pub fn lyrics_items() -> Vec<Item> {
-    vec![item(crate::words::SHOW_LYRICS, Action::ShowLyrics), item(crate::words::EDIT_LYRICS, Action::EditLyrics), item(crate::words::FIND_LYRICS_AGAIN, Action::FindLyricsAgain)]
+    vec![
+        item(crate::words::SHOW_LYRICS, Action::ShowLyrics),
+        item(crate::words::EDIT_LYRICS, Action::EditLyrics),
+        item(crate::words::FIND_LYRICS_AGAIN, Action::FindLyricsAgain),
+        // the Linux menu's "more" section ends with Copy Link (stage 4b)
+        item(crate::share_words::COPY_LINK, Action::CopyLink),
+    ]
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -160,7 +168,7 @@ mod tests {
             vec!["Road Trip", "New Playlist…"],
             vec!["Like", "Song Radio"],
             vec!["Go to Artist", "Go to Album"],
-            vec!["Show Lyrics", "Edit Lyrics…", "Find Lyrics Again"],
+            vec!["Show Lyrics", "Edit Lyrics…", "Find Lyrics Again", "Copy Link"],
         ]);
         assert_eq!(row[1][0].action, Action::AddToPlaylist(3));
         assert_eq!(row[3][1].action, Action::GoToAlbum("Blue Ann".into()));
@@ -171,7 +179,7 @@ mod tests {
             vec!["New Playlist…"],
             vec!["Remove from Liked", "Song Radio", "Split: Music + Vocals (Fast)", "Split: Four Parts"],
             vec!["Go to Ann", "Go to Bo"],
-            vec!["Show Lyrics", "Edit Lyrics…", "Find Lyrics Again"],
+            vec!["Show Lyrics", "Edit Lyrics…", "Find Lyrics Again", "Copy Link"],
             vec!["Show in Files"],
         ]);
         assert_eq!(queued[3][1].action, Action::GoToArtist("Bo".into()));
@@ -201,7 +209,7 @@ mod tests {
         assert_eq!(l(&SplitAbility { busy_two: true, ..all }, &t), ["Split: Four Parts"]);
         assert_eq!(l(&SplitAbility { busy_four: true, ..all }, &t), ["Split: Music + Vocals (Fast)"]);
         assert_eq!(l(&SplitAbility { can_four: false, ..all }, &t), ["Split: Music + Vocals (Fast)"]);
-        assert_eq!(lyrics_items().iter().map(|i| i.action.clone()).collect::<Vec<_>>(), [Action::ShowLyrics, Action::EditLyrics, Action::FindLyricsAgain]);
+        assert_eq!(lyrics_items().iter().map(|i| i.action.clone()).collect::<Vec<_>>(), [Action::ShowLyrics, Action::EditLyrics, Action::FindLyricsAgain, Action::CopyLink]);
     }
 
     #[test]

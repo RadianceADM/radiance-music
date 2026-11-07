@@ -860,7 +860,13 @@ impl Controller {
     }
 
     /// The song's menu where it was opened.
-    pub fn song_menu(&self, key: &str, place: Place) -> Vec<Vec<Item>> {
+    /// A song's page on the web, for Copy Link (stage 4b): the song the menu was opened on.
+    pub fn song_link(&self, key: &str, place: Place) -> Option<String> {
+        self.menu_song(key, place).map(|(t, _)| crate::share::song_link(&t))
+    }
+
+    /// The song a menu was opened on, and whether it's liked: wherever it's shown, else its playlist's copy.
+    fn menu_song(&self, key: &str, place: Place) -> Option<(Track, bool)> {
         let (t, liked) = self.shared.view(|v| {
             let liked = v.liked.iter().any(|(t, _)| t.key() == key);
             let hit = |l: &[Track]| l.iter().find(|t| t.key() == key).cloned();
@@ -880,7 +886,11 @@ impl Controller {
             Place::Playlist(id) => crate::db::playlist_songs(id).into_iter().find(|t| t.key() == key),
             _ => None,
         });
-        let Some(t) = t else { return Vec::new() };
+        t.map(|t| (t, liked))
+    }
+
+    pub fn song_menu(&self, key: &str, place: Place) -> Vec<Vec<Item>> {
+        let Some((t, liked)) = self.menu_song(key, place) else { return Vec::new() };
         let saved = t.file.as_ref().is_some_and(|f| std::path::Path::new(f).exists());
         let lists: Vec<(i64, String)> = crate::db::playlists().into_iter().map(|(id, name, _)| (id, name)).collect();
         let split = self.shared.view(|v| split_ability(v, &t));
@@ -891,7 +901,7 @@ impl Controller {
     /// Play and New Playlist… are the app's (it knows the list, and asks for the name).
     pub fn do_menu(&self, key: &str, index: usize, action: Action) {
         match action {
-            Action::Play | Action::NewPlaylistWith | Action::ShowLyrics | Action::EditLyrics => {}
+            Action::Play | Action::NewPlaylistWith | Action::ShowLyrics | Action::EditLyrics | Action::CopyLink => {}
             Action::SplitTwo => self.split(key, true),
             Action::SplitFour => self.split(key, false),
             Action::FindLyricsAgain => self.find_lyrics_again(key),

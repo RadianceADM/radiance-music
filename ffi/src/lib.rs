@@ -545,6 +545,7 @@ pub enum MenuAction {
     ShowLyrics,
     EditLyrics,
     FindLyricsAgain,
+    CopyLink,
 }
 
 impl From<MenuAction> for menu::Action {
@@ -569,6 +570,7 @@ impl From<MenuAction> for menu::Action {
             MenuAction::ShowLyrics => A::ShowLyrics,
             MenuAction::EditLyrics => A::EditLyrics,
             MenuAction::FindLyricsAgain => A::FindLyricsAgain,
+            MenuAction::CopyLink => A::CopyLink,
         }
     }
 }
@@ -595,6 +597,7 @@ impl From<menu::Action> for MenuAction {
             A::ShowLyrics => MenuAction::ShowLyrics,
             A::EditLyrics => MenuAction::EditLyrics,
             A::FindLyricsAgain => MenuAction::FindLyricsAgain,
+            A::CopyLink => MenuAction::CopyLink,
         }
     }
 }
@@ -904,6 +907,24 @@ impl MusicEngine {
     }
 
     // a song's menu
+    /// Copy Link: the song's page on the web (stage 4b).
+    pub fn song_link(&self, key: String, place: MenuPlace) -> Option<String> {
+        self.inner.song_link(&key, place.into())
+    }
+    /// Share Songs with a Phone (stage 4b).
+    pub fn share_start(&self, to_phone: bool, videos: bool) {
+        self.inner.share_start(to_phone, videos);
+    }
+    pub fn share_stop(&self) {
+        self.inner.share_stop();
+    }
+    pub fn share_let_in(&self) {
+        self.inner.share_let_in();
+    }
+    pub fn share(&self) -> ShareView {
+        let s = self.inner.share();
+        ShareView { on: s.on, to_phone: s.to_phone, videos: s.videos, qr: s.qr.unwrap_or_default(), caption: s.caption, progress: s.progress.unwrap_or_default(), fraction: s.fraction, done: s.done, gentle: s.gentle, firewall: s.firewall }
+    }
     pub fn song_menu(&self, key: String, place: MenuPlace) -> Vec<MenuSectionView> {
         self.inner
             .song_menu(&key, place.into())
@@ -1744,7 +1765,75 @@ pub fn move_text(from: String, to: String) -> String {
 /// How to Use It's cards (the beta shows the first four until sharing comes: stage 4b).
 #[uniffi::export]
 pub fn guide_cards() -> Vec<GuideCardView> {
-    radiance_core::guide::CARDS.iter().map(|(icon, title, text)| GuideCardView { icon: (*icon).into(), title: (*title).into(), text: (*text).into() }).collect()
+    // the fifth with where the beta keeps Share Songs with a Phone (stage 4b; the Linux app says "main menu")
+    radiance_core::guide::CARDS
+        .iter()
+        .enumerate()
+        .map(|(i, (icon, title, text))| GuideCardView { icon: (*icon).into(), title: (*title).into(), text: if i == 4 { radiance_core::guide::phone_card("Settings → Help") } else { (*text).into() } })
+        .collect()
+}
+
+/// Share Songs with a Phone's dialog as the engine has it (stage 4b): which way, the QR's text (empty: none), the line
+/// under it, how far (words, and 0..1 or -1), done, going gently, and the firewall row.
+#[derive(Clone, Debug, uniffi::Record)]
+pub struct ShareView {
+    pub on: bool,
+    pub to_phone: bool,
+    pub videos: bool,
+    pub qr: String,
+    pub caption: String,
+    pub progress: String,
+    pub fraction: f64,
+    pub done: bool,
+    pub gentle: bool,
+    pub firewall: bool,
+}
+
+/// A QR's modules: its width, and each module row by row (true: dark), for the app to draw its own way.
+#[derive(Clone, Debug, uniffi::Record)]
+pub struct QrView {
+    pub width: u32,
+    pub dark: Vec<bool>,
+}
+
+#[uniffi::export]
+pub fn qr_modules(text: String) -> Option<QrView> {
+    radiance_engine::share::qr_modules(&text).map(|(n, dark)| QrView { width: n as u32, dark })
+}
+
+/// The sharing dialog's words (the Linux app's, core::share_words).
+#[derive(Clone, Debug, uniffi::Record)]
+pub struct ShareWords {
+    pub title: String,
+    pub menu: String,
+    pub to_phone: String,
+    pub from_phone: String,
+    pub with_videos: String,
+    pub with_videos_sub: String,
+    pub firewall_title: String,
+    pub firewall_sub: String,
+    pub let_it_in: String,
+    pub link_copied: String,
+    pub gentle: String,
+}
+
+#[uniffi::export]
+pub fn share_words() -> ShareWords {
+    use radiance_core::share_words as w;
+    let ports = radiance_engine::share::PORTS;
+    ShareWords {
+        title: w::TITLE.into(),
+        menu: w::MENU.into(),
+        to_phone: w::TO_PHONE.into(),
+        from_phone: w::FROM_PHONE.into(),
+        with_videos: w::WITH_VIDEOS.into(),
+        with_videos_sub: w::WITH_VIDEOS_SUB.into(),
+        firewall_title: w::FIREWALL_WINDOWS.into(),
+        firewall_sub: w::firewall_sub(true, *ports.start(), *ports.end()),
+        let_it_in: w::LET_IT_IN.into(),
+        link_copied: w::LINK_COPIED.into(),
+        gentle: w::GENTLE.into(),
+    }
 }
 
 /// What's New: the beta's own CHANGELOG sections (the newest three), as built.
@@ -2019,6 +2108,23 @@ mod tests {
     }
 
     #[test]
+    fn sharing_reaches_the_beta() {
+        assert_eq!(menu_action_round_trip(MenuAction::CopyLink), MenuAction::CopyLink);
+        let cards = guide_cards();
+        assert_eq!(cards.len(), 5);
+        assert!(cards[4].text.contains("(Settings → Help)"), "{}", cards[4].text);
+        let qr = qr_modules("radiancemusic://share?v=1".into()).expect("a QR");
+        assert_eq!(qr.dark.len(), (qr.width * qr.width) as usize);
+        let w = share_words();
+        assert!(w.firewall_sub.contains("47800 to 47809"), "{}", w.firewall_sub);
+        assert_eq!((w.to_phone.as_str(), w.link_copied.as_str()), ("To the Phone", "Link copied"));
+    }
+
+    fn menu_action_round_trip(a: MenuAction) -> MenuAction {
+        MenuAction::from(radiance_core::menu::Action::from(a))
+    }
+
+    #[test]
     fn transition_modes_map_both_ways() {
         use radiance_engine::settings::Transition;
         for t in [Transition::Off, Transition::Crossfade, Transition::DjMix] {
@@ -2138,7 +2244,7 @@ mod tests {
 
     #[test]
     fn the_versions_and_the_browse_tiles() {
-        assert_eq!(beta_version(), "0.8.0-beta.7");
+        assert_eq!(beta_version(), "0.8.0-beta.8");
         assert_eq!(engine_version(), radiance_engine::VERSION);
         let tiles = browse_tiles();
         assert_eq!(tiles.len(), 12);
