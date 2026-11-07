@@ -5,6 +5,7 @@
 
 use super::*;
 use crate::share::{self, Event, Share};
+use radiance_core::share_words as sw;
 
 impl Ui {
     pub(super) fn sharing_dialog(self: &Rc<Self>) {
@@ -23,7 +24,7 @@ impl Ui {
         body.append(&way);
 
         let options = gtk::ListBox::builder().css_classes(["boxed-list"]).selection_mode(gtk::SelectionMode::None).build();
-        let videos = adw::SwitchRow::builder().title("With music videos").subtitle("Bigger: each about 30 to 60 MB").build();
+        let videos = adw::SwitchRow::builder().title(sw::WITH_VIDEOS).subtitle(sw::WITH_VIDEOS_SUB).build();
         options.append(&videos);
         body.append(&options);
 
@@ -44,11 +45,11 @@ impl Ui {
         if firewall_on() && !self.settings.borrow().share_firewall_open {
             let (title, subtitle) = if cfg!(windows) {
                 (
-                    "Windows' firewall may keep the phone out",
-                    format!("If Windows asked about Radiance Music and it wasn't allowed, the phone can't reach this computer. Let the phone in from your home network (ports {} to {}); Windows asks you to allow it.", share::PORTS.start(), share::PORTS.end()),
+                    sw::FIREWALL_WINDOWS,
+                    sw::firewall_sub(true, *share::PORTS.start(), *share::PORTS.end()),
                 )
             } else {
-                ("This computer's firewall is on", format!("It may keep the phone out. Let the phone in on your home network (ports {} to {}); it asks for your password.", share::PORTS.start(), share::PORTS.end()))
+                (sw::FIREWALL_LINUX, sw::firewall_sub(false, *share::PORTS.start(), *share::PORTS.end()))
             };
             let row = adw::ActionRow::builder().title(title).subtitle(subtitle).build();
             let allow = gtk::Button::builder().child(&adw::ButtonContent::builder().icon_name("object-select-symbolic").label("Let It In").build()).valign(gtk::Align::Center).build();
@@ -68,7 +69,7 @@ impl Ui {
                         if let Some(l) = list_w.upgrade() {
                             l.set_visible(false);
                         }
-                        me.toast("The phone can reach this computer now");
+                        me.toast(sw::LET_IN_TOAST);
                     } else if let Some(b) = b.upgrade() {
                         b.set_sensitive(true);
                     }
@@ -78,7 +79,7 @@ impl Ui {
 
         let share: Rc<RefCell<Option<Share>>> = Rc::new(RefCell::new(None));
         let (tx, rx) = async_channel::unbounded::<Event>();
-        let name = format!("{} (Radiance Music)", glib::host_name());
+        let name = sw::device_name(&glib::host_name());
 
         // a new QR for the way picked (and the videos switch, for sending)
         let show = {
@@ -96,18 +97,18 @@ impl Ui {
                     Ok(Some(words)) => {
                         *text.borrow_mut() = Some(words);
                         caption.set_text(&if to_phone {
-                            format!("Scan with Radiance Music on the phone (Settings → Get songs; before 0.5.9, Library → the QR button). It takes your {} liked songs with their parts, lyrics and covers, but only what it hasn't got.", saved.len())
+                            sw::to_phone_caption(saved.len())
                         } else {
-                            "Scan with Radiance Music on the phone (Settings → Get songs; before 0.5.9, Library → the QR button). Its songs come here with their parts, lyrics and covers, but only what this computer hasn't got.".to_string()
+                            sw::FROM_PHONE_CAPTION.to_string()
                         });
                     }
                     Ok(None) => {
                         *text.borrow_mut() = None;
-                        caption.set_text("This computer isn't on a network. Connect it to the same Wi-Fi or router as the phone.");
+                        caption.set_text(sw::NO_NETWORK);
                     }
                     Err(e) => {
                         *text.borrow_mut() = None;
-                        caption.set_text(&format!("Couldn't get ready: {e}"));
+                        caption.set_text(&sw::couldnt_get_ready(&e.to_string()));
                     }
                 }
                 *share.borrow_mut() = opened.ok();
@@ -132,19 +133,16 @@ impl Ui {
                         } else {
                             bar.pulse();
                         }
-                        let mut words = if of > 0 { format!("{songs} of {of} songs · {} of {}", mb(bytes), mb(total)) } else { format!("{} sent", mb(bytes)) };
-                        if let Some(t) = now {
-                            words.push_str(&format!(" · “{t}”"));
-                        }
+                        let mut words = sw::progress(songs, of, bytes, total, now.as_deref());
                         if of > 0 && songs == of {
-                            words = format!("Done: {of} song{} here", if of == 1 { "" } else { "s" });
+                            words = sw::done(of);
                         }
                         bar.set_text(Some(&words));
                     }
                     Event::Received(t) => me.received_from_phone(t),
                     Event::Gentle(on) => {
                         note.set_visible(on);
-                        note.set_text("Going slowly while music plays to Bluetooth: on this computer Wi-Fi and Bluetooth share a radio. Plug in the cable for full speed.");
+                        note.set_text(sw::GENTLE);
                     }
                 }
             }
@@ -175,10 +173,6 @@ impl Ui {
     }
 }
 
-fn mb(b: u64) -> String {
-    if b >= 1 << 30 { format!("{:.1} GB", b as f64 / 1073741824.0) } else { format!("{} MB", b >> 20) }
-}
-
 /// The QR: soft round dots and rounded eyes (no hard squares), dark on white so every camera reads it.
 fn draw_qr(cr: &gtk::cairo::Context, w: i32, h: i32, text: Option<&str>) {
     let side = w.min(h) as f64;
@@ -194,9 +188,8 @@ fn draw_qr(cr: &gtk::cairo::Context, w: i32, h: i32, text: Option<&str>) {
     cr.set_source_rgb(1.0, 1.0, 1.0);
     round(x0, y0, side, 22.0);
     let _ = cr.fill();
-    let Some(code) = text.and_then(|t| qrcode::QrCode::with_error_correction_level(t, qrcode::EcLevel::M).ok()) else { return };
-    let n = code.width();
-    let colors = code.to_colors();
+    // the modules from the engine (both apps), drawn here as round dots
+    let Some((n, dark)) = text.and_then(share::qr_modules) else { return };
     let pad = side * 0.06;
     let cell = (side - 2.0 * pad) / n as f64;
     let (ox, oy) = (x0 + pad, y0 + pad);
@@ -204,7 +197,7 @@ fn draw_qr(cr: &gtk::cairo::Context, w: i32, h: i32, text: Option<&str>) {
     cr.set_source_rgb(0x0C as f64 / 255.0, 0x0A as f64 / 255.0, 0x09 as f64 / 255.0); // the Stone look's deepest (no navy)
     for y in 0..n {
         for x in 0..n {
-            if colors[y * n + x] == qrcode::Color::Dark && !eye(x, y) {
+            if dark[y * n + x] && !eye(x, y) {
                 cr.new_sub_path();
                 cr.arc(ox + (x as f64 + 0.5) * cell, oy + (y as f64 + 0.5) * cell, cell * 0.46, 0.0, std::f64::consts::TAU);
             }

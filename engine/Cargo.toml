@@ -31,6 +31,8 @@ sha2 = "0.10"
 # the two-part split's ONNX Runtime comes in a .tgz / .zip (two_part.rs)
 flate2 = "1"
 getrandom = "0.3"
+# Share Songs with a Phone: the QR's modules (both apps draw them their own way)
+qrcode = { version = "0.14", default-features = false }
 # splitting without Python (owner 2026-11-02): the two-part split (spleeter.rs, #43) and the
 # Demucs prototype (onnx_split.rs) as ONNX, as the phone runs them; ONNX Runtime's library is
 # loaded at run time (not linked; two_part.rs fetches it), so builds don't need it

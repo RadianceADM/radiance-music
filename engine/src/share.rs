@@ -23,7 +23,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 
-use crate::track::{file_name, Track};
+use crate::track::{file_name, Source, Track};
 use crate::{library, split};
 
 pub const VERSION: u32 = 1;
@@ -188,14 +188,39 @@ fn copy(from: &mut impl Read, to: &mut impl Write, size: u64, pace: &Mutex<Pace>
     Ok(())
 }
 
+/// The share's key: 16 random bytes as hex, from the system's randomness on every platform (stage 4b: Windows, with
+/// no /dev/urandom, had the clock: a key that could be guessed).
 fn new_key() -> String {
     let mut b = [0u8; 16];
-    if fs::File::open("/dev/urandom").and_then(|mut f| f.read_exact(&mut b)).is_err() {
-        // never happens on Linux; still a key nobody guesses easily
+    if getrandom::fill(&mut b).is_err() {
+        // (no randomness at all: never seen; still a key nobody guesses easily)
         let t = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos();
         b.copy_from_slice(&t.to_le_bytes());
     }
     b.iter().map(|x| format!("{x:02x}")).collect()
+}
+
+/// A song's page on the web, to share (the Linux app's link(), stage 4b: Copy Link in both apps): YouTube Music's,
+/// the Internet Archive item's, or its server's address (a song's own address there needs this computer's key).
+pub fn song_link(t: &Track) -> String {
+    match t.source {
+        Source::YouTube => format!("https://music.youtube.com/watch?v={}", t.id),
+        Source::Server => crate::servers::of_track(t).map(|s| s.address).unwrap_or_else(|| t.id.split("/files/").next().unwrap_or(&t.id).to_string()),
+        Source::Archive => t
+            .id
+            .strip_prefix("https://archive.org/download/")
+            .and_then(|rest| rest.split('/').next())
+            .map(|item| format!("https://archive.org/details/{item}"))
+            .unwrap_or_else(|| t.id.clone()),
+    }
+}
+
+/// The QR for `text` (error correction M, as the Linux app's): its width in modules and each module, row by row
+/// (true: dark). Each app draws it its own way (round dots, rounded eyes). None: too long for a QR.
+pub fn qr_modules(text: &str) -> Option<(usize, Vec<bool>)> {
+    let code = qrcode::QrCode::with_error_correction_level(text, qrcode::EcLevel::M).ok()?;
+    let n = code.width();
+    Some((n, code.to_colors().into_iter().map(|c| c == qrcode::Color::Dark).collect()))
 }
 
 fn enc(s: &str) -> String {
@@ -647,4 +672,24 @@ mod tests {
         assert_eq!(dec(&enc(s)), s);
         assert_eq!(query("a=1&n=Hi%20there&x")["n"], "Hi there");
     }
+
+    /// Stage 4b: a song's link is its page on the web (no key ever); the QR comes from the engine; keys are random.
+    #[test]
+    fn links_qrs_and_keys_for_both_apps() {
+        let mut t = Track { source: Source::YouTube, id: "abc123".into(), title: "T".into(), artist: "A".into(), album: String::new(), seconds: 1, art: String::new(), format: String::new(), file: None, video: false, genres: None };
+        assert_eq!(song_link(&t), "https://music.youtube.com/watch?v=abc123");
+        t.source = Source::Archive;
+        t.id = "https://archive.org/download/78_silent-night/01%20Silent.flac".into();
+        assert_eq!(song_link(&t), "https://archive.org/details/78_silent-night");
+        t.source = Source::Server;
+        t.id = "https://music.example.ph/files/Song%20One.flac".into();
+        assert_eq!(song_link(&t), "https://music.example.ph", "the server's address, never the song's own (it needs a key)");
+        let (n, dark) = qr_modules("radiancemusic://share?v=1&m=get&k=0123456789abcdef0123456789abcdef&p=47800&n=PC&h=192.168.1.5").expect("a QR");
+        assert_eq!(dark.len(), n * n);
+        assert_eq!((n - 21) % 4, 0, "a QR's width: 21 + 4 per version");
+        assert!(dark[0] && dark[n - 1] && dark[(n - 1) * n], "the three finder eyes' corners are dark");
+        let (a, b) = (new_key(), new_key());
+        assert!(a != b && a.len() == 32 && a.chars().all(|c| c.is_ascii_hexdigit()), "{a} {b}");
+    }
+
 }

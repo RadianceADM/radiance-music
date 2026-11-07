@@ -27,7 +27,6 @@ gst = { package = "gstreamer", version = "0.25" }
 async-channel = "2"
 serde_json = "1"
 libc = "0.2"
-qrcode = { version = "0.14", default-features = false } # Share Songs with a Phone
 
 [features]
 default = ["save-youtube"]

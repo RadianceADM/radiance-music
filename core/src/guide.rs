@@ -9,6 +9,12 @@ pub const CARDS: [(&str, &str, &str); 5] = [
     ("format-justify-center-symbolic", "Sing Along", "In Now Playing the lyrics light up word by word as they're sung, big in the middle, with the background moving to the beat."),
     ("phone-symbolic", "On Your Phone Too", "Get Radiance Music for Android at music.radianceph.com, then Share Songs with a Phone (main menu) sends it your songs, with their parts and lyrics."),
 ];
+/// The fifth card's words with where each app keeps Share Songs with a Phone (the Linux app: "main menu"; the beta:
+/// "Settings → Help"), stage 4b.
+pub fn phone_card(where_share: &str) -> String {
+    format!("Get Radiance Music for Android at music.radianceph.com, then Share Songs with a Phone ({where_share}) sends it your songs, with their parts and lyrics.")
+}
+
 pub const SKIP: &str = "Skip";
 pub const NEXT: &str = "Next";
 pub const START: &str = "Start Listening";
@@ -24,5 +30,7 @@ mod tests {
         assert_eq!(CARDS[0].1, "Search Any Song");
         assert_eq!(CARDS[3].2, "In Now Playing the lyrics light up word by word as they're sung, big in the middle, with the background moving to the beat.");
         assert_eq!((SKIP, NEXT, START, TITLE), ("Skip", "Next", "Start Listening", "How to Use It"));
+        assert_eq!(phone_card("main menu"), CARDS[4].2, "the Linux app's card 5, word for word");
+        assert!(phone_card("Settings → Help").contains("Share Songs with a Phone (Settings → Help)"));
     }
 }

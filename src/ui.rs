@@ -277,19 +277,9 @@ fn offline_pill() -> gtk::Box {
     pill
 }
 
-/// The song's page on the web, to share.
+/// The song's page on the web, to share (the engine's, both apps: stage 4b).
 fn link(t: &Track) -> String {
-    match t.source {
-        Source::YouTube => format!("https://music.youtube.com/watch?v={}", t.id),
-        // its server's address (a song's own address needs this computer's key)
-        Source::Server => servers::of_track(t).map(|s| s.address).unwrap_or_else(|| t.id.split("/files/").next().unwrap_or(&t.id).to_string()),
-        Source::Archive => t
-            .id
-            .strip_prefix("https://archive.org/download/")
-            .and_then(|rest| rest.split('/').next())
-            .map(|item| format!("https://archive.org/details/{item}"))
-            .unwrap_or_else(|| t.id.clone()),
-    }
+    radiance_engine::share::song_link(t)
 }
 
 
@@ -4106,7 +4096,7 @@ impl Ui {
         let t1 = t.clone();
         add(&more, "Track Info", "info", Box::new(move |me| me.info_dialog(&t1)));
         let t1 = t.clone();
-        add(&more, "Copy Link", "link", Box::new(move |me| me.copy_link(&t1)));
+        add(&more, radiance_core::share_words::COPY_LINK, "link", Box::new(move |me| me.copy_link(&t1)));
         if let Some(file) = t.file.clone().filter(|f| Path::new(f).exists()) {
             add(
                 &more,
