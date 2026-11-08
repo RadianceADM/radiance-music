@@ -224,6 +224,13 @@ fn tester_header(url: &str, key: Option<&str>) -> Option<(&'static str, String)>
     (url.starts_with(OWN_HOST) && !key.is_empty()).then(|| ("X-Radiance-Tester", key.to_string()))
 }
 
+/// GitHub's copy of a file from our own site (the computer app's releases only), for when ours refuses or fails.
+fn github_copy(url: &str, version: &str) -> Option<String> {
+    let rest = url.strip_prefix(OWN_HOST)?.strip_prefix("radiance-music/")?;
+    let name = rest.rsplit('/').next().filter(|n| !n.is_empty())?;
+    Some(format!("https://github.com/RadianceADM/radiance-music/releases/download/v{version}/{name}"))
+}
+
 fn tester_key() -> Option<String> {
     std::env::var("RADIANCE_TESTER_KEY").ok()
 }
@@ -468,10 +475,19 @@ pub fn download(r: &Release, install: &Install, stop: &AtomicBool, mut progress:
     }
     let part = done.with_extension("part");
     let mut tries = 0;
+    // our own copy first; refused or failed, GitHub's copy of the same file, on from the bytes already here
+    let mut url = r.url.clone();
     loop {
         let from = fs::metadata(&part).map(|m| m.len()).unwrap_or(0);
         progress(from, r.size);
-        let got = fetch(&r.url, &part, from, r.size, stop, &mut progress);
+        let got = fetch(&url, &part, from, r.size, stop, &mut progress);
+        if got.is_err() && !stop.load(Ordering::Relaxed) {
+            if let Some(theirs) = github_copy(&url, &r.version) {
+                crate::log::note(&format!("update download: {} ({}); on from GitHub's copy", url, got.as_ref().err().map(String::as_str).unwrap_or("")));
+                url = theirs;
+                continue;
+            }
+        }
         if stop.load(Ordering::Relaxed) {
             return Err("stopped".into());
         }
@@ -1000,6 +1016,20 @@ mod tests {
         assert_eq!(tester_header("https://downloads.radianceph.com.evil.example/x", Some("k1")), None);
         assert_eq!(tester_header("https://downloads.radianceph.com/radiance-music/latest.json", None), None);
         assert_eq!(tester_header("https://downloads.radianceph.com/radiance-music/latest.json", Some("  ")), None);
+    }
+
+    /// Our copy refused or failed (a limit, a 5xx, a dropped line): the download carries on from GitHub's copy of the
+    /// same file (same version, the same sha256 check); never GitHub first (the Android session's catch, 2026-11-08).
+    #[test]
+    fn a_refused_download_carries_on_from_githubs_copy() {
+        assert_eq!(
+            github_copy("https://downloads.radianceph.com/radiance-music/v0.7.21/RadianceMusic-Setup.exe", "0.7.21").as_deref(),
+            Some("https://github.com/RadianceADM/radiance-music/releases/download/v0.7.21/RadianceMusic-Setup.exe")
+        );
+        assert_eq!(github_copy("https://downloads.radianceph.com/radiance-music/latest/RadianceMusic-linux-x86_64.tar.gz", "0.7.21").as_deref(), Some("https://github.com/RadianceADM/radiance-music/releases/download/v0.7.21/RadianceMusic-linux-x86_64.tar.gz"));
+        // GitHub's own address, or anyone else's: no second copy
+        assert_eq!(github_copy("https://github.com/RadianceADM/radiance-music/releases/download/v0.7.21/RadianceMusic-Setup.exe", "0.7.21"), None);
+        assert_eq!(github_copy("https://downloads.radianceph.com/radiance-music-android/v1.2.2/RadianceMusic.apk", "1.2.2"), None);
     }
 
     #[test]

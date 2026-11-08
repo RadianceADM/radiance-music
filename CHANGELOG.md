@@ -10,6 +10,7 @@
 - **Sharing with a phone on Windows uses a truly random key** for its QR (it was based on the clock there).
 - **Ready for the Windows app's next step:** when an update brings the new Windows app, the app that opens afterwards is the new one.
 - **The Play button spins while a song loads** (owner: "yung play pause button paikotin mo pag loading"): a soft ring goes round Play from the moment you pick a song until its music starts, as on the phone. The bar doesn't move when it shows.
+- **Updates come from Radiance's own site:** the app asks downloads.radianceph.com for the newest version and downloads it from there. GitHub had started refusing update checks for whole neighbourhoods sharing one internet address, and its downloads were timing out. GitHub is used only if our site doesn't answer, and a download carries on from GitHub's copy if ours stops.
 - **Share Songs with a Phone sends songs without music videos:** phones have no music videos now, so the "With music videos" switch is gone and a phone gets the song, its parts, lyrics and cover.
 
 ## Windows beta 0.8.0-beta.9 — not released yet (#45, stage 4c-1)
