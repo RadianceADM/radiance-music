@@ -1,7 +1,8 @@
 ; Radiance Music (beta), the native Windows app (issue #45): a per-user installer (no administrator),
 ; beside today's Radiance Music (its own folder, Start-menu entry and uninstall entry). It shares
 ; today's app's songs, settings and splitter (they're in your data folders, not here).
-; radiancemusic:// links stay with today's app until the beta has servers (stage 4).
+; radiancemusic:// links stay registered to today's app until stage 5 (the switch): two apps can't both own them.
+; The beta opens one it's given (started with it, or a second start hands it over) and a pasted invite (stage 4c).
 ; makensis -DVERSION=x -DDIST=folder -DOUT=file -DICON=radiance-music.ico installer-beta.nsi
 Unicode true
 !ifndef VERSION

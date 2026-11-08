@@ -1956,6 +1956,13 @@ pub fn server_words() -> ServerWords {
     }
 }
 
+/// A radiancemusic:// link (a server's join page's "Open in Radiance Music"): the invite in it, or None when it isn't
+/// one (the app says so: ServerWords::not_an_invite).
+#[uniffi::export]
+pub fn invite_of_link(link: String) -> Option<String> {
+    radiance_engine::servers::invite_in_app_link(&link)
+}
+
 /// "Leave NAME?" and what leaving does (its confirm).
 #[uniffi::export]
 pub fn server_leave_words(name: String) -> Vec<String> {
@@ -2268,6 +2275,14 @@ mod tests {
         assert_eq!(v.voice, VoiceMode::NoVocals);
         assert_eq!((v.low_cut, v.high_cut, v.reverb), (20.0, 20000.0, 0.0));
         assert!(v.plays_parts);
+    }
+
+    /// An invite link opens Servers… with its invite; another radiancemusic:// link doesn't (stage 4c).
+    #[test]
+    fn an_invite_link_opens_servers() {
+        assert_eq!(invite_of_link("radiancemusic://join?u=https%3A%2F%2Fmusic.example.com%2Fjoin%2FABCD-EFGH-JKMN".into()).as_deref(), Some("https://music.example.com/join/ABCD-EFGH-JKMN"));
+        assert_eq!(invite_of_link("radiancemusic://party?u=x".into()), None);
+        assert_eq!(invite_of_link("radiancemusic://share?v=1&m=get&k=0&p=1&n=x&h=y".into()), None);
     }
 
     /// Servers… and a server's page say what the Linux app says (stage 4c).

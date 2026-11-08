@@ -51,9 +51,10 @@ public partial class App : Application
             return;
         }
         // one copy at a time, today's app or this one: the other comes forward (it shares the data)
-        if (Ffi.AskTheOther(null))
+        if (Ffi.AskTheOther(Program.Link))
         {
-            if (Program.Dev.Shot == null)
+            // (with a link, the other copy opens it: nothing to say here)
+            if (Program.Dev.Shot == null && Program.Link == null)
                 Win32.Message("Radiance Music is already open. Close it to use Radiance Music (beta).", "Radiance Music (beta)");
             Trace("another copy runs: it comes forward, this one quits");
             Exit();
@@ -75,6 +76,8 @@ public partial class App : Application
         Window = new MainWindow(Hub);
         // the sunrise while it gets ready, as the Linux app's start (#55); not in screenshots unless asked
         if (Program.Dev.Shot == null || Program.Dev.SplashAt.Count > 0) Window.CoverWithSplash(Program.Dev.SplashAt.Count > 0);
+        // opened with an invite link (a server's join page): Servers… once the sunrise has gone
+        if (Program.Link != null) OpenLink(Program.Link);
         if (Program.Dev.Hidden)
         {
             // a screenshot run: behind everything, no focus, not in the taskbar (the owner's PC stays his)
@@ -323,13 +326,34 @@ public partial class App : Application
 
     public static bool Quitting => quitting;
 
-    /// <summary>Another copy asked: this window comes forward (on the UI thread).</summary>
+    /// <summary>Another copy asked: this window comes forward (on the UI thread), and opens its link.</summary>
     private sealed class Others(DispatcherQueue ui) : ShowListener
     {
         public void Show(string? link) => ui.TryEnqueue(() =>
         {
             Trace("another copy asked: this window comes forward");
             Window?.BringToFront();
+            if (link != null) OpenLink(link);
         });
+    }
+
+    /// <summary>A radiancemusic:// link (stage 4c): a server's invite opens Servers… with it, Join focused, once the
+    /// sunrise has gone and no dialog is up (the Linux app's open_app_link); any other link says so.</summary>
+    internal static void OpenLink(string link)
+    {
+        Trace("a link: " + link);
+        var invite = Ffi.InviteOfLink(link);
+        var timer = DispatcherQueue.GetForCurrentThread().CreateTimer();
+        devTimers.Add(timer);
+        timer.Interval = TimeSpan.FromMilliseconds(400);
+        timer.Tick += (_, _) =>
+        {
+            if (Window is null || Window.Splash is { Finished: false } || Window.Content?.XamlRoot is not { } root) return;
+            if (Microsoft.UI.Xaml.Media.VisualTreeHelper.GetOpenPopupsForXamlRoot(root).Any(p => p.Child is ContentDialog)) return;
+            timer.Stop();
+            if (invite != null) _ = Dialogs.ServersDialog.Show(Hub, root, invite);
+            else Window.Say(Ffi.ServerWords().NotAnInvite);
+        };
+        timer.Start();
     }
 }

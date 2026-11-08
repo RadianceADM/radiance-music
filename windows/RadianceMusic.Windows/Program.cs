@@ -16,6 +16,9 @@ public static class Program
     public static Dev Dev { get; private set; } = new();
 
     [STAThread]
+    /// <summary>The radiancemusic:// link this start came with (none: null).</summary>
+    public static string? Link { get; private set; }
+
     public static int Main(string[] args)
     {
         var bin = Path.Combine(AppContext.BaseDirectory, "bin");
@@ -34,6 +37,8 @@ public static class Program
             return lines.LastOrDefault() == "ok" ? 0 : 1;
         }
         Dev = Dev.Parse(args);
+        // a radiancemusic:// link it was opened with (a server's invite: Servers… opens with it; stage 4c)
+        Link = args.FirstOrDefault(a => a.StartsWith("radiancemusic:", StringComparison.OrdinalIgnoreCase));
         WinRT.ComWrappersSupport.InitializeComWrappers();
         Application.Start(started =>
         {
