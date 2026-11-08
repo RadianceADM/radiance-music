@@ -38,6 +38,9 @@ use crate::effects::{self, Sound};
 use radiance_core::mix::{part_volumes, preset, Voice};
 use crate::track::{Source, Track};
 
+mod rms;
+pub use rms::{ServerPage, ServerRow, ServersState};
+
 /// What changed (read it again with the getter of the same name).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Change {
@@ -77,6 +80,8 @@ pub enum Change {
     Suggestions,
     /// Share Songs with a Phone: its QR, how far, a song received (stage 4b).
     Share,
+    /// Radiance Music Servers: one joined or left, a server's songs or what it lets you do, the invite box's line (stage 4c).
+    Servers,
 }
 
 /// Share Songs with a Phone as its dialog shows it (stage 4b, the Linux app's src/ui/sharing.rs): which way, the QR's
@@ -268,6 +273,8 @@ pub enum ListRef {
     History,
     /// A playlist's songs.
     Playlist(i64),
+    /// A server's songs as its page shows them: its address, and its page's search (stage 4c).
+    Server(String, String),
 }
 
 /// Search's lists for `query` (None: still being searched).
@@ -455,6 +462,9 @@ struct View {
     fade: f64,
     mixing: bool,
     suggestions: Vec<radiance_core::suggest::Chip>,
+    /// Radiance Music Servers (stage 4c): Servers…, and each joined server's page (all its songs; searched as asked).
+    servers: ServersState,
+    server_pages: HashMap<String, ServerPage>,
 }
 
 /// Between the app's threads and the engine's.
@@ -567,6 +577,8 @@ impl Controller {
                 fade: 6.0,
                 mixing: false,
                 suggestions: Vec::new(),
+                servers: ServersState::default(),
+                server_pages: HashMap::new(),
             }),
             liked_q: Mutex::new(String::new()),
         });
@@ -1179,6 +1191,35 @@ impl Controller {
         self.post(|e| e.share_let_in());
     }
 
+    /// Servers… (stage 4c): the joined servers and the invite box's line.
+    pub fn servers(&self) -> ServersState {
+        self.shared.view(|v| v.servers.clone())
+    }
+
+    /// Join with an invite link (or its words pasted): the line under the box says how it went.
+    pub fn server_join(&self, invite: &str) {
+        let text = invite.to_string();
+        self.post(move |e| e.rms_join(text));
+    }
+
+    /// Leave a server: it stops taking this computer's key, then it's forgotten here.
+    pub fn server_leave(&self, address: &str) {
+        let address = address.to_string();
+        self.post(move |e| e.rms_leave(address));
+    }
+
+    /// A server's songs and what it lets you do, asked again (its page's Refresh, Try Again).
+    pub fn server_refresh(&self, address: &str) {
+        let address = address.to_string();
+        self.post(move |e| e.rms_refresh(address));
+    }
+
+    /// A server's page as shown for its search `q` (play one with ListRef::Server(address, q)).
+    pub fn server_page(&self, address: &str, q: &str) -> ServerPage {
+        let page = self.shared.view(|v| v.server_pages.get(address).cloned());
+        page.map(|p| rms::page_for(p, q)).unwrap_or_default()
+    }
+
     /// The first-start guide was seen (in the settings both apps share).
     pub fn guide_seen(&self) -> bool {
         self.shared.view(|v| v.guide_seen)
@@ -1437,6 +1478,8 @@ struct Engine {
     /// Cancel Sign-In.
     rating_stop: Arc<AtomicBool>,
     two_q: RefCell<VecDeque<(Track, bool)>>,
+    /// Radiance Music Servers (stage 4c, controller/rms.rs).
+    rms: rms::Rms,
     splitting_two: RefCell<Option<Track>>,
     split_asked: RefCell<HashSet<String>>,
     /// The Mixer's sliders for this run (not kept, as the GTK app's), and the voice button.
@@ -1535,6 +1578,7 @@ impl Engine {
             lyrics_offline: Cell::new(false),
             current_uri: RefCell::default(),
             pulse_for: RefCell::default(),
+            rms: rms::Rms::default(),
         }
     }
 
@@ -1612,6 +1656,7 @@ impl Engine {
         } else if std::env::var_os("RADIANCE_SHOT").is_none() {
             self.bg(|| std::thread::sleep(update_after()), |e, ()| e.look_for_updates(false));
         }
+        self.rms_start(); // the joined servers: known to the player at once, their songs fetched quietly
         self.publish_splits();
         // five times a second: where the song is, the lines lit, and (every 5 s) where you are
         let me = Rc::downgrade(self);
@@ -1683,6 +1728,7 @@ impl Engine {
             }
             ListRef::History => v.history.iter().map(|(t, _)| t.clone()).collect(),
             ListRef::Playlist(_) => Vec::new(),
+            ListRef::Server(address, q) => v.server_pages.get(address).map(|p| rms::page_for(p.clone(), q).songs.into_iter().map(|(t, _)| t).collect()).unwrap_or_default(),
         })
     }
 

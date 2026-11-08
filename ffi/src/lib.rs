@@ -43,6 +43,8 @@ pub enum ChangeKind {
     Suggestions,
     /// Share Songs with a Phone: its QR, how far, a song received (stage 4b).
     Share,
+    /// Radiance Music Servers: joined, left, a server's songs or what it lets you do (stage 4c).
+    Servers,
 }
 
 impl From<Change> for ChangeKind {
@@ -69,6 +71,7 @@ impl From<Change> for ChangeKind {
             Change::Rating => ChangeKind::Rating,
             Change::Storage => ChangeKind::Storage,
             Change::Share => ChangeKind::Share,
+            Change::Servers => ChangeKind::Servers,
             Change::Suggestions => ChangeKind::Suggestions,
         }
     }

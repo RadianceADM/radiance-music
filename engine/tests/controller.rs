@@ -2459,3 +2459,157 @@ fn a_playing_song_gets_its_pulse() {
     c.quit();
 }
 
+
+// ---------------------------------------------------------------- stage 4c: Radiance Music Servers
+
+/// A Radiance Music Server standing in, for the rest of the process: /api/status, /api/join (code ABCDEFGHJKMN),
+/// /api/me, /api/library, /api/party, the revoke; `mode` 0: as it should, 1: not answering (the line closes with no
+/// reply), 2: the key revoked (401 for every keyed call). Anything else: 404 (the events line too: it tries again).
+fn rms_stand_in(mode: Arc<std::sync::atomic::AtomicU8>) -> String {
+    use std::io::{BufRead, BufReader, Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = format!("http://{}", listener.local_addr().unwrap());
+    std::thread::spawn(move || {
+        for conn in listener.incoming() {
+            let Ok(mut conn) = conn else { continue };
+            let mode = mode.load(Ordering::SeqCst);
+            let mut reader = BufReader::new(conn.try_clone().unwrap());
+            let mut first = String::new();
+            if reader.read_line(&mut first).is_err() {
+                continue;
+            }
+            let (mut keyed, mut length) = (false, 0usize);
+            loop {
+                let mut line = String::new();
+                if reader.read_line(&mut line).is_err() || line.trim().is_empty() {
+                    break;
+                }
+                let low = line.to_ascii_lowercase();
+                keyed |= low.trim() == "authorization: bearer tok-4c";
+                if let Some(v) = low.strip_prefix("content-length:") {
+                    length = v.trim().parse().unwrap_or(0);
+                }
+            }
+            let mut body = vec![0u8; length];
+            let _ = reader.read_exact(&mut body);
+            if mode == 1 {
+                continue; // not answering
+            }
+            let mut parts = first.split_whitespace();
+            let (method, path) = (parts.next().unwrap_or(""), parts.next().unwrap_or("").split('?').next().unwrap_or(""));
+            let me = r#"{"person":{"id":3,"name":"Ana","role":"friend"},"device":{"id":7,"name":"laptop"},"server":{"name":"Bassi's server","id":"srv-4c"},"can":{"add":true,"split":true,"host":false}}"#;
+            let library = r#"{"server":"Bassi's server","count":2,"songs":[
+                {"id":4,"artist":"Hev Abi","title":"Para Sa Streets","file":"Hev Abi - Para Sa Streets.opus","url":"/files/Hev%20Abi%20-%20Para%20Sa%20Streets.opus","duration_ms":201500,"split":false,"parts":[],"files":{"song":{"name":"Hev Abi - Para Sa Streets.opus","size":3,"url":"/files/Hev%20Abi%20-%20Para%20Sa%20Streets.opus"}},"added_by":{"id":1,"name":"Bassi"}},
+                {"id":5,"artist":"Maki","title":"Dilaw","file":"Maki - Dilaw.flac","url":"/files/Maki%20-%20Dilaw.flac","duration_ms":250000,"split":false,"parts":[],"files":{},"added_by":null}]}"#;
+            let (status, json): (u16, String) = match (method, path, keyed, mode) {
+                ("GET", "/api/status", _, _) => (200, r#"{"server":"Bassi's server","id":"srv-4c","needs_setup":false}"#.into()),
+                ("POST", "/api/join", _, _) if String::from_utf8_lossy(&body).contains("ABCDEFGHJKMN") => {
+                    (201, r#"{"token":"tok-4c","person":{"id":3,"name":"Ana","role":"friend"},"device":{"id":7,"name":"laptop"},"server":{"name":"Bassi's server"}}"#.into())
+                }
+                (_, _, true, 2) | (_, _, false, _) => (401, r#"{"error":"This needs your device's key"}"#.into()),
+                ("GET", "/api/me", true, _) => (200, me.into()),
+                ("GET", "/api/library", true, _) => (200, library.into()),
+                ("GET", "/api/party", true, _) => (200, r#"{"party":null}"#.into()),
+                ("POST", p, true, _) if p.starts_with("/api/devices/") => (200, r#"{"ok":true}"#.into()),
+                _ => (404, r#"{"error":"no such page"}"#.into()),
+            };
+            let reply = format!("HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{json}", json.len());
+            let _ = conn.write_all(reply.as_bytes());
+        }
+    });
+    address
+}
+
+/// Joining by an invite (stage 4c-1, as the Linux app's Servers…): the server is listed with what you can do there,
+/// its page has its songs (searchable, who added each), the same invite again says it's joined already, and Leave
+/// tells the server and forgets it.
+#[test]
+fn joining_by_invite_lists_the_server() {
+    let _l = setup();
+    let (c, _f, rx) = with_songs("servers join", vec![]);
+    let address = rms_stand_in(Arc::new(std::sync::atomic::AtomicU8::new(0)));
+    assert!(c.servers().rows.is_empty(), "{:?}", c.servers());
+    c.server_join(&format!("{address}/join/ABCD-EFGH-JKMN"));
+    assert!(until(5.0, || c.servers().rows.first().is_some_and(|r| r.songs == Some(2))), "{:?}", c.servers());
+    let s = c.servers();
+    assert_eq!(s.note, Some(("Joined Bassi's server. Its songs are under Library in the sidebar.".to_string(), false)));
+    let row = &s.rows[0];
+    assert_eq!((row.address.as_str(), row.name.as_str()), (address.as_str(), "Bassi's server"));
+    assert_eq!(row.subtitle, format!("{address} · you're Ana"));
+    assert_eq!(row.can, [true, true, true, false]);
+    assert_eq!(row.problem, None);
+    let page = c.server_page(&address, "");
+    assert_eq!(page.line, "2 songs · You're on it as Ana");
+    assert_eq!(page.songs.iter().map(|(t, _)| t.title.as_str()).collect::<Vec<_>>(), ["Para Sa Streets", "Dilaw"]);
+    assert_eq!(page.songs[0].0.source, Source::Server);
+    assert_eq!((page.songs[0].1.as_str(), page.songs[1].1.as_str()), ("Hev Abi · added by Bassi", "Maki"));
+    assert_eq!(page.note, "Click one to play it. Like it (the heart) to save it, with its parts, lyrics and cover, into your own library.");
+    assert_eq!(c.server_page(&address, "streets").songs.len(), 1);
+    assert_eq!(c.server_page(&address, "streets").note, "1 of 2 songs match.");
+    assert_eq!(c.server_page(&address, "nothing like it").note, "No songs on Bassi's server match “nothing like it”.");
+    // its songs are known to the player (their key goes on as they play)
+    assert!(radiance_engine::servers::of_track(&page.songs[0].0).is_some(), "the joined list isn't set");
+    // the same invite again
+    c.server_join(&format!("{address}/join/ABCD-EFGH-JKMN"));
+    assert!(until(2.0, || c.servers().note.as_ref().is_some_and(|n| n.0.starts_with("This computer is on Bassi's server already"))), "{:?}", c.servers().note);
+    // not an invite
+    c.server_join("hello there");
+    assert!(until(2.0, || c.servers().note.as_ref().is_some_and(|n| n.1)), "an error line: {:?}", c.servers().note);
+    // Leave: told, forgotten
+    c.server_leave(&address);
+    assert!(until(5.0, || c.servers().rows.is_empty()), "{:?}", c.servers());
+    assert!(toasts_for(&c, &rx, 1.0).iter().any(|t| t == "Left Bassi's server"));
+    assert!(radiance_engine::servers::of_track(&page.songs[0].0).is_none(), "still known after leaving");
+    c.quit();
+}
+
+/// A server that isn't answering, or that took this computer's key away, says why in plain words on its row and
+/// its page (its songs as last sent stay); back, the problem goes (review focus 1 and 2).
+#[test]
+fn a_server_down_or_signed_out_says_why() {
+    let _l = setup();
+    let (c, _f, _rx) = with_songs("servers down", vec![]);
+    let mode = Arc::new(std::sync::atomic::AtomicU8::new(0));
+    let address = rms_stand_in(mode.clone());
+    c.server_join(&format!("{address}/join/ABCD-EFGH-JKMN"));
+    assert!(until(5.0, || c.servers().rows.first().is_some_and(|r| r.songs == Some(2))), "{:?}", c.servers());
+    mode.store(1, Ordering::SeqCst);
+    c.server_refresh(&address);
+    assert!(until(15.0, || c.servers().rows[0].problem.as_deref().is_some_and(|p| p.contains("isn't answering"))), "{:?}", c.servers());
+    let page = c.server_page(&address, "");
+    assert_eq!(page.songs.len(), 2, "its songs as last sent stay");
+    assert!(page.problem.as_deref().is_some_and(|p| p.starts_with("Bassi's server isn't answering")), "{:?}", page.problem);
+    assert!(!page.signed_out);
+    assert_eq!(page.note, "As Bassi's server last sent them.");
+    mode.store(2, Ordering::SeqCst);
+    c.server_refresh(&address);
+    assert!(until(5.0, || c.servers().rows[0].signed_out), "{:?}", c.servers());
+    assert!(c.servers().rows[0].problem.as_deref().is_some_and(|p| p.starts_with("This computer isn't joined to Bassi's server anymore")));
+    mode.store(0, Ordering::SeqCst);
+    c.server_refresh(&address);
+    assert!(until(5.0, || c.servers().rows[0].problem.is_none() && !c.servers().rows[0].signed_out), "{:?}", c.servers());
+    c.server_leave(&address);
+    assert!(until(5.0, || c.servers().rows.is_empty()));
+    c.quit();
+}
+
+/// The joined servers are known from the start (the Linux app's set_joined): a server song in the queue or History
+/// plays with this computer's key after the app opens again, not "you left its server".
+#[test]
+fn a_server_song_is_known_after_a_restart() {
+    let _l = setup();
+    let address = rms_stand_in(Arc::new(std::sync::atomic::AtomicU8::new(0)));
+    let (c, _f, _rx) = with_songs("servers restart", vec![]);
+    c.server_join(&format!("{address}/join/ABCD-EFGH-JKMN"));
+    assert!(until(5.0, || c.servers().rows.first().is_some_and(|r| r.songs == Some(2))), "{:?}", c.servers());
+    let t = c.server_page(&address, "").songs[0].0.clone();
+    c.quit();
+    radiance_engine::servers::set_joined(&[]); // as a fresh start: nothing known yet
+    let (c, _f, _rx) = with_songs("servers restart 2", vec![]);
+    assert!(until(3.0, || radiance_engine::servers::of_track(&t).is_some()), "not known at the start");
+    assert!(radiance_engine::servers::signed(&t.id).contains("t=tok-4c"), "{}", radiance_engine::servers::signed(&t.id));
+    assert_eq!(c.servers().rows.len(), 1);
+    c.server_leave(&address);
+    assert!(until(5.0, || c.servers().rows.is_empty()));
+    c.quit();
+}
