@@ -4,7 +4,7 @@ The same features on the computer (Linux and Windows) and the phone (Android). T
 screens are made for a phone, so they look and work differently; this list is about what each
 one **can do**, not how it looks. Kept in step with every change (owner, 2026-11-02).
 
-As of: computer **0.7.20**, phone **0.5.15** (released versions). Built but not released yet:
+As of: computer **0.7.21**, phone **0.5.15** (released versions). Built but not released yet:
 marked 🔜.
 
 ✅ has it · ❌ missing (a gap to close) · ➖ not needed there (the platform does it its own way)
@@ -103,9 +103,9 @@ marked 🔜.
 
 | Feature | Linux | Windows | Windows beta | Phone | Notes |
 |---|---|---|---|---|---|
-| Join a server, browse, save, add your songs | ✅ | ✅ | 🔜 4 | ✅ | |
-| radiancemusic:// invite links | ✅ | ✅ | 🔜 4c | ✅ | the beta: with servers (an invite opens the Servers dialog) |
-| Listening parties: in sync, reactions, host controls | ✅ | ✅ | 🔜 4 | ✅ | |
+| Join a server, browse, save, add your songs | ✅ | ✅ | 🔜 4c | ✅ | the beta: join, browse and play its songs (beta.9); Save to Your Library, Add to NAME and Split on NAME come next (beta.11) |
+| radiancemusic:// invite links | ✅ | ✅ | ✅ | ✅ | the beta: an invite opens the Servers dialog; a clicked link opens today's Windows app until the beta replaces it (stage 5) |
+| Listening parties: in sync, reactions, host controls | ✅ | ✅ | ✅ | ✅ | the beta: beta.10 |
 
 ## The app itself
 
