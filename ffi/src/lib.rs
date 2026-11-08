@@ -928,6 +928,59 @@ impl MusicEngine {
         let s = self.inner.share();
         ShareView { on: s.on, to_phone: s.to_phone, qr: s.qr.unwrap_or_default(), caption: s.caption, progress: s.progress.unwrap_or_default(), fraction: s.fraction, done: s.done, gentle: s.gentle, firewall: s.firewall }
     }
+
+    /// Radiance Music Servers (stage 4c): Servers…, joining by invite, leaving, a server's page and playing from it.
+    pub fn servers(&self) -> ServersView {
+        let s = self.inner.servers();
+        let rows = s
+            .rows
+            .into_iter()
+            .map(|r| ServerRowView {
+                permissions: radiance_core::server_words::permission_rows(r.can[1], r.can[2], r.can[3])
+                    .iter()
+                    .map(|(yes, title)| PermissionView { title: title.to_string(), answer: radiance_core::server_words::permission_answer(*yes).to_string(), yes: *yes })
+                    .collect(),
+                known: r.problem.is_none() && !r.subtitle.ends_with("checking…"),
+                address: r.address,
+                name: r.name,
+                subtitle: r.subtitle,
+                owner: r.owner,
+                problem: r.problem,
+                signed_out: r.signed_out,
+            })
+            .collect();
+        let (note, note_error) = s.note.unwrap_or_default();
+        ServersView { rows, note, note_error, joining: s.joining }
+    }
+    pub fn server_join(&self, invite: String) {
+        self.inner.server_join(&invite);
+    }
+    pub fn server_leave(&self, address: String) {
+        self.inner.server_leave(&address);
+    }
+    pub fn server_refresh(&self, address: String) {
+        self.inner.server_refresh(&address);
+    }
+    pub fn server_page(&self, address: String, query: String) -> ServerPageView {
+        let p = self.inner.server_page(&address, &query);
+        let rows = Rows::of(&self.inner);
+        let songs = p
+            .songs
+            .iter()
+            .map(|(t, line)| {
+                let mut v = rows.song(t);
+                v.subtitle = line.clone();
+                v
+            })
+            .collect();
+        ServerPageView { address: p.address, name: p.name, line: p.line, permissions: p.permissions, problem: p.problem, signed_out: p.signed_out, fetching: p.fetching, songs, note: p.note }
+    }
+    pub fn play_server(&self, address: String, query: String, index: u32, key: String) {
+        self.inner.play_from(ListRef::Server(address, query), index as usize, &key);
+    }
+    pub fn shuffle_server(&self, address: String, query: String) {
+        self.inner.shuffle_from(ListRef::Server(address, query));
+    }
     pub fn song_menu(&self, key: String, place: MenuPlace) -> Vec<MenuSectionView> {
         self.inner
             .song_menu(&key, place.into())
@@ -1803,6 +1856,118 @@ pub fn qr_modules(text: String) -> Option<QrView> {
     radiance_engine::share::qr_modules(&text).map(|(n, dark)| QrView { width: n as u32, dark })
 }
 
+/// A joined server in Servers… (stage 4c): its name and state, what you can do there (each row "Yes" or "Off for
+/// you: its owner's choice"), what went wrong (and whether the key was signed out).
+#[derive(Clone, Debug, uniffi::Record)]
+pub struct ServerRowView {
+    pub address: String,
+    pub name: String,
+    pub subtitle: String,
+    pub permissions: Vec<PermissionView>,
+    /// It said who you are there (the permission rows are its answers, not a guess).
+    pub known: bool,
+    pub owner: bool,
+    pub problem: Option<String>,
+    pub signed_out: bool,
+}
+
+#[derive(Clone, Debug, uniffi::Record)]
+pub struct PermissionView {
+    pub title: String,
+    pub answer: String,
+    pub yes: bool,
+}
+
+/// Servers…: the joined servers, the line under the invite box (an error, or not), a join under way.
+#[derive(Clone, Debug, uniffi::Record)]
+pub struct ServersView {
+    pub rows: Vec<ServerRowView>,
+    pub note: String,
+    pub note_error: bool,
+    pub joining: bool,
+}
+
+/// A server's page: its name, the line under it, what you can do there, the problem card, its songs as shown
+/// (each subtitle "byline · added by NAME"), and the line over them.
+#[derive(Clone, Debug, uniffi::Record)]
+pub struct ServerPageView {
+    pub address: String,
+    pub name: String,
+    pub line: String,
+    pub permissions: String,
+    pub problem: Option<String>,
+    pub signed_out: bool,
+    pub fetching: bool,
+    pub songs: Vec<SongView>,
+    pub note: String,
+}
+
+/// Servers… and a server page's fixed words (the Linux app's, core::server_words).
+#[derive(Clone, Debug, uniffi::Record)]
+pub struct ServerWords {
+    pub title: String,
+    pub menu: String,
+    pub intro: String,
+    pub join_title: String,
+    pub join_description: String,
+    pub invite_link: String,
+    pub join: String,
+    pub your_servers: String,
+    pub no_servers: String,
+    pub no_servers_sub: String,
+    pub open_page: String,
+    pub open_page_tip: String,
+    pub leave: String,
+    pub leave_tip: String,
+    pub cancel: String,
+    pub try_again: String,
+    pub play: String,
+    pub shuffle: String,
+    pub refresh: String,
+    pub refresh_tip: String,
+    pub not_an_invite: String,
+}
+
+#[uniffi::export]
+pub fn server_words() -> ServerWords {
+    use radiance_core::server_words as w;
+    ServerWords {
+        title: w::SERVERS_TITLE.into(),
+        menu: w::SERVERS_MENU.into(),
+        intro: w::SERVERS_INTRO.into(),
+        join_title: w::JOIN_TITLE.into(),
+        join_description: w::JOIN_DESCRIPTION.into(),
+        invite_link: w::INVITE_LINK.into(),
+        join: w::JOIN.into(),
+        your_servers: w::YOUR_SERVERS.into(),
+        no_servers: w::NO_SERVERS.into(),
+        no_servers_sub: w::NO_SERVERS_SUB.into(),
+        open_page: w::OPEN_PAGE.into(),
+        open_page_tip: w::OPEN_PAGE_TIP.into(),
+        leave: w::LEAVE.into(),
+        leave_tip: w::LEAVE_TIP.into(),
+        cancel: w::CANCEL.into(),
+        try_again: w::TRY_AGAIN.into(),
+        play: w::PLAY.into(),
+        shuffle: w::SHUFFLE.into(),
+        refresh: w::REFRESH.into(),
+        refresh_tip: w::REFRESH_TIP.into(),
+        not_an_invite: w::NOT_AN_INVITE.into(),
+    }
+}
+
+/// "Leave NAME?" and what leaving does (its confirm).
+#[uniffi::export]
+pub fn server_leave_words(name: String) -> Vec<String> {
+    vec![radiance_core::server_words::leave_heading(&name), radiance_core::server_words::leave_body(&name)]
+}
+
+/// A server page's search box ("Search NAME") and its sidebar row's tooltip.
+#[uniffi::export]
+pub fn server_search_words(name: String, address: String) -> Vec<String> {
+    vec![radiance_core::server_words::search_placeholder(&name), radiance_core::server_words::nav_tooltip(&name, &address)]
+}
+
 /// The sharing dialog's words (the Linux app's, core::share_words).
 #[derive(Clone, Debug, uniffi::Record)]
 pub struct ShareWords {
@@ -2103,6 +2268,16 @@ mod tests {
         assert_eq!(v.voice, VoiceMode::NoVocals);
         assert_eq!((v.low_cut, v.high_cut, v.reverb), (20.0, 20000.0, 0.0));
         assert!(v.plays_parts);
+    }
+
+    /// Servers… and a server's page say what the Linux app says (stage 4c).
+    #[test]
+    fn servers_reach_the_beta() {
+        let w = server_words();
+        assert_eq!((w.title.as_str(), w.menu.as_str(), w.join.as_str(), w.open_page.as_str()), ("Servers", "Servers…", "Join", "Open Its Page"));
+        assert_eq!(w.invite_link, "Invite link (https://…/join/…)");
+        assert_eq!(server_leave_words("Bassi's server".into())[0], "Leave Bassi's server?");
+        assert_eq!(server_search_words("Bassi's server".into(), "https://m.example".into())[0], "Search Bassi's server");
     }
 
     #[test]
