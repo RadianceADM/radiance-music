@@ -82,6 +82,8 @@ pub struct PartyCard {
     /// Join's label ("" : no party to join).
     pub join: String,
     pub joining: bool,
+    /// Start a Party asked, its answer not back yet (the button greyed out meanwhile, never after).
+    pub starting: bool,
     /// "Joining leaves NAME's party." when you're in another server's.
     pub leaves: String,
     /// You're in this server's party: PartyState is its view.
@@ -124,7 +126,14 @@ struct InParty {
     lost: bool,
     before: Option<Before>,
     checks: u32,
+    /// The party's song that wouldn't play here (its entry, when), tried again after RETRY_FAILED, and the entry
+    /// whose failure was told (one toast a song, never one a second).
+    failed: Option<(u64, Instant)>,
+    told: Option<u64>,
 }
+
+/// A party song that wouldn't play here is tried again this long after (not every second).
+const RETRY_FAILED: Duration = Duration::from_secs(5);
 
 /// The parties' part of the engine.
 #[derive(Default)]
@@ -133,6 +142,8 @@ pub(super) struct Parties {
     /// Bumped as you join or leave (a left party's news and checks are let go).
     gen: Cell<u64>,
     joining: Cell<bool>,
+    /// Start a Party asked on this server, its answer not back yet.
+    starting: RefCell<Option<String>>,
     /// Each joined server's party as last asked (its card, when you're not in it).
     known: RefCell<HashMap<String, Party>>,
     /// The server whose page is open (its party asked about while its events line is down).
@@ -206,17 +217,20 @@ impl Engine {
     /// Start a Party: you're in it as its host at once.
     pub(super) fn party_start(self: &Rc<Self>, address: String, everyone: bool) {
         let Some(server) = self.rms_joined(&address) else { return };
+        self.party.starting.replace(Some(address));
+        self.publish_party();
         let s = server.clone();
-        self.bg(move || servers::party_start(&s, everyone), move |e, started: Result<Party, Failure>| match started {
-            Ok(p) => {
-                e.party_known(&server.address, p);
-                e.toast(rw::PARTY_ON_TOAST.to_string());
-                e.party_join(server.address.clone());
+        self.bg(move || servers::party_start(&s, everyone), move |e, started: Result<Party, Failure>| {
+            e.party.starting.replace(None);
+            match started {
+                Ok(p) => {
+                    e.party_known(&server.address, p);
+                    e.toast(rw::PARTY_ON_TOAST.to_string());
+                    e.party_join(server.address.clone());
+                }
+                Err(f) => e.toast(f.words(&server.name)),
             }
-            Err(f) => {
-                e.toast(f.words(&server.name));
-                e.publish_party();
-            }
+            e.publish_party(); // (Start a Party can be pressed again)
         });
     }
 
@@ -258,12 +272,15 @@ impl Engine {
                     e.toast(rw::not_answering_try_again(&server.name));
                     return e.publish_party();
                 };
-                if e.in_party() {
-                    e.party_leave(false); // another server's party: this one now
+                // another server's party: this one now, and your own music as it was before the first (the session
+                // file has it already: never overwritten by that party's song)
+                let switching = e.in_party();
+                let carried = e.party_out();
+                if !switching {
+                    e.save_session();
                 }
                 // your own music, as it is (it comes back when you leave)
-                e.save_session();
-                let before = {
+                let before = carried.unwrap_or_else(|| {
                     let player = e.player.borrow();
                     let q = e.queue.borrow();
                     Before {
@@ -273,7 +290,7 @@ impl Engine {
                         at: player.as_ref().and_then(|p| p.position()).or(e.restore_at.get()).unwrap_or(e.position.get()),
                         playing: !e.restored.get() && player.as_ref().is_some_and(|p| p.playing()),
                     }
-                };
+                });
                 e.let_go_of_video();
                 if let Some(p) = e.player.borrow().as_ref() {
                     p.stop();
@@ -304,6 +321,8 @@ impl Engine {
                     lost: false,
                     before: Some(before),
                     checks: 0,
+                    failed: None,
+                    told: None,
                 }));
                 let w = Rc::downgrade(e);
                 glib::spawn_future_local(async move {
@@ -330,6 +349,9 @@ impl Engine {
                     });
                     if let Some(s) = again {
                         e.bg(move || servers::clock_offset(&s), move |e, c| {
+                            if e.party.gen.get() != gen {
+                                return; // (another party since: not its clock)
+                            }
                             if let (Some((offset, rtt)), Some(l)) = (c, e.party.now.borrow_mut().as_mut()) {
                                 l.offset = offset;
                                 l.rtt = rtt;
@@ -393,6 +415,20 @@ impl Engine {
             let Some(l) = link.as_ref() else { return };
             (l.party.song.clone(), l.party.clone(), l.server.clone(), l.entry, l.listening, l.offset, l.lead, l.jumped, l.hold.is_some())
         };
+        // the party's song that wouldn't play here: left alone a moment, then loaded again (not tried every second)
+        let failed = self.party.now.borrow().as_ref().and_then(|l| l.failed);
+        if let (Some((was, when)), Some(now)) = (failed, song.as_ref()) {
+            if was == now.entry && when.elapsed() < RETRY_FAILED {
+                return;
+            }
+            if let Some(l) = self.party.now.borrow_mut().as_mut() {
+                l.failed = None;
+                if was == now.entry {
+                    l.entry = None; // (loaded again below)
+                }
+            }
+            return self.party_sync();
+        }
         let player = self.player.borrow();
         let Some(p) = player.as_ref() else { return };
         let Some(song) = song else {
@@ -578,7 +614,13 @@ impl Engine {
         self.current_uri.replace(String::new());
         let uri = playing::plain_uri(t, self.relay.as_ref(), &self.streams.borrow());
         let Some(uri) = uri else {
-            self.toast(rw::party_song_cant_play(rw::LEFT_ITS_SERVER));
+            // (never the last song playing on under this one's name)
+            if let Some(p) = self.player.borrow().as_ref() {
+                p.stop();
+            }
+            self.loading.set(false);
+            self.party_failed(rw::LEFT_ITS_SERVER);
+            self.publish_now();
             return;
         };
         self.loading.set(true);
@@ -655,8 +697,9 @@ impl Engine {
     /// A control for everyone in the party (play, pause, skip, seek, reorder, remove, allow).
     pub(super) fn party_act(self: &Rc<Self>, action: &'static str, extra: serde_json::Value) {
         let Some(server) = self.party.now.borrow().as_ref().map(|l| l.server.clone()) else { return };
-        let s = server.clone();
+        let (s, gen) = (server.clone(), self.party.gen.get());
         self.bg(move || servers::party_control(&s, action, extra), move |e, done: Result<Party, Failure>| match done {
+            _ if e.party.gen.get() != gen => {} // (left, or another party since: not its state)
             Ok(p) => {
                 if let Some(l) = e.party.now.borrow_mut().as_mut() {
                     l.party = p;
@@ -682,9 +725,10 @@ impl Engine {
     /// A server's song into its party's queue (it starts at once when nothing plays).
     pub(super) fn party_add(self: &Rc<Self>, t: Track) {
         let Some(server) = servers::of_track(&t) else { return };
-        let s = server.clone();
+        let (s, gen) = (server.clone(), self.party.gen.get());
         let title = t.title.clone();
         self.bg(move || servers::party_add(&s, &t), move |e, done: Result<Party, Failure>| match done {
+            _ if e.party.gen.get() != gen => {} // (left, or another party since)
             Ok(p) => {
                 if let Some(l) = e.party.now.borrow_mut().as_mut() {
                     l.party = p;
@@ -699,21 +743,11 @@ impl Engine {
 
     /// Out of the party (its WebSocket closes). `back`: your own music as it was.
     pub(super) fn party_leave(self: &Rc<Self>, back: bool) {
-        let Some(mut link) = self.party.now.borrow_mut().take() else { return };
-        self.party.gen.set(self.party.gen.get() + 1);
-        if let Some(id) = link.start.take() {
-            id.remove();
+        if !self.in_party() {
+            return;
         }
-        if let Some(id) = link.hold.take() {
-            id.remove();
-        }
-        crate::log::note(&format!("left the party on {}", link.server.name));
-        if let Some(p) = self.player.borrow().as_ref() {
-            p.stop();
-        }
-        self.loading.set(false);
-        self.quality.borrow_mut().clear();
-        if let (true, Some(b)) = (back, link.before.take()) {
+        let before = self.party_out();
+        if let (true, Some(b)) = (back, before) {
             if let Some(t) = b.current {
                 self.queue.borrow_mut().set_tracks(b.queue, b.index);
                 let gen = self.play_gen.get() + 1;
@@ -736,6 +770,26 @@ impl Engine {
         self.publish_party();
     }
 
+    /// Out of the party (its WebSocket closes, its timers stop, the player quiet): your own music as it was when you
+    /// joined (None: not in a party).
+    fn party_out(self: &Rc<Self>) -> Option<Before> {
+        let mut link = self.party.now.borrow_mut().take()?;
+        self.party.gen.set(self.party.gen.get() + 1);
+        if let Some(id) = link.start.take() {
+            id.remove();
+        }
+        if let Some(id) = link.hold.take() {
+            id.remove();
+        }
+        crate::log::note(&format!("left the party on {}", link.server.name));
+        if let Some(p) = self.player.borrow().as_ref() {
+            p.stop();
+        }
+        self.loading.set(false);
+        self.quality.borrow_mut().clear();
+        link.before.take()
+    }
+
     /// The party's song won't play, or ended (true: handled here). A song's end waits for the server's next one.
     pub(super) fn party_event(self: &Rc<Self>, ev: &crate::player::Event) -> bool {
         if !self.in_party() {
@@ -747,10 +801,24 @@ impl Engine {
             crate::player::Event::Error(e) => {
                 let (reason, _) = trouble::why_not(e, self.shared.view(|v| v.online));
                 self.loading.set(false);
-                self.toast(rw::party_song_cant_play(reason));
+                self.party_failed(reason);
                 self.publish_now();
                 true
             }
+        }
+    }
+
+    /// The party's song won't play here: said once for that song, and tried again after RETRY_FAILED.
+    fn party_failed(&self, reason: &str) {
+        let tell = {
+            let mut link = self.party.now.borrow_mut();
+            let Some(l) = link.as_mut() else { return };
+            let Some(entry) = l.entry.or(l.party.song.as_ref().map(|s| s.entry)) else { return };
+            l.failed = Some((entry, Instant::now()));
+            l.told.replace(entry) != Some(entry)
+        };
+        if tell {
+            self.toast(rw::party_song_cant_play(reason));
         }
     }
 
@@ -858,6 +926,7 @@ impl Engine {
                     heading: rw::PARTY_HEADING.into(),
                     line: if can { rw::NO_PARTY.into() } else { format!("{} {}", rw::NO_PARTY, rw::hosting_off(&server.name)) },
                     can_start: can,
+                    starting: self.party.starting.borrow().as_deref() == Some(address),
                     ..Default::default()
                 }
             }
@@ -872,6 +941,7 @@ impl Engine {
                     line: rw::party_line(&now, &rw::listening(p.members.len())),
                     join: if yours { rw::JOIN_YOUR_PARTY } else { rw::JOIN_THE_PARTY }.to_string(),
                     joining: self.party.joining.get(),
+                    starting: self.party.starting.borrow().as_deref() == Some(address),
                     leaves: other,
                     ..Default::default()
                 }

@@ -323,6 +323,9 @@ impl Engine {
 
     /// The same server (its id) at a new address: kept as it was (its key, its songs' keys) at the new one.
     fn rms_moved(self: &Rc<Self>, was: &Joined, now: &Joined) {
+        if self.in_party_on(&was.address) {
+            self.party_leave(true); // (its controls would go to the old address)
+        }
         crate::log::note(&format!("{} moved from {} to {}", now.name, was.address, now.address));
         if let Some(s) = self.settings.borrow_mut().servers.iter_mut().find(|s| s.address == was.address) {
             *s = now.clone();

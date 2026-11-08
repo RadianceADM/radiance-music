@@ -1618,19 +1618,24 @@ impl Ui {
                         me.render_party_card();
                         return;
                     };
-                    if me.in_party() {
-                        me.leave_party(false); // another server's party: this one now
+                    // another server's party: this one now, and your own music as it was before the first (the
+                    // session file has it already: never overwritten by that party's song)
+                    let switching = me.in_party();
+                    let carried = me.rms.party.borrow_mut().as_mut().and_then(|l| l.before.take());
+                    if switching {
+                        me.leave_party(false);
+                    } else {
+                        me.save_session();
                     }
                     // your own music, as it is (it comes back when you leave)
-                    me.save_session();
                     let player = me.player.borrow();
-                    let before = Before {
+                    let before = carried.unwrap_or_else(|| Before {
                         queue: me.queue.borrow().tracks().to_vec(),
                         index: me.queue.borrow().index(),
                         current: me.current.borrow().clone(),
                         at: player.as_ref().and_then(|p| p.position()).or(me.restore_at.get()).unwrap_or(0.0),
                         playing: player.as_ref().is_some_and(|p| p.playing()),
-                    };
+                    });
                     if let Some(p) = player.as_ref() {
                         p.stop();
                     }

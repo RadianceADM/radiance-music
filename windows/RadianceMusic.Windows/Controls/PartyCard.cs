@@ -60,7 +60,7 @@ internal sealed class PartyCard : Grid
             InParty(p);
             return;
         }
-        var cardKey = "card|" + string.Join("|", card.Heading, card.Line, card.CanStart, card.Join, card.Joining, card.Leaves);
+        var cardKey = "card|" + string.Join("|", card.Heading, card.Line, card.CanStart, card.Starting, card.Join, card.Joining, card.Leaves);
         if (cardKey == shown) return;
         shown = cardKey;
         Accent(card.Join.Length > 0);
@@ -98,12 +98,9 @@ internal sealed class PartyCard : Grid
         if (c.CanStart)
         {
             var everyone = new CheckBox { Content = w.LetEveryone };
-            var start = PageKit.IconButton("", w.StartParty, () => { }, accent: true);
-            start.Click += (_, _) =>
-            {
-                start.IsEnabled = false;
-                hub.Engine.PartyStart(address, everyone.IsChecked == true);
-            };
+            // (greyed out while it's asked; a refusal leaves it ready to press again)
+            var start = PageKit.IconButton("", w.StartParty, () => hub.Engine.PartyStart(address, everyone.IsChecked == true), accent: true);
+            start.IsEnabled = !c.Starting;
             body.Children.Add(everyone);
             body.Children.Add(start);
         }

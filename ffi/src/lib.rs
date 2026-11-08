@@ -992,7 +992,7 @@ impl MusicEngine {
     }
     pub fn party_card(&self, address: String) -> PartyCardView {
         let c = self.inner.party_card(&address);
-        PartyCardView { heading: c.heading, line: c.line, can_start: c.can_start, join: c.join, joining: c.joining, leaves: c.leaves, in_it: c.in_it }
+        PartyCardView { heading: c.heading, line: c.line, can_start: c.can_start, starting: c.starting, join: c.join, joining: c.joining, leaves: c.leaves, in_it: c.in_it }
     }
     /// The party you're in (`server` empty: none).
     pub fn party(&self) -> PartyView {
@@ -2000,6 +2000,8 @@ pub struct PartyCardView {
     pub heading: String,
     pub line: String,
     pub can_start: bool,
+    /// Start a Party asked, its answer not back yet (greyed out meanwhile).
+    pub starting: bool,
     pub join: String,
     pub joining: bool,
     pub leaves: String,

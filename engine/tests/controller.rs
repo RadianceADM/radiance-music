@@ -2634,6 +2634,9 @@ struct PartySim {
     ahead_ms: f64,
     actions: Vec<String>,
     line_down: bool,
+    /// Hosting refused (POST /api/party/start: 403), and the party's song file gone (404).
+    refuse_start: bool,
+    no_file: bool,
     next: u64,
     sockets: Vec<std::sync::mpsc::Sender<String>>,
 }
@@ -2753,11 +2756,16 @@ fn tone(secs: f64) -> Vec<u8> {
 
 /// The party stand-in on 127.0.0.1 (a thread per connection: the player keeps its song's open).
 fn party_stand_in() -> (String, Arc<Mutex<PartySim>>) {
+    party_stand_in_as(None)
+}
+
+/// The stand-in with the server id `id` (the same id at a second address: the same server, moved).
+fn party_stand_in_as(id: Option<&str>) -> (String, Arc<Mutex<PartySim>>) {
     use std::io::{BufRead, BufReader, Read, Write};
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let address = format!("http://{}", listener.local_addr().unwrap());
     // a server of its own each time (the tests share settings.json: one id for all would be one server that moved)
-    let id = Arc::new(format!("srv-party-{}", listener.local_addr().unwrap().port()));
+    let id = Arc::new(id.map(String::from).unwrap_or_else(|| format!("srv-party-{}", listener.local_addr().unwrap().port())));
     let sim = Arc::new(Mutex::new(PartySim::default()));
     let song = Arc::new(tone(120.0));
     let shared = sim.clone();
@@ -2829,6 +2837,10 @@ fn party_stand_in() -> (String, Arc<Mutex<PartySim>>) {
                 let target = parts.next().unwrap_or("").to_string();
                 keyed |= target.contains("t=tok-party");
                 let path = target.split('?').next().unwrap_or("").to_string();
+                if path == "/files/party.wav" && keyed && sim.lock().unwrap().no_file {
+                    let _ = conn.write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+                    return;
+                }
                 if path == "/files/party.wav" && keyed {
                     let from = range.unwrap_or(0).min(song.len());
                     let head = if range.is_some() {
@@ -2854,6 +2866,10 @@ fn party_stand_in() -> (String, Arc<Mutex<PartySim>>) {
                     ("GET", "/api/me", _) => (200, me),
                     ("GET", "/api/library", _) => (200, library.into()),
                     ("GET", "/api/party", _) => (200, s.state().to_string()),
+                    ("POST", "/api/party/start", _) if s.refuse_start => {
+                        std::thread::sleep(Duration::from_millis(600)); // (an answer over a real network, not at once)
+                        (403, r#"{"error":"Hosting a party is off for you on this server."}"#.into())
+                    }
                     ("POST", "/api/party/start", _) => {
                         s.on = true;
                         s.host = (3, "Ana".into());
@@ -3124,5 +3140,94 @@ fn hosting_a_party_from_start_to_end() {
     assert!(until(5.0, || c.party().server.is_empty()), "{:?}", c.party());
     assert!(!sim.lock().unwrap().on);
     off_party_server(&c, &address);
+    c.quit();
+}
+
+/// Joining another server's party while in one (the review's finding): your own music still comes back as it was when you
+/// first joined, not the first party's song, and the saved session isn't overwritten by it.
+#[test]
+fn switching_parties_keeps_your_own_music() {
+    let _l = setup();
+    let (a, sim_a) = party_stand_in();
+    let (b, sim_b) = party_stand_in();
+    sim_a.lock().unwrap().bassis_party("Party Song", 5_000.0);
+    sim_b.lock().unwrap().bassis_party("Party Song", 9_000.0);
+    let mine = vec![wav("party-switch-a", 30.0), wav("party-switch-b", 30.0)];
+    let (c, _f, _rx, list) = with_list("party switch", mine.clone());
+    c.play_from(list, 1, &mine[1].key());
+    assert!(until(5.0, || c.now().playing && c.now().at > 1.0), "{:?}", c.now());
+    on_party_server(&c, &a);
+    on_party_server(&c, &b);
+    c.party_join(&a);
+    assert!(until(10.0, || c.party().server == a && c.now().song.is_some_and(|t| t.title == "Party Song")), "{:?}", c.party());
+    c.party_join(&b);
+    assert!(until(10.0, || c.party().server == b), "{:?}", c.party());
+    c.party_leave();
+    assert!(until(5.0, || c.now().song.is_some_and(|t| t.key() == mine[1].key()) && c.now().playing), "{:?}", c.now());
+    assert_eq!(c.queue().0.len(), 2, "your own queue back");
+    off_party_server(&c, &a);
+    off_party_server(&c, &b);
+    c.quit();
+}
+
+/// Start a Party refused (hosting off, or the server down): the toast says why and the card lets you try again (its
+/// Start a Party isn't left greyed out: `starting` goes back to false).
+#[test]
+fn a_refused_start_lets_you_try_again() {
+    let _l = setup();
+    let (address, sim) = party_stand_in();
+    sim.lock().unwrap().refuse_start = true;
+    let (c, _f, _rx) = with_songs("party refused", vec![]);
+    on_party_server(&c, &address);
+    assert!(until(5.0, || c.party_card(&address).can_start), "{:?}", c.party_card(&address));
+    c.party_start(&address, false);
+    assert!(until(1.0, || c.party_card(&address).starting), "{:?}", c.party_card(&address));
+    assert!(toast_with(&c, "off for you", 5.0).is_ok());
+    assert!(until(3.0, || !c.party_card(&address).starting && c.party_card(&address).can_start), "{:?}", c.party_card(&address));
+    assert!(c.party().server.is_empty());
+    off_party_server(&c, &address);
+    c.quit();
+}
+
+/// The party's song won't play here: one toast says why (never one a second), and the party goes on without you
+/// stuck in a loop of tries.
+#[test]
+fn a_party_song_that_wont_play_says_so_once() {
+    let _l = setup();
+    let (address, sim) = party_stand_in();
+    {
+        let mut s = sim.lock().unwrap();
+        s.no_file = true;
+        s.bassis_party("Party Song", 5_000.0);
+    }
+    let (c, _f, _rx) = with_songs("party no file", vec![]);
+    on_party_server(&c, &address);
+    c.party_join(&address);
+    let first = toast_with(&c, "can't play here", 10.0);
+    assert!(first.is_ok(), "{first:?}");
+    let again = toast_with(&c, "can't play here", 4.0);
+    assert!(again.is_err(), "told again: {again:?}");
+    assert!(!c.party().server.is_empty(), "still in the party");
+    off_party_server(&c, &address);
+    c.quit();
+}
+
+/// The server moves to a new address while you're in its party (an invite at its new address): you're out of the
+/// party, your own music back (its controls would go to the old address).
+#[test]
+fn a_moved_server_leaves_its_party() {
+    let _l = setup();
+    let (old, sim) = party_stand_in_as(Some("srv-moving"));
+    let (new, sim_new) = party_stand_in_as(Some("srv-moving"));
+    sim.lock().unwrap().bassis_party("Party Song", 5_000.0);
+    sim_new.lock().unwrap().bassis_party("Party Song", 5_000.0);
+    let (c, _f, _rx) = with_songs("party moved", vec![]);
+    on_party_server(&c, &old);
+    c.party_join(&old);
+    assert!(until(10.0, || c.party().server == old), "{:?}", c.party());
+    c.server_join(&format!("{new}/join/ABCD-EFGH-JKMN"));
+    assert!(until(5.0, || c.servers().rows.iter().any(|r| r.address == new)), "{:?}", c.servers());
+    assert!(until(5.0, || c.party().server.is_empty()), "still in the old address's party: {:?}", c.party().server);
+    off_party_server(&c, &new);
     c.quit();
 }
