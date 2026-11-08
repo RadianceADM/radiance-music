@@ -19,9 +19,12 @@ print(json.dumps(keep, indent=1, ensure_ascii=False))
 PY
 $H "mkdir -p $R/$repo/$tag"
 scp -q -o BatchMode=yes -o IdentitiesOnly=yes -i $HOME/.ssh/hostinger_ed25519.pub -P 65002 "$work"/files/* "u302998808@151.106.114.104:$R/$repo/$tag/"
-scp -q -o BatchMode=yes -o IdentitiesOnly=yes -i $HOME/.ssh/hostinger_ed25519.pub -P 65002 "$work/latest.json" "u302998808@151.106.114.104:$R/$repo/latest.json"
+# every file checked against GitHub's fingerprint BEFORE latest.json points at it (a bad upload is never served)
 echo "== $repo $tag: GitHub's fingerprints vs Hostinger's copies"
-python3 -c 'import json,sys; [print(a["digest"].split(":")[1], a["name"]) for a in json.load(open(sys.argv[1]))["assets"]]' "$work/latest.json" | sort > "$work/want.txt"
+python3 -c 'import json,sys; [print(a["digest"].split(":")[1] + "  " + a["name"]) for a in json.load(open(sys.argv[1]))["assets"]]' "$work/latest.json" | sort > "$work/want.txt"
 $H "cd $R/$repo/$tag && sha256sum *" | sort > "$work/have.txt"
-diff "$work/want.txt" "$work/have.txt" && echo "all $(wc -l < "$work/want.txt") files match"
+if ! diff "$work/want.txt" "$work/have.txt"; then echo "MISMATCH: latest.json not switched"; exit 1; fi
+echo "all $(wc -l < "$work/want.txt") files match"
+scp -q -o BatchMode=yes -o IdentitiesOnly=yes -i $HOME/.ssh/hostinger_ed25519.pub -P 65002 "$work/latest.json" "u302998808@151.106.114.104:$R/$repo/latest.json.new"
+$H "mv -f $R/$repo/latest.json.new $R/$repo/latest.json" && echo "latest.json now: $tag"
 rm -rf "$work"
