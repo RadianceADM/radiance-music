@@ -37,8 +37,8 @@ impl Report {
                 raw.push_str(&t);
             }
         }
-        // the Windows beta's own log (beta-crash.log, beside its data) goes along, after the engine's
-        let beta = crate::update::is_beta().then(|| glib::user_data_dir().join("radiance-music").join("beta-crash.log"));
+        // the WinUI app's own log (beside its data) goes along, after the engine's
+        let beta = crash_log_name(crate::update::kind()).map(|name| glib::user_data_dir().join("radiance-music").join(name));
         let home = glib::home_dir().to_string_lossy().to_string();
         let user = glib::user_name().to_string_lossy().to_string();
         gather_with(&crate::update::version_here(), &raw, beta.as_deref(), &home, &user)
@@ -221,6 +221,15 @@ fn newest(text: &str, most: usize) -> String {
     }
     let tail = &text[from..];
     tail.find('\n').map(|i| tail[i + 1..].to_string()).unwrap_or_else(|| tail.to_string())
+}
+
+/// The WinUI app's own log's name, beside its data (its C# side writes it; the GTK app has none).
+pub fn crash_log_name(kind: crate::update::AppKind) -> Option<&'static str> {
+    match kind {
+        crate::update::AppKind::Gtk => None,
+        crate::update::AppKind::Beta => Some("beta-crash.log"),
+        crate::update::AppKind::Native => Some("windows-crash.log"),
+    }
 }
 
 #[cfg(test)]

@@ -29,6 +29,14 @@
     <!-- the generated binding (Native\radiance_ffi.cs) isn't written for nullable checks -->
     <NoWarn>$(NoWarn);CS8600;CS8601;CS8602;CS8603;CS8604;CS8618;CS8625;CS0168;CS0219</NoWarn>
   </PropertyGroup>
+  <!-- the native build (stage 5, the switch): dotnet build -p:Flavor=native -p:NativeVersion=0.8.0 -->
+  <PropertyGroup Condition="'$(Flavor)' == 'native'">
+    <AssemblyName>RadianceMusic</AssemblyName>
+    <Product>Radiance Music</Product>
+    <Description>Radiance Music</Description>
+    <Version>$(NativeVersion)</Version>
+    <DefineConstants>$(DefineConstants);NATIVE</DefineConstants>
+  </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.WindowsAppSDK" Version="2.6.5" />
     <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.28000.2957" />

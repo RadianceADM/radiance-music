@@ -27,7 +27,7 @@ internal sealed class EngineHub : EngineListener
     public static EngineHub Start(DispatcherQueue ui)
     {
         var hub = new EngineHub(ui);
-        hub.Engine = MusicEngine.Start(hub);
+        hub.Engine = Flavor.Start(hub);
         return hub;
     }
 

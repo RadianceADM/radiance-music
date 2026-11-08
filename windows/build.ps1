@@ -7,7 +7,13 @@
 # app:  the C# binding (uniffi-bindgen-cs), the WinUI app and its tests (.NET 10)
 # dist: C:\rb\beta\dist (the app, the DLL, GStreamer, the tools) and its self-check
 # installer: C:\rb\beta\RadianceMusic-Beta-Setup.exe from dist (NSIS, MSYS2's makensis) and its SHA-256
-param([ValidateSet('rust', 'app', 'dist', 'installer', 'all')][string]$Step = 'all')
+# -Flavor native -Version 0.8.0 (stage 5, the switch): the same app built as RadianceMusic.exe ("Radiance Music",
+# today's folder, the main release line's updates), its installer C:\rb\beta\RadianceMusic-Setup.exe
+param([ValidateSet('rust', 'app', 'dist', 'installer', 'all')][string]$Step = 'all',
+      [ValidateSet('beta', 'native')][string]$Flavor = 'beta', [string]$Version = '')
+if ($Flavor -eq 'native' -and -not $Version) { throw 'the native build needs -Version (the release it is)' }
+$Exe = if ($Flavor -eq 'native') { 'RadianceMusic.exe' } else { 'RadianceMusicBeta.exe' }
+$AppOut = if ($Flavor -eq 'native') { 'app-native' } else { 'app' }
 $ErrorActionPreference = 'Stop'
 (Get-Process -Id $PID).PriorityClass = 'Idle'   # what it starts gets the same
 $B = 'C:\rb\beta'
@@ -35,7 +41,7 @@ function Step($what, [scriptblock]$run) {
 # windows/msys.sh in MSYS2's UCRT64 shell (no quotes to pass through: PowerShell would mangle them)
 function Msys([string]$what) {
     $env:MSYSTEM = 'UCRT64'; $env:CHERE_INVOKING = '1'
-    & C:\msys64\usr\bin\bash.exe -l /c/rb/beta/src/windows/msys.sh $what
+    & C:\msys64\usr\bin\bash.exe -l /c/rb/beta/src/windows/msys.sh @($what -split ' ')
 }
 
 if ($Step -in 'rust', 'all') {
@@ -47,18 +53,33 @@ if ($Step -in 'app', 'all') {
     Step 'the C# binding' { Msys bindgen }
     Step 'the beta''s own tests' { dotnet test "$Src\windows\RadianceMusic.Windows.Tests" -c Release --nologo -v q }
     # dotnet build's folder (as the POS app's): publish leaves out the app's .pri and compiled XAML
-    Step 'the app' { dotnet build "$Src\windows\RadianceMusic.Windows\RadianceMusic.Windows.csproj" -c Release --nologo -v q }
-    Remove-Item -Recurse -Force "$B\app" -ErrorAction SilentlyContinue
-    Copy-Item -Recurse "$Src\windows\RadianceMusic.Windows\bin\Release\net10.0-windows10.0.19041.0\win-x64" "$B\app"
+    if ($Flavor -eq 'native') {
+        # its own output folder, from a clean obj (and obj cleaned after: the beta's next build never reuses the native's)
+        $proj = "$Src\windows\RadianceMusic.Windows"
+        Remove-Item -Recurse -Force "$proj\obj" -ErrorAction SilentlyContinue
+        $built = "$B\app-native-build"
+        Remove-Item -Recurse -Force $built -ErrorAction SilentlyContinue
+        Step 'the native app' { dotnet build "$proj\RadianceMusic.Windows.csproj" -c Release --nologo -v q -p:Flavor=native -p:NativeVersion=$Version -o $built }
+        Remove-Item -Recurse -Force "$proj\obj" -ErrorAction SilentlyContinue
+    } else {
+        Step 'the app' { dotnet build "$Src\windows\RadianceMusic.Windows\RadianceMusic.Windows.csproj" -c Release --nologo -v q }
+        $built = "$Src\windows\RadianceMusic.Windows\bin\Release\net10.0-windows10.0.19041.0\win-x64"
+    }
+    Remove-Item -Recurse -Force "$B\$AppOut" -ErrorAction SilentlyContinue
+    Copy-Item -Recurse $built "$B\$AppOut"
 }
 
 if ($Step -in 'dist', 'all') {
     Remove-Item -Recurse -Force "$B\dist" -ErrorAction SilentlyContinue
     Step 'the engine''s DLL, GStreamer and the tools' { Msys pack }
-    Copy-Item -Recurse -Force "$B\app\*" "$B\dist\"
+    Copy-Item -Recurse -Force "$B\$AppOut\*" "$B\dist\"
+    if ($Flavor -eq 'native') {
+        # the app's own files at the top, for the next update's installer to take away (installer-native.nsi)
+        Get-ChildItem "$B\dist" -File | Select-Object -ExpandProperty Name | Set-Content "$B\dist\installed-files.txt" -Encoding ascii
+    }
     $out = "$B\selfcheck.txt"
     Remove-Item $out -ErrorAction SilentlyContinue
-    $p = Start-Process -FilePath "$B\dist\RadianceMusicBeta.exe" -ArgumentList @('--self-check', $out) -Wait -PassThru -NoNewWindow
+    $p = Start-Process -FilePath "$B\dist\$Exe" -ArgumentList @('--self-check', $out) -Wait -PassThru -NoNewWindow
     Write-Output "== self-check (exit $($p.ExitCode))"
     $lines = Get-Content $out -Encoding UTF8
     $lines
@@ -69,7 +90,11 @@ if ($Step -in 'dist', 'all') {
     Write-Output "dist: $((Get-ChildItem -Recurse -File "$B\dist").Count) files, $([math]::Round((Get-ChildItem -Recurse -File "$B\dist" | Measure-Object Length -Sum).Sum / 1MB)) MB"
 }
 
-if ($Step -eq 'installer') {
+if ($Step -eq 'installer' -and $Flavor -eq 'native') {
+    Step 'the native installer' { Msys "installer-native $Version" }
+    $setup = "$B\RadianceMusic-Setup.exe"
+    Write-Output "$((Get-FileHash $setup -Algorithm SHA256).Hash.ToLower())  RadianceMusic-Setup.exe (the native app $Version, $([math]::Round((Get-Item $setup).Length / 1MB)) MB)"
+} elseif ($Step -eq 'installer') {
     $version = ([xml](Get-Content "$Src\windows\RadianceMusic.Windows\RadianceMusic.Windows.csproj")).Project.PropertyGroup.Version | Where-Object { $_ } | Select-Object -First 1
     Step 'the installer' { Msys installer }
     $setup = "$B\RadianceMusic-Beta-Setup.exe"

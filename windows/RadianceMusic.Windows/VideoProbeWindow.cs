@@ -21,7 +21,7 @@ internal sealed class VideoProbeWindow : Window
 
     public VideoProbeWindow(string file)
     {
-        Title = "Radiance Music (beta): video check";
+        Title = $"{Flavor.Name}: video check";
         var root = new Grid { Background = new SolidColorBrush(Colors.Black) };
         root.Children.Add(panel);
         Content = root;

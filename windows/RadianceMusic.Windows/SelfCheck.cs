@@ -21,7 +21,7 @@ public static class SelfCheck
         try
         {
             lines.AddRange(Native.Native.SelfCheck());
-            var engine = MusicEngine.Start(new Quiet());
+            var engine = Flavor.Start(new Quiet());
             lines.Add("engine started: " + engine.Home().Greeting.Split(',')[0]);
             engine.Quit();
         }

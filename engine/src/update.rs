@@ -65,17 +65,36 @@ pub enum Install {
 pub const BETA_ASSET: &str = "RadianceMusic-Beta-Setup.exe";
 pub const BETA_LABEL: &str = "Radiance Music (beta) ";
 
-/// The beta's version, once its app says it is the beta (`set_beta`): its update state, its
+/// Which app this process is: today's GTK app, the Windows beta, or the native app (the beta's code built as the main
+/// Windows app: the switch's, stage 5).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AppKind {
+    Gtk,
+    Beta,
+    Native,
+}
+
+/// The WinUI app's kind and version, once it says which it is (`set_beta`, `set_native`): its update state, its
 /// installer and its version are then its own; the GTK app's process never sets it.
-static BETA: std::sync::RwLock<Option<String>> = std::sync::RwLock::new(None);
+static APP: std::sync::RwLock<Option<(AppKind, String)>> = std::sync::RwLock::new(None);
 
 /// This process is the Windows beta, at `version` (its ffi says so at its start).
 pub fn set_beta(version: &str) {
-    *BETA.write().unwrap() = Some(version.to_string());
+    *APP.write().unwrap() = Some((AppKind::Beta, version.to_string()));
+}
+
+/// This process is the native Windows app, at `version` (the switch's build: today's folder, the main release line).
+pub fn set_native(version: &str) {
+    *APP.write().unwrap() = Some((AppKind::Native, version.to_string()));
+}
+
+/// Which app this is.
+pub fn kind() -> AppKind {
+    APP.read().unwrap().as_ref().map(|(k, _)| *k).unwrap_or(AppKind::Gtk)
 }
 
 fn beta() -> Option<String> {
-    BETA.read().unwrap().clone()
+    APP.read().unwrap().as_ref().filter(|(k, _)| *k == AppKind::Beta).map(|(_, v)| v.clone())
 }
 
 /// This process is the Windows beta (its report and rating say so, its log goes along).
@@ -83,9 +102,23 @@ pub fn is_beta() -> bool {
     beta().is_some()
 }
 
-/// The version this app is: the beta's own, or this build's.
+/// This process is the native Windows app.
+pub fn is_native() -> bool {
+    kind() == AppKind::Native
+}
+
+/// The version this app is: the WinUI app's own (beta or native), or this build's.
 pub fn version_here() -> String {
-    beta().unwrap_or_else(|| current().to_string())
+    APP.read().unwrap().as_ref().map(|(_, v)| v.clone()).unwrap_or_else(|| current().to_string())
+}
+
+/// The native app's install from where its exe is: today's Radiance Music folder (RadianceMusic.exe at its top, the
+/// installer's Uninstall.exe beside it), updated as the main Windows app; else a copy run from somewhere else.
+pub fn native_install(exe: &Path) -> Install {
+    match exe.parent() {
+        Some(root) if root.join("Uninstall.exe").exists() => Install::Windows(root.to_path_buf()),
+        _ => Install::Other,
+    }
 }
 
 /// The beta's install from where its exe is: its folder when the installer's Uninstall.exe is
@@ -117,6 +150,9 @@ impl Install {
         let Ok(exe) = std::env::current_exe() else { return Install::Other };
         if beta().is_some() {
             return beta_install(&exe);
+        }
+        if is_native() {
+            return native_install(&exe);
         }
         if cfg!(windows) {
             // <folder>\bin\radiance-music.exe, the installer's Uninstall.exe in <folder>
@@ -872,6 +908,40 @@ pub fn probe(apply: bool) -> glib::ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ---- the native app, the switch's (stage 5, #45)
+
+    /// Stage 5: the native app, in today's folder after the switch, updates as the main Windows app: its install is its
+    /// folder when Uninstall.exe is beside RadianceMusic.exe, it takes the release's RadianceMusic-Setup.exe, and the
+    /// restart after an update opens RadianceMusic.exe again.
+    #[test]
+    fn the_native_app_updates_as_the_main_windows_app() {
+        let dir = std::env::temp_dir().join(format!("rm-native-install-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let exe = dir.join("RadianceMusic.exe");
+        fs::write(&exe, b"").unwrap();
+        assert_eq!(native_install(&exe), Install::Other, "no uninstaller: a copy run from elsewhere");
+        fs::write(dir.join("Uninstall.exe"), b"").unwrap();
+        assert_eq!(native_install(&exe), Install::Windows(dir.clone()));
+        assert_eq!(Install::Windows(dir.clone()).asset(), Some("RadianceMusic-Setup.exe"));
+        let s = windows_script(42, Path::new("C:\\Users\\Ana\\AppData\\Local\\Programs\\Radiance Music"), Path::new("C:\\u\\0.8.0-RadianceMusic-Setup.exe"), "0.8.0", false);
+        assert!(s.contains("Uninstall\\RadianceMusic'"), "today's uninstall entry: {s}");
+        assert!(s.contains("Radiance Music\\RadianceMusic.exe"), "it opens the native app again: {s}");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// The native app has the main app's names, not the beta's: its own firewall rule (tied to RadianceMusic.exe, not
+    /// today's app's) and its own crash log in the report.
+    #[test]
+    fn the_native_app_has_its_own_names() {
+        assert_eq!(crate::firewall::rule_for(AppKind::Native), crate::firewall::NATIVE_RULE);
+        assert_eq!(crate::firewall::rule_for(AppKind::Beta), crate::firewall::BETA_RULE);
+        assert_eq!(crate::firewall::rule_for(AppKind::Gtk), crate::firewall::APP_RULE);
+        assert_ne!(crate::firewall::NATIVE_RULE, crate::firewall::APP_RULE, "the GTK app's rule names its own program");
+        assert_eq!(crate::report::crash_log_name(AppKind::Native), Some("windows-crash.log"));
+        assert_eq!(crate::report::crash_log_name(AppKind::Beta), Some("beta-crash.log"));
+        assert_eq!(crate::report::crash_log_name(AppKind::Gtk), None);
+    }
 
     // ---- the Windows beta's updates (stage 4a, #45)
 

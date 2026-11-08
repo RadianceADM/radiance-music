@@ -4,6 +4,7 @@
 #   msys.sh deps     what radiance_ffi.dll needs (GStreamer, GLib, the C runtime)
 #   msys.sh bindgen  uniffi-bindgen-cs (once) and the C# binding
 #   msys.sh installer  RadianceMusic-Beta-Setup.exe from C:\rb\beta\dist (NSIS)
+#   msys.sh installer-native VERSION  RadianceMusic-Setup.exe (the native app, stage 5's switch) from C:\rb\beta\dist
 #   msys.sh pack     C:\rb\beta\dist's native part: bin\ (the DLL and what it needs, yt-dlp, Deno, FFmpeg),
 #                    lib\gstreamer-1.0 (today's Windows app's plugins), the plugin scanner, GIO's modules
 set -uo pipefail
@@ -67,5 +68,9 @@ case "${1:-}" in
     v=$(grep -o -E '<Version>[^<]+' windows/RadianceMusic.Windows/RadianceMusic.Windows.csproj | head -1 | cut -d'>' -f2)
     makensis -V2 -DVERSION="$v" -DDIST="$(cygpath -w /c/rb/beta/dist)" -DOUT="$(cygpath -w /c/rb/beta/RadianceMusic-Beta-Setup.exe)" -DICON="$(cygpath -aw packaging/windows/radiance-music.ico)" windows/installer-beta.nsi
     ;;
-  *) echo "usage: msys.sh rust|deps|bindgen|pack|installer"; exit 2 ;;
+  installer-native)
+    v=${2:?the version}
+    makensis -V2 -DVERSION="$v" -DDIST="$(cygpath -w /c/rb/beta/dist)" -DOUT="$(cygpath -w /c/rb/beta/RadianceMusic-Setup.exe)" -DICON="$(cygpath -aw packaging/windows/radiance-music.ico)" windows/installer-native.nsi
+    ;;
+  *) echo "usage: msys.sh rust|deps|bindgen|pack|installer|installer-native VERSION"; exit 2 ;;
 esac

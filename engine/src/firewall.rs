@@ -4,16 +4,23 @@
 
 use crate::share::PORTS;
 
-/// Today's Windows app's rule, and the beta's.
+/// Today's Windows app's rule, the beta's, and the native app's (after the switch: its own program, RadianceMusic.exe,
+/// so today's app's rule, tied to bin\radiance-music.exe, never looks like it lets the native app in).
 pub const APP_RULE: &str = "Radiance Music (songs to and from a phone)";
 pub const BETA_RULE: &str = "Radiance Music (beta) (songs to and from a phone)";
+pub const NATIVE_RULE: &str = "Radiance Music for Windows (songs to and from a phone)";
 
 /// This app's rule's name.
 pub fn rule() -> &'static str {
-    if crate::update::is_beta() {
-        BETA_RULE
-    } else {
-        APP_RULE
+    rule_for(crate::update::kind())
+}
+
+/// The rule's name for each app.
+pub fn rule_for(kind: crate::update::AppKind) -> &'static str {
+    match kind {
+        crate::update::AppKind::Gtk => APP_RULE,
+        crate::update::AppKind::Beta => BETA_RULE,
+        crate::update::AppKind::Native => NATIVE_RULE,
     }
 }
 

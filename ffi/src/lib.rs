@@ -332,6 +332,14 @@ impl MusicEngine {
         Self::with(listener, Arc::new(Real))
     }
 
+    /// Starts the engine as the native Windows app at `version` (the switch's build, stage 5: today's folder, the main
+    /// release line's updates, its own log and firewall rule).
+    #[uniffi::constructor]
+    pub fn start_native(listener: Arc<dyn EngineListener>, version: String) -> Result<Arc<Self>, EngineError> {
+        radiance_engine::update::set_native(&version);
+        Self::with(listener, Arc::new(Real))
+    }
+
     pub fn search(&self, q: String) {
         self.inner.search(&q);
     }

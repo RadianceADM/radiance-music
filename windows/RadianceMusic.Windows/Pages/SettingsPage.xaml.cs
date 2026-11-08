@@ -239,7 +239,7 @@ public sealed partial class SettingsPage : Page
         section.Children.Add(Card(help));
 
         var about = new StackPanel { Spacing = 6 };
-        about.Children.Add(PageKit.Subtitle($"{w.AppName} (beta) {Ffi.BetaVersion()}"));
+        about.Children.Add(PageKit.Subtitle(Flavor.IsNative ? $"{w.AppName} {Flavor.Version}" : $"{w.AppName} (beta) {Ffi.BetaVersion()}"));
         about.Children.Add(PageKit.Note(w.AboutText));
         about.Children.Add(PageKit.Note($"{w.Developer} · {w.Copyright} · GPL-3.0"));
         var links = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4 };

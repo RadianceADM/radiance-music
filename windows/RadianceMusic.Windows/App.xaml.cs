@@ -55,7 +55,7 @@ public partial class App : Application
         {
             // (with a link, the other copy opens it: nothing to say here)
             if (Program.Dev.Shot == null && Program.Link == null)
-                Win32.Message("Radiance Music is already open. Close it to use Radiance Music (beta).", "Radiance Music (beta)");
+                Win32.Message($"Radiance Music is already open. Close it to use {Flavor.Name}.", Flavor.Name);
             Trace("another copy runs: it comes forward, this one quits");
             Exit();
             return;

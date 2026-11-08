@@ -11,7 +11,7 @@ internal static class Crash
             var cache = Environment.GetEnvironmentVariable("XDG_CACHE_HOME") ?? Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
             var dir = Path.Combine(cache, "radiance-music");
             Directory.CreateDirectory(dir);
-            File.AppendAllText(Path.Combine(dir, "beta-crash.log"), $"{DateTime.Now:yyyy-MM-dd HH:mm:ss} {what}\n\n");
+            File.AppendAllText(Path.Combine(dir, Flavor.CrashLog), $"{DateTime.Now:yyyy-MM-dd HH:mm:ss} {what}\n\n");
         }
         catch
         {

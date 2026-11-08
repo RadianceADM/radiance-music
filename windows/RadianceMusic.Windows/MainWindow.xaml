@@ -17,7 +17,7 @@
             <StackPanel Orientation="Horizontal" Spacing="12" VerticalAlignment="Center">
                 <Image x:Name="TitleIcon" Width="16" Height="16" />
                 <TextBlock Text="Radiance Music" Style="{StaticResource CaptionTextBlockStyle}" VerticalAlignment="Center" />
-                <TextBlock Text="Beta" Style="{StaticResource CaptionTextBlockStyle}" VerticalAlignment="Center"
+                <TextBlock x:Name="BetaMark" Text="Beta" Style="{StaticResource CaptionTextBlockStyle}" VerticalAlignment="Center"
                            Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                 <!-- no internet: the Linux app's Offline pill and its tooltip (stage 4a) -->
                 <Border x:Name="OfflinePill" CornerRadius="10" Padding="8,2,10,2" VerticalAlignment="Center" Visibility="Collapsed"

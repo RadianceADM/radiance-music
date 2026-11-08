@@ -38,6 +38,9 @@ public sealed partial class MainWindow : Window
     {
         this.hub = hub;
         InitializeComponent();
+        // the native build (stage 5): "Radiance Music", no Beta mark
+        Title = Flavor.Name;
+        if (Flavor.IsNative) BetaMark.Visibility = Visibility.Collapsed;
         SystemBackdrop = new Microsoft.UI.Xaml.Media.MicaBackdrop();
         ExtendsContentIntoTitleBar = true;
         SetTitleBar(AppTitleBar);
