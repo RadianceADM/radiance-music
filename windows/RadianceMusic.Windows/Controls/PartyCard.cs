@@ -17,8 +17,10 @@ namespace RadianceMusic.Controls;
 /// minute's, who's listening, Up next (Earlier / Later / Take it out), the host's control switch, Leave and End (it asks).
 /// Made again only when what it shows changes; the sync line alone changes every second.
 /// </summary>
-internal sealed class PartyCard : Border
+internal sealed class PartyCard : Grid
 {
+    // (a Grid holding the card: WinUI's Border is sealed)
+    private readonly Border frame = new();
     private readonly EngineHub hub;
     private readonly string address;
     private readonly StackPanel body = new() { Spacing = 10 };
@@ -29,12 +31,13 @@ internal sealed class PartyCard : Border
     {
         this.hub = hub;
         this.address = address;
-        CornerRadius = new CornerRadius(16);
-        Padding = new Thickness(20, 16, 20, 18);
-        BorderThickness = new Thickness(1);
-        BorderBrush = (Brush)Application.Current.Resources["CardStrokeColorDefaultBrush"];
-        Background = (Brush)Application.Current.Resources["CardBackgroundFillColorDefaultBrush"];
-        Child = body;
+        frame.CornerRadius = new CornerRadius(16);
+        frame.Padding = new Thickness(20, 16, 20, 18);
+        frame.BorderThickness = new Thickness(1);
+        frame.BorderBrush = (Brush)Application.Current.Resources["CardStrokeColorDefaultBrush"];
+        frame.Background = (Brush)Application.Current.Resources["CardBackgroundFillColorDefaultBrush"];
+        frame.Child = body;
+        Children.Add(frame);
         Render();
     }
 
@@ -68,7 +71,7 @@ internal sealed class PartyCard : Border
     /// <summary>A party on: the card's accent edge (soft, rounded; no sharp visuals).</summary>
     private void Accent(bool on)
     {
-        BorderBrush = (Brush)Application.Current.Resources[on ? "AccentFillColorDefaultBrush" : "CardStrokeColorDefaultBrush"];
+        frame.BorderBrush = (Brush)Application.Current.Resources[on ? "AccentFillColorDefaultBrush" : "CardStrokeColorDefaultBrush"];
     }
 
     private static StackPanel Heading(string text)
