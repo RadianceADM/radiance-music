@@ -12,6 +12,13 @@
 - **The Play button spins while a song loads** (owner: "yung play pause button paikotin mo pag loading"): a soft ring goes round Play from the moment you pick a song until its music starts, as on the phone. The bar doesn't move when it shows.
 - **Share Songs with a Phone sends songs without music videos:** phones have no music videos now, so the "With music videos" switch is gone and a phone gets the song, its parts, lyrics and cover.
 
+## Windows beta 0.8.0-beta.9 — not released yet (#45, stage 4c-1)
+
+- **Radiance Music Servers**, as the Linux app's: Settings → Help → **Servers…** to join one with its invite link, see what its owner lets you do there, open its page, or leave it (it asks first). Servers joined in today's Windows app are already there.
+- **Each server has its page** in the sidebar under Library: its songs (who added each), search, Play, Shuffle and Refresh. When it isn't answering, or has removed this computer, the page says so with Try Again.
+- **Invite links open in the beta:** started with a `radiancemusic://join` link, or given one while it's open, the beta opens Servers… with the invite ready to join. (A link you click still opens today's app until the beta replaces it.)
+- **Server songs keep working after a restart:** songs from a server in History and the queue play with this computer's key from the start.
+
 ## Windows beta 0.8.0-beta.8 — not released yet (#45, stage 4b)
 
 - **Share Songs with a Phone**, as the Linux app's: Settings → Help → Share Songs with a Phone…: To the Phone (your saved liked songs, without music videos: phones have none) or From the Phone, by the phone's QR; only what the other side hasn't got goes, with the songs' parts, lyrics and covers. When Windows' firewall may keep the phone out, Let It In asks Windows once (the beta has its own rule).
