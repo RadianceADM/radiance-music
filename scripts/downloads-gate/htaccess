@@ -1,0 +1,7 @@
+# downloads.radianceph.com: Radiance Music's update files and release info, all served through gate.php (a limit per
+# address, none for our testing; owner 2026-11-08). The main site's rewrites don't apply here; no folder listings.
+Options -Indexes
+RewriteEngine On
+RewriteRule ^gate\.php$ - [L]
+RewriteCond %{REQUEST_FILENAME} -f
+RewriteRule ^(.+)$ gate.php?f=$1 [L,QSA,B]

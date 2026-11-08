@@ -214,6 +214,20 @@ pub fn newer(a: &str, b: &str) -> bool {
     false
 }
 
+/// Our own site's host: the only one a test machine's key goes to.
+const OWN_HOST: &str = "https://downloads.radianceph.com/";
+
+/// The header that lets our own testing past downloads.radianceph.com's limit (owner, 2026-11-08: "may exception
+/// tayo dahil tayo ay nag tetest"): the test machine's key (RADIANCE_TESTER_KEY), on our own site's requests only.
+fn tester_header(url: &str, key: Option<&str>) -> Option<(&'static str, String)> {
+    let key = key?.trim();
+    (url.starts_with(OWN_HOST) && !key.is_empty()).then(|| ("X-Radiance-Tester", key.to_string()))
+}
+
+fn tester_key() -> Option<String> {
+    std::env::var("RADIANCE_TESTER_KEY").ok()
+}
+
 /// Where the newest release is asked for, in turn: our own copy first, then GitHub's; the beta: GitHub's list.
 fn feeds(beta: bool) -> Vec<&'static str> {
     if beta {
@@ -227,7 +241,11 @@ fn feeds(beta: bool) -> Vec<&'static str> {
 fn ask_feeds(feeds: &[String]) -> Result<Value, String> {
     let mut last = String::from("no feed to ask");
     for feed in feeds {
-        let answer = net::agent().get(feed).header("Accept", "application/vnd.github+json").call();
+        let mut req = net::agent().get(feed).header("Accept", "application/vnd.github+json");
+        if let Some((name, value)) = tester_header(feed, tester_key().as_deref()) {
+            req = req.header(name, &value);
+        }
+        let answer = req.call();
         match answer {
             Ok(mut resp) => match resp.body_mut().read_json::<Value>() {
                 Ok(j) => return Ok(j),
@@ -482,6 +500,9 @@ fn fetch(url: &str, part: &Path, from: u64, size: u64, stop: &AtomicBool, progre
     let mut req = net::agent().get(url);
     if from > 0 {
         req = req.header("Range", &format!("bytes={from}-"));
+    }
+    if let Some((name, value)) = tester_header(url, tester_key().as_deref()) {
+        req = req.header(name, &value);
     }
     let mut resp = match req.call() {
         Ok(r) => r,
@@ -967,6 +988,18 @@ mod tests {
         });
         let w = release_from(&ours, &Install::Windows(PathBuf::from("C:/x"))).unwrap();
         assert_eq!((w.version.as_str(), w.url.as_str(), w.sha256.as_str()), ("0.7.20", "https://downloads.radianceph.com/radiance-music/v0.7.20/RadianceMusic-Setup.exe", "aa"));
+    }
+
+    /// Our own testing isn't limited on downloads.radianceph.com (owner, 2026-11-08): a test machine's key
+    /// (RADIANCE_TESTER_KEY) goes on our own site's requests only, never to GitHub or anyone else.
+    #[test]
+    fn the_tester_key_goes_to_our_site_only() {
+        assert_eq!(tester_header("https://downloads.radianceph.com/radiance-music/latest.json", Some("k1")), Some(("X-Radiance-Tester", "k1".to_string())));
+        assert_eq!(tester_header("https://downloads.radianceph.com/radiance-music/v0.7.20/RadianceMusic-Setup.exe", Some("k1")).map(|h| h.0), Some("X-Radiance-Tester"));
+        assert_eq!(tester_header("https://api.github.com/repos/RadianceADM/radiance-music/releases/latest", Some("k1")), None);
+        assert_eq!(tester_header("https://downloads.radianceph.com.evil.example/x", Some("k1")), None);
+        assert_eq!(tester_header("https://downloads.radianceph.com/radiance-music/latest.json", None), None);
+        assert_eq!(tester_header("https://downloads.radianceph.com/radiance-music/latest.json", Some("  ")), None);
     }
 
     #[test]
