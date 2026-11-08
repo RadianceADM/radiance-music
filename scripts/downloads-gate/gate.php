@@ -69,7 +69,9 @@ if (!$tester) {
 $types = ['json' => 'application/json', 'apk' => 'application/vnd.android.package-archive', 'exe' => 'application/octet-stream', 'flatpak' => 'application/octet-stream', 'gz' => 'application/gzip'];
 header('Content-Type: ' . ($types[$ext] ?? 'application/octet-stream'));
 header('Access-Control-Allow-Origin: *');
-header('Cache-Control: ' . ($kind === 'json' ? 'no-cache, max-age=0' : 'public, max-age=31536000, immutable'));
+// a release's own file never changes; /<repo>/latest/<file> moves to each new release (kept 5 minutes at most)
+$moving = str_contains('/' . $f, '/latest/');
+header('Cache-Control: ' . ($kind === 'json' ? 'no-cache, max-age=0' : ($moving ? 'public, max-age=300' : 'public, max-age=31536000, immutable')));
 header('Accept-Ranges: bytes');
 if ($kind !== 'json') header('Content-Disposition: attachment; filename="' . $name . '"');
 

@@ -27,4 +27,6 @@ if ! diff "$work/want.txt" "$work/have.txt"; then echo "MISMATCH: latest.json no
 echo "all $(wc -l < "$work/want.txt") files match"
 scp -q -o BatchMode=yes -o IdentitiesOnly=yes -i $HOME/.ssh/hostinger_ed25519.pub -P 65002 "$work/latest.json" "u302998808@151.106.114.104:$R/$repo/latest.json.new"
 $H "mv -f $R/$repo/latest.json.new $R/$repo/latest.json && ln -sfn $tag $R/$repo/latest" && echo "latest.json and /$repo/latest/ now: $tag"
+# Hostinger's CDN may hold the old /latest/ files: cleared (they're kept 5 minutes at most anyway)
+hostinger hosting cdn purge-cache u302998808 radianceph.com >/dev/null 2>&1 && echo "CDN cleared" || echo "CDN not cleared (it expires within 5 minutes)"
 rm -rf "$work"
