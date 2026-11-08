@@ -1,6 +1,6 @@
 # Changelog
 
-## Next release — not released yet
+## v0.7.21 — 2026-11-08
 
 - **Downloading in the sidebar:** always there, it says how many liked songs aren't saved on this computer yet, e.g. "Downloading (3)". Its page lists them, the ones saving now first, says they play from the internet until they're saved, and has Fix missing to save them now. A click plays the song. Songs that only stream aren't listed: they're never saved. A liked song whose saved file was deleted is listed again, as Fix missing counts it (#66).
 - **Song, No vocals and Vocals only in the Mixer:** the sidebar Mixer now has the three buttons. They were made, but never on screen. Picked, No vocals carries on to the next songs: each is split as it starts (the next one ahead). Until a song is split, the buttons show Song (what you hear) with "Splitting for No vocals…", a spinner and Turn Off; No vocals comes on by itself once it's split (#67).
@@ -9,7 +9,7 @@
 - **After a crossfade into the queue's last song, Autoplay still adds songs like it** (the music stopped at that song's end before).
 - **Sharing with a phone on Windows uses a truly random key** for its QR (it was based on the clock there).
 - **Ready for the Windows app's next step:** when an update brings the new Windows app, the app that opens afterwards is the new one.
-- **The Play button spins while a song loads** (owner: "yung play pause button paikotin mo pag loading"): a soft ring goes round Play from the moment you pick a song until its music starts, as on the phone. The bar doesn't move when it shows.
+- **The Play button spins while a song loads:** a soft ring goes round Play from the moment you pick a song until its music starts, as on the phone. The bar doesn't move when it shows.
 - **Updates come from Radiance's own site:** the app asks downloads.radianceph.com for the newest version and downloads it from there. GitHub had started refusing update checks for whole neighbourhoods sharing one internet address, and its downloads were timing out. GitHub is used only if our site doesn't answer, and a download carries on from GitHub's copy if ours stops.
 - **Share Songs with a Phone sends songs without music videos:** phones have no music videos now, so the "With music videos" switch is gone and a phone gets the song, its parts, lyrics and cover.
 
