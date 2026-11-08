@@ -21,7 +21,7 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <!-- Program.cs starts the app itself, so the self-check and the screenshots run their own way -->
     <DefineConstants>$(DefineConstants);DISABLE_XAML_GENERATED_MAIN</DefineConstants>
-    <Version>0.8.0-beta.9</Version>
+    <Version>0.8.0-beta.10</Version>
     <Product>Radiance Music (beta)</Product>
     <Company>Radiance Innovation Centers</Company>
     <Copyright>Radiance Innovation Centers. GPL-3.0-or-later.</Copyright>
@@ -35,5 +35,7 @@
   </ItemGroup>
   <ItemGroup>
     <Content Include="..\..\packaging\windows\radiance-music.ico" Link="radiance-music.ico" CopyToOutputDirectory="PreserveNewest" />
+    <!-- the listening party's reactions (stage 4c-2): the Linux app's pictures, beside the app in icons\ -->
+    <Content Include="..\..\data\icons\rms-react-*.svg" Link="icons\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

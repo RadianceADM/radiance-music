@@ -11,7 +11,8 @@ namespace RadianceMusic.Pages;
 /// A Radiance Music Server's page, as the Linux app's render_server and filter_server (stage 4c): its name, its songs
 /// and who you are there, what its owner lets you do, the problem card when it isn't answering or took this computer's
 /// key away (Try Again, Servers…), Play / Shuffle / Refresh, Search NAME, and its songs (who added each). A click plays
-/// from there; liking one saves it into your own library. The party's card comes with stage 4c-2.
+/// from there (into its party when you're in it); liking one saves it into your own library. Its listening party's card
+/// sits under the head (stage 4c-2: Controls/PartyCard).
 /// </summary>
 public sealed partial class ServerPage : Page
 {
@@ -24,12 +25,15 @@ public sealed partial class ServerPage : Page
     private readonly ListView list = PageKit.SongList();
     private readonly DispatcherTimer typing = new() { Interval = TimeSpan.FromMilliseconds(300) };
     private string shownHead = "";
+    private readonly Border partySlot = new();
+    private PartyCard? party;
 
     public ServerPage()
     {
         InitializeComponent();
         NavigationCacheMode = NavigationCacheMode.Disabled;
         body.Children.Add(head);
+        body.Children.Add(partySlot);
         body.Children.Add(search);
         body.Children.Add(note);
         body.Children.Add(list);
@@ -57,19 +61,25 @@ public sealed partial class ServerPage : Page
         hub = a.Hub;
         address = what;
         hub.Change += OnChange;
+        party = new PartyCard(hub, address);
+        partySlot.Child = party;
         Render();
         hub.Engine.ServerRefresh(address); // asked again as it opens (the Linux app's open_server)
+        hub.Engine.ServerShown(address); // its party kept fresh while it's open
     }
 
     protected override void OnNavigatedFrom(NavigationEventArgs e)
     {
         typing.Stop();
-        if (hub != null) hub.Change -= OnChange;
+        if (hub == null) return;
+        hub.Change -= OnChange;
+        hub.Engine.ServerShown("");
     }
 
     private void OnChange(ChangeKind what)
     {
         if (what is ChangeKind.Servers or ChangeKind.Liked) Render();
+        if (what is ChangeKind.Party or ChangeKind.Servers) party?.Render();
     }
 
     /// <summary>The page as it is now; the head made again only when it changed (the search box keeps its text and focus).</summary>

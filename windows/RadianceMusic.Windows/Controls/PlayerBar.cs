@@ -173,7 +173,7 @@ internal sealed class PlayerBar : Grid
         SizeChanged += (_, e) => Fit(e.NewSize.Width);
         hub.Change += kind =>
         {
-            if (kind == ChangeKind.Now) Render();
+            if (kind is ChangeKind.Now or ChangeKind.Party) Render();
             else if (kind == ChangeKind.Position) Position();
         };
         Render();
@@ -301,7 +301,9 @@ internal sealed class PlayerBar : Grid
         next.IsEnabled = now.CanNext;
         playIcon.Glyph = now.Playing ? "\uE769" : "\uE768";
         ShowLoading(now.Loading && song != null);
-        ToolTipService.SetToolTip(play, now.Playing ? "Pause" : "Play");
+        // in a listening party: Play/Pause is the party's (when you control it) or hearing it here (stage 4c-2)
+        var party = hub.Engine.Party();
+        ToolTipService.SetToolTip(play, party.Server.Length > 0 ? party.BarTip : now.Playing ? "Pause" : "Play");
         ToolTipService.SetToolTip(shuffle, now.Shuffle ? "Shuffle: on" : "Shuffle");
         Tint(shuffle, now.Shuffle);
         var (glyph, tip) = now.Repeat switch

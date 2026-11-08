@@ -13,6 +13,13 @@
 - **Updates come from Radiance's own site:** the app asks downloads.radianceph.com for the newest version and downloads it from there. GitHub had started refusing update checks for whole neighbourhoods sharing one internet address, and its downloads were timing out. GitHub is used only if our site doesn't answer, and a download carries on from GitHub's copy if ours stops.
 - **Share Songs with a Phone sends songs without music videos:** phones have no music videos now, so the "With music videos" switch is gone and a phone gets the song, its parts, lyrics and cover.
 
+## Windows beta 0.8.0-beta.10 — not released yet (#45, stage 4c-2)
+
+- **Listening parties**, as the Linux app's: a server's page has its party card. Start a Party (and, if you like, let everyone play, pause and skip), or Join the one that's on. In it, everyone hears the same song at the same moment: the beta follows the server's clock and keeps in step by itself (the line under the heading says how close: "In time with the party (+12 ms)").
+- **In the party:** what plays and who added it, Play / Pause and Skip (the host's, or everyone's when the host allows), Hear It Here (the party plays on either way), six reactions and the last minute's, who's listening, Up next with Earlier, Later and Take it out, Leave, and End the Party for the host (it asks first). A song clicked on the server's page, or Add to the Party in its menu, goes into the party.
+- **Your own music waits:** joining keeps your queue and its place; leaving brings them back as they were. Picking a song of your own leaves the party (a note says so). In the player bar, Previous is off, and Next and Play/Pause go to the party.
+- **A dropped connection** says "Lost the party: joining again…" and joins again by itself.
+
 ## Windows beta 0.8.0-beta.9 — not released yet (#45, stage 4c-1)
 
 - **Radiance Music Servers**, as the Linux app's: Settings → Help → **Servers…** to join one with its invite link, see what its owner lets you do there, open its page, or leave it (it asks first). Servers joined in today's Windows app are already there.

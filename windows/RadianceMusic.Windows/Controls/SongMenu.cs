@@ -57,6 +57,15 @@ internal static class SongMenu
     {
         // (a hidden screenshot run: the menu drawn inside the window, so its PrintWindow picture has it)
         var menu = new MenuFlyout { ShouldConstrainToRootBounds = Program.Dev.Hidden };
+        // a song of the server whose listening party you're in: into the party (the Linux menu's first server item)
+        if (hub.Engine.CanAddToParty(key))
+        {
+            var words = Ffi.PartyWords();
+            var party = new MenuFlyoutItem { Text = words.AddToParty, Icon = new FontIcon { Glyph = "\uE7F6" } };
+            ToolTipService.SetToolTip(party, words.AddToPartyTip);
+            party.Click += (_, _) => hub.Engine.PartyAdd(key);
+            menu.Items.Add(party);
+        }
         foreach (var section in hub.Engine.SongMenu(key, place))
         {
             if (menu.Items.Count > 0) menu.Items.Add(new MenuFlyoutSeparator());

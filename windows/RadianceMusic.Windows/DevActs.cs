@@ -24,6 +24,9 @@ namespace RadianceMusic;
 ///   share:to|from  Share Songs with a Phone open that way; share-log  its state in the log
 ///   servers[:INVITE]  Servers… (an invite filled in); join:INVITE  joins by it; server-first  the first joined server's page;
 ///   servers-log  the servers and the first one's page in the log; server-play  its first song; server-leave  leaves it
+///   party-start[:everyone]  starts a party on the first joined server; party-join  joins its party; party-add  its first
+///   song into the party; party-react  a Fire; party-skip; party-hear:on|off; party-leave; party-end; party-log  the party
+///   card and view in the log (stage 4c-2)
 /// </summary>
 internal static class DevActs
 {
@@ -59,6 +62,22 @@ internal static class DevActs
             "server-first" => App.Hub.Engine.Servers().Rows is { Length: > 0 } sr && Do(() => window.Show("server:" + sr[0].Address)),
             "server-play" => App.Hub.Engine.Servers().Rows is { Length: > 0 } sp0 && App.Hub.Engine.ServerPage(sp0[0].Address, "").Songs is { Length: > 0 } sps && Do(() => App.Hub.Engine.PlayServer(sp0[0].Address, "", 0, sps[0].Key)),
             "server-leave" => App.Hub.Engine.Servers().Rows is { Length: > 0 } sl && Do(() => App.Hub.Engine.ServerLeave(sl[0].Address)),
+            "party-start" => App.Hub.Engine.Servers().Rows is { Length: > 0 } ps0 && Do(() => App.Hub.Engine.PartyStart(ps0[0].Address, arg == "everyone")),
+            "party-join" => App.Hub.Engine.Servers().Rows is { Length: > 0 } pj0 && Do(() => App.Hub.Engine.PartyJoin(pj0[0].Address)),
+            "party-add" => App.Hub.Engine.Servers().Rows is { Length: > 0 } pa0 && App.Hub.Engine.ServerPage(pa0[0].Address, "").Songs is { Length: > 0 } pas && Do(() => App.Hub.Engine.PartyAdd(pas[0].Key)),
+            "party-react" => Do(() => App.Hub.Engine.PartyReact("🔥")),
+            "party-skip" => Do(() => App.Hub.Engine.PartySkip()),
+            "party-hear" => Do(() => App.Hub.Engine.PartyHear(arg != "off")),
+            "party-leave" => Do(() => App.Hub.Engine.PartyLeave()),
+            "party-end" => Do(() => App.Hub.Engine.PartyEnd()),
+            "party-log" => Do(() =>
+            {
+                var rows = App.Hub.Engine.Servers().Rows;
+                if (rows.Length > 0) { var c = App.Hub.Engine.PartyCard(rows[0].Address); Crash.Note($"party card: '{c.Heading}' '{c.Line}' start {c.CanStart} join '{c.Join}' in {c.InIt}"); }
+                var p = App.Hub.Engine.Party();
+                var now = App.Hub.Engine.Now();
+                Crash.Note($"party: '{p.Heading}' pill {p.Pill} sync '{p.SyncLine}' now '{p.Now?.Title}' control {p.Control} host {p.Host} hearing {p.Hearing} members [{string.Join(", ", p.Members)}] next {p.UpNext.Length} reactions [{string.Join(", ", p.Reactions.Select(r => r.Tip))}] | bar '{now.Song?.Title}' at {now.At:0.0} playing {now.Playing} prev {now.CanPrevious} next {now.CanNext}");
+            }),
             "servers-log" => Do(() => { var s = App.Hub.Engine.Servers(); Crash.Note($"servers: [{string.Join("; ", s.Rows.Select(r => $"{r.Name} {r.Address} '{r.Subtitle}' known {r.Known} problem '{r.Problem}'"))}] note '{s.Note}' (error {s.NoteError})"); if (s.Rows.Length > 0) { var p = App.Hub.Engine.ServerPage(s.Rows[0].Address, ""); Crash.Note($"server page: {p.Name} '{p.Line}' '{p.Permissions}' songs [{string.Join(", ", p.Songs.Select(x => x.Title + " / " + x.Subtitle))}] note '{p.Note}'"); } }),
             "share-log" => Do(() => { var s = App.Hub.Engine.Share(); Crash.Note($"share: on {s.On}, to {s.ToPhone}, qr '{s.Qr}', caption '{s.Caption}', progress '{s.Progress}', firewall {s.Firewall}"); }),
             "seek-end" => double.TryParse(arg, System.Globalization.CultureInfo.InvariantCulture, out var before) && App.Hub.Engine.Now() is { Length: > 0 } sn && Do(() => App.Hub.Engine.Seek(Math.Max(0, sn.Length - before))),
