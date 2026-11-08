@@ -30,6 +30,10 @@ use serde_json::{json, Value};
 use crate::net;
 
 const LATEST: &str = "https://api.github.com/repos/RadianceADM/radiance-music/releases/latest";
+/// Our own copy of the newest release (owner, 2026-11-08): GitHub's JSON with its files on downloads.radianceph.com
+/// (Hostinger), mirrored at every release. Asked first: GitHub limits update checks to 60 an hour per IP, and
+/// everyone behind one Converge IP shares them (403), and its downloads timed out (504).
+const OWN_LATEST: &str = "https://downloads.radianceph.com/radiance-music/latest.json";
 /// The beta looks through the newest releases for the one carrying its installer.
 const RELEASES: &str = "https://api.github.com/repos/RadianceADM/radiance-music/releases?per_page=20";
 /// "Remind me later": a day (owner, 2026-10-31).
@@ -210,12 +214,40 @@ pub fn newer(a: &str, b: &str) -> bool {
     false
 }
 
+/// Where the newest release is asked for, in turn: our own copy first, then GitHub's; the beta: GitHub's list.
+fn feeds(beta: bool) -> Vec<&'static str> {
+    if beta {
+        vec![RELEASES]
+    } else {
+        vec![OWN_LATEST, LATEST]
+    }
+}
+
+/// The first feed that answers and reads, in turn (the last one's failure when none does).
+fn ask_feeds(feeds: &[String]) -> Result<Value, String> {
+    let mut last = String::from("no feed to ask");
+    for feed in feeds {
+        let answer = net::agent().get(feed).header("Accept", "application/vnd.github+json").call();
+        match answer {
+            Ok(mut resp) => match resp.body_mut().read_json::<Value>() {
+                Ok(j) => return Ok(j),
+                Err(e) => last = format!("the answer didn't read ({e})"),
+            },
+            Err(e) => last = format!("couldn't reach {} ({e})", if feed.contains("github.com") { "GitHub" } else { "radianceph.com" }),
+        }
+        crate::log::note(&format!("update check: {feed}: {last}"));
+    }
+    Err(last)
+}
+
 /// The newest release, with this install's file. (Worker thread.)
 pub fn latest(install: &Install) -> Result<Release, String> {
     // RADIANCE_UPDATE_FEED: another answer in GitHub's shape (end-to-end tests of updating)
-    let feed = std::env::var("RADIANCE_UPDATE_FEED").unwrap_or_else(|_| (if beta().is_some() { RELEASES } else { LATEST }).into());
-    let mut resp = net::agent().get(&feed).header("Accept", "application/vnd.github+json").call().map_err(|e| format!("couldn't reach GitHub ({e})"))?;
-    let j: Value = resp.body_mut().read_json().map_err(|e| format!("GitHub's answer didn't read ({e})"))?;
+    let feeds: Vec<String> = match std::env::var("RADIANCE_UPDATE_FEED") {
+        Ok(f) => vec![f],
+        Err(_) => feeds(beta().is_some()).into_iter().map(String::from).collect(),
+    };
+    let j = ask_feeds(&feeds)?;
     if beta().is_some() {
         // no beta on the newest releases: nothing newer (the version on now)
         return Ok(beta_from(&j).unwrap_or_else(|| Release { version: version_here(), ..Default::default() }));
@@ -918,6 +950,23 @@ mod tests {
         assert!(asks_at("0.7.13", None, now + day, now + day));
         assert!(!asks_at("0.7.13", Some("0.7.13"), 0, now));
         assert!(asks_at("0.7.14", Some("0.7.13"), 0, now));
+    }
+
+    /// Owner, 2026-11-08: GitHub refused update checks (403: its 60-an-hour limit per IP, shared by everyone behind
+    /// one Converge IP) and its downloads timed out (504). The newest release is asked of our own copy on Hostinger
+    /// first (downloads.radianceph.com, the same JSON with our addresses), GitHub only after it; the beta's list stays
+    /// GitHub's (the beta isn't public).
+    #[test]
+    fn the_newest_release_is_asked_of_our_own_site_first() {
+        assert_eq!(feeds(false), ["https://downloads.radianceph.com/radiance-music/latest.json", LATEST]);
+        assert_eq!(feeds(true), [RELEASES]);
+        let ours = json!({
+            "tag_name": "v0.7.20", "body": "- one", "html_url": "https://github.com/RadianceADM/radiance-music/releases/tag/v0.7.20",
+            "assets": [{"name": "RadianceMusic-Setup.exe", "size": 9, "digest": "sha256:aa",
+                        "browser_download_url": "https://downloads.radianceph.com/radiance-music/v0.7.20/RadianceMusic-Setup.exe"}]
+        });
+        let w = release_from(&ours, &Install::Windows(PathBuf::from("C:/x"))).unwrap();
+        assert_eq!((w.version.as_str(), w.url.as_str(), w.sha256.as_str()), ("0.7.20", "https://downloads.radianceph.com/radiance-music/v0.7.20/RadianceMusic-Setup.exe", "aa"));
     }
 
     #[test]
