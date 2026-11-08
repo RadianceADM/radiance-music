@@ -23,7 +23,7 @@ namespace RadianceMusic;
 ///   transition:off|crossfade|dj, fade:N  Between Songs (Settings → Playing); seek-end:N  N seconds before the song's end
 ///   share:to|from  Share Songs with a Phone open that way; share-log  its state in the log
 ///   servers[:INVITE]  Servers… (an invite filled in); join:INVITE  joins by it; server-first  the first joined server's page;
-///   servers-log  the servers and the first one's page in the log
+///   servers-log  the servers and the first one's page in the log; server-play  its first song; server-leave  leaves it
 /// </summary>
 internal static class DevActs
 {
@@ -57,6 +57,8 @@ internal static class DevActs
             "servers" => window.Content?.XamlRoot is { } svx && Do(() => _ = Dialogs.ServersDialog.Show(App.Hub, svx, arg.Length > 0 ? arg : null)),
             "join" => Do(() => App.Hub.Engine.ServerJoin(arg)),
             "server-first" => App.Hub.Engine.Servers().Rows is { Length: > 0 } sr && Do(() => window.Show("server:" + sr[0].Address)),
+            "server-play" => App.Hub.Engine.Servers().Rows is { Length: > 0 } sp0 && App.Hub.Engine.ServerPage(sp0[0].Address, "").Songs is { Length: > 0 } sps && Do(() => App.Hub.Engine.PlayServer(sp0[0].Address, "", 0, sps[0].Key)),
+            "server-leave" => App.Hub.Engine.Servers().Rows is { Length: > 0 } sl && Do(() => App.Hub.Engine.ServerLeave(sl[0].Address)),
             "servers-log" => Do(() => { var s = App.Hub.Engine.Servers(); Crash.Note($"servers: [{string.Join("; ", s.Rows.Select(r => $"{r.Name} {r.Address} '{r.Subtitle}' known {r.Known} problem '{r.Problem}'"))}] note '{s.Note}' (error {s.NoteError})"); if (s.Rows.Length > 0) { var p = App.Hub.Engine.ServerPage(s.Rows[0].Address, ""); Crash.Note($"server page: {p.Name} '{p.Line}' '{p.Permissions}' songs [{string.Join(", ", p.Songs.Select(x => x.Title + " / " + x.Subtitle))}] note '{p.Note}'"); } }),
             "share-log" => Do(() => { var s = App.Hub.Engine.Share(); Crash.Note($"share: on {s.On}, to {s.ToPhone}, qr '{s.Qr}', caption '{s.Caption}', progress '{s.Progress}', firewall {s.Firewall}"); }),
             "seek-end" => double.TryParse(arg, System.Globalization.CultureInfo.InvariantCulture, out var before) && App.Hub.Engine.Now() is { Length: > 0 } sn && Do(() => App.Hub.Engine.Seek(Math.Max(0, sn.Length - before))),
