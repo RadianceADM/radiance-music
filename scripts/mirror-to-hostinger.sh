@@ -26,5 +26,5 @@ $H "cd $R/$repo/$tag && sha256sum *" | sort > "$work/have.txt"
 if ! diff "$work/want.txt" "$work/have.txt"; then echo "MISMATCH: latest.json not switched"; exit 1; fi
 echo "all $(wc -l < "$work/want.txt") files match"
 scp -q -o BatchMode=yes -o IdentitiesOnly=yes -i $HOME/.ssh/hostinger_ed25519.pub -P 65002 "$work/latest.json" "u302998808@151.106.114.104:$R/$repo/latest.json.new"
-$H "mv -f $R/$repo/latest.json.new $R/$repo/latest.json" && echo "latest.json now: $tag"
+$H "mv -f $R/$repo/latest.json.new $R/$repo/latest.json && ln -sfn $tag $R/$repo/latest" && echo "latest.json and /$repo/latest/ now: $tag"
 rm -rf "$work"
