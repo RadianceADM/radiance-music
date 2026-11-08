@@ -6,6 +6,7 @@
 
 use super::*;
 use crate::servers::{self, Asked, Failure, Joined, Live, Me, Party, Song};
+use radiance_core::server_words as rw;
 
 pub(super) const CSS: &str = "
 .rms-card { padding: 16px 18px; border-radius: 16px; background: alpha(#ffffff, 0.05); }
@@ -154,47 +155,6 @@ fn icon_button(icon: &str, label: &str) -> gtk::Button {
 fn clear(b: &gtk::Box) {
     while let Some(c) = b.first_child() {
         b.remove(&c);
-    }
-}
-
-/// "a", "a and b", "a, b and c".
-fn and_list(items: &[&str]) -> String {
-    match items.len() {
-        0 => String::new(),
-        1 => items[0].to_string(),
-        n => format!("{} and {}", items[..n - 1].join(", "), items[n - 1]),
-    }
-}
-
-/// What you can do on a server, in plain words.
-fn can_words(me: &Me) -> String {
-    let mut can = vec!["play its songs"];
-    if me.can_add {
-        can.push("add songs");
-    }
-    if me.can_split {
-        can.push("split songs");
-    }
-    can.push(if me.can_host { "join and host listening parties" } else { "join listening parties" });
-    format!("You can {}.", and_list(&can))
-}
-
-/// What the owner turned off for you there ("" when nothing is).
-fn off_words(me: &Me) -> String {
-    let mut off = vec![];
-    if !me.can_add {
-        off.push("adding songs");
-    }
-    if !me.can_split {
-        off.push("splitting");
-    }
-    if !me.can_host {
-        off.push("hosting parties");
-    }
-    if off.is_empty() || me.owner {
-        String::new()
-    } else {
-        format!("Its owner turned off {} for you.", and_list(&off))
     }
 }
 
@@ -361,7 +321,7 @@ impl Ui {
         self.render_server_nav();
         self.open_line(now);
         self.fetch_server(now);
-        self.toast(&format!("{} is at {} now: the same server, your songs from it as they were", now.name, now.address));
+        self.toast(&rw::moved_toast(&now.name, &now.address));
     }
 
     /// The sidebar: each joined server under Library (after Genres), named as it's called.
@@ -382,7 +342,7 @@ impl Ui {
             let line = gtk::Box::builder().spacing(12).build();
             line.append(&gtk::Image::from_icon_name("network-server-symbolic"));
             line.append(&gtk::Label::builder().label(&s.name).xalign(0.0).ellipsize(gtk::pango::EllipsizeMode::End).build());
-            let row = gtk::ListBoxRow::builder().child(&line).name(format!("server:{}", s.address)).tooltip_text(format!("{}: its songs, its splitting and its listening party ({})", s.name, s.address)).build();
+            let row = gtk::ListBoxRow::builder().child(&line).name(format!("server:{}", s.address)).tooltip_text(rw::nav_tooltip(&s.name, &s.address)).build();
             self.nav.insert(&row, at + 1 + i as i32);
         }
         self.sync_nav();
@@ -482,7 +442,7 @@ impl Ui {
     /// Servers…, its invite link filled in when one came (an "Open in Radiance
     /// Music" link from a server's join page): one click on Join.
     pub(super) fn servers_dialog_with(self: &Rc<Self>, link: Option<&str>) {
-        let dialog = adw::Dialog::builder().title("Servers").content_width(480).build();
+        let dialog = adw::Dialog::builder().title(rw::SERVERS_TITLE).content_width(480).build();
         let view = adw::ToolbarView::new();
         view.add_top_bar(&adw::HeaderBar::new());
         let body = gtk::Box::builder().orientation(gtk::Orientation::Vertical).spacing(18).margin_top(6).margin_bottom(24).margin_start(18).margin_end(18).build();
@@ -491,7 +451,7 @@ impl Ui {
         dialog.set_child(Some(&view));
         body.append(
             &gtk::Label::builder()
-                .label("A Radiance Music Server is your own, or a friend's: its songs play here, it splits songs for everyone on it, and it holds listening parties. Its owner sends you an invite link.")
+                .label(rw::SERVERS_INTRO)
                 .wrap(true)
                 .xalign(0.0)
                 .css_classes(["dim-label"])
@@ -499,9 +459,9 @@ impl Ui {
         );
 
         // join one
-        let join_group = adw::PreferencesGroup::builder().title("Join a Server").description("Paste the invite link its owner sent you. Each link works once, on one device.").build();
-        let entry = adw::EntryRow::builder().title("Invite link (https://…/join/…)").build();
-        let join = icon_button("list-add-symbolic", "Join");
+        let join_group = adw::PreferencesGroup::builder().title(rw::JOIN_TITLE).description(rw::JOIN_DESCRIPTION).build();
+        let entry = adw::EntryRow::builder().title(rw::INVITE_LINK).build();
+        let join = icon_button("list-add-symbolic", rw::JOIN);
         join.set_valign(gtk::Align::Center);
         join.add_css_class("suggested-action");
         entry.add_suffix(&join);
@@ -511,7 +471,7 @@ impl Ui {
         body.append(&join_group);
 
         // yours
-        let list_group = adw::PreferencesGroup::builder().title("Your Servers").build();
+        let list_group = adw::PreferencesGroup::builder().title(rw::YOUR_SERVERS).build();
         body.append(&list_group);
         let rows: Rc<RefCell<Vec<gtk::Widget>>> = Rc::default();
         // the list, made again after a join or a leave (kept while the dialog is open)
@@ -525,7 +485,7 @@ impl Ui {
                 }
                 let list = me.settings.borrow().servers.clone();
                 if list.is_empty() {
-                    let r = adw::ActionRow::builder().title("No servers yet").subtitle("Paste an invite link above to join one.").build();
+                    let r = adw::ActionRow::builder().title(rw::NO_SERVERS).subtitle(rw::NO_SERVERS_SUB).build();
                     r.add_prefix(&gtk::Image::from_icon_name("network-server-symbolic"));
                     group.add(&r);
                     rows.borrow_mut().push(r.upcast());
@@ -573,11 +533,11 @@ impl Ui {
                     }
                 };
                 if let Some(s) = me.joined(&address) {
-                    note.set_text(&format!("This computer is on {} already. Its songs are under Library in the sidebar.", s.name));
+                    note.set_text(&rw::already_on(&s.name));
                     return;
                 }
                 join.set_sensitive(false);
-                note.set_text("Joining…");
+                note.set_text(rw::JOINING);
                 let device = glib::host_name().to_string();
                 let (mw, ew, nw, jw, f) = (Rc::downgrade(&me), entry.downgrade(), note.downgrade(), join.downgrade(), f.clone());
                 // (a server already joined, at another address: it moves here)
@@ -594,7 +554,7 @@ impl Ui {
                                 e.set_text("");
                             }
                             if let Some(n) = &note {
-                                n.set_text(&format!("{} moved to {}: the same server, your songs from it as they were.", now.name, now.address));
+                                n.set_text(&rw::moved_line(&now.name, &now.address));
                             }
                             me.server_moved(&was, &now);
                             f();
@@ -605,7 +565,7 @@ impl Ui {
                                 e.set_text("");
                             }
                             if let Some(n) = &note {
-                                n.set_text(&format!("Joined {}. Its songs are under Library in the sidebar.", joined.name));
+                                n.set_text(&rw::joined_line(&joined.name));
                             }
                             me.settings.borrow_mut().servers.push(joined.clone());
                             settings::save(&me.settings.borrow());
@@ -614,7 +574,7 @@ impl Ui {
                             me.fetch_server(&joined);
                             me.open_line(&joined);
                             f();
-                            me.toast(&format!("Joined {}", joined.name));
+                            me.toast(&rw::joined_toast(&joined.name));
                         }
                         Err(e) => {
                             if let Some(n) = &note {
@@ -642,26 +602,26 @@ impl Ui {
         let (who, problem) = self.known(&s.address, |k| (k.me.clone(), k.problem.clone()));
         let state = match (&who, &problem) {
             (_, Some(f)) => f.words(&s.name),
-            (Some(m), None) => format!("{} · you're {}", s.address, if m.owner { "its owner".to_string() } else { m.name.clone() }),
-            (None, None) => format!("{} · checking…", s.address),
+            (Some(m), None) => rw::row_subtitle(&s.address, m.owner, &m.name),
+            (None, None) => rw::row_checking(&s.address),
         };
         // (one server: open, what you can do there in sight)
         let one = self.settings.borrow().servers.len() == 1;
         let row = adw::ExpanderRow::builder().title(&s.name).subtitle(&state).subtitle_lines(3).use_markup(false).expanded(one).build();
         row.add_prefix(&gtk::Image::from_icon_name(if problem.as_ref().is_some_and(|f| f.unreachable()) { "network-offline-symbolic" } else { "network-server-symbolic" }));
-        let open = icon_button("go-next-symbolic", "Open Its Page");
-        open.set_tooltip_text(Some("Its songs and its listening party"));
-        let leave = icon_button("system-log-out-symbolic", "Leave");
-        leave.set_tooltip_text(Some("This computer forgets its key to this server"));
+        let open = icon_button("go-next-symbolic", rw::OPEN_PAGE);
+        open.set_tooltip_text(Some(rw::OPEN_PAGE_TIP));
+        let leave = icon_button("system-log-out-symbolic", rw::LEAVE);
+        leave.set_tooltip_text(Some(rw::LEAVE_TIP));
         // what you can do there
         if let Some(m) = &who {
-            for (yes, what) in [(true, "Play its songs and join its parties"), (m.can_add, "Add songs to it"), (m.can_split, "Split songs on it"), (m.can_host, "Host a listening party")] {
-                let r = adw::ActionRow::builder().title(what).subtitle(if yes { "Yes" } else { "Off for you: its owner's choice" }).build();
+            for (yes, what) in rw::permission_rows(m.can_add, m.can_split, m.can_host) {
+                let r = adw::ActionRow::builder().title(what).subtitle(rw::permission_answer(yes)).build();
                 r.add_prefix(&gtk::Image::from_icon_name(if yes { "object-select-symbolic" } else { "action-unavailable-symbolic" }));
                 row.add_row(&r);
             }
         } else if problem.is_none() {
-            row.add_row(&adw::ActionRow::builder().title("Asking the server what you can do there…").build());
+            row.add_row(&adw::ActionRow::builder().title(rw::ASKING_WHAT_YOU_CAN).build());
         }
         let buttons = adw::WrapBox::builder().child_spacing(8).line_spacing(8).margin_top(10).margin_bottom(10).margin_start(12).margin_end(12).build();
         buttons.append(&open);
@@ -680,12 +640,9 @@ impl Ui {
         let (me, server) = (Rc::downgrade(self), s.clone());
         leave.connect_clicked(move |_| {
             let Some(me) = me.upgrade() else { return };
-            let ask = adw::AlertDialog::new(
-                Some(&format!("Leave {}?", server.name)),
-                Some(&format!("This computer forgets its key to {0}: its songs, splitting and parties go from here. Songs you saved from it stay in your library. To come back, ask its owner for a new invite.", server.name)),
-            );
-            ask.add_response("cancel", "Cancel");
-            ask.add_response("leave", "Leave");
+            let ask = adw::AlertDialog::new(Some(&rw::leave_heading(&server.name)), Some(&rw::leave_body(&server.name)));
+            ask.add_response("cancel", rw::CANCEL);
+            ask.add_response("leave", rw::LEAVE);
             ask.set_response_appearance("leave", adw::ResponseAppearance::Destructive);
             ask.set_close_response("cancel");
             let (w, s, again) = (Rc::downgrade(&me), server.clone(), refill.clone());
@@ -742,7 +699,7 @@ impl Ui {
         }
         self.render_server_nav();
         self.update_voice_status();
-        self.toast(&if told { format!("Left {}", s.name) } else { format!("Left {} on this computer (the server didn't take it: its owner can remove this computer under People)", s.name) });
+        self.toast(&rw::left_toast(&s.name, told));
     }
 
     // ------------------------------------------------------------------ a server's page
@@ -788,16 +745,10 @@ impl Ui {
         r.spinner.set_visible(fetching);
         let head = gtk::Box::builder().orientation(gtk::Orientation::Vertical).spacing(6).build();
         head.append(&gtk::Label::builder().label(&server.name).xalign(0.0).wrap(true).wrap_mode(gtk::pango::WrapMode::WordChar).css_classes(["page-title"]).build());
-        let mut sub = vec![];
-        if let Some(list) = &songs {
-            sub.push(format!("{} song{}", list.len(), if list.len() == 1 { "" } else { "s" }));
-        }
+        let sub = rw::page_sub(songs.as_ref().map(|l| l.len()), who.as_ref().map(|m| (m.owner, m.name.as_str())));
+        head.append(&gtk::Label::builder().label(sub.as_str()).xalign(0.0).wrap(true).css_classes(["dim-label"]).visible(!sub.is_empty()).build());
         if let Some(m) = &who {
-            sub.push(if m.owner { "Your own server".to_string() } else { format!("You're on it as {}", m.name) });
-        }
-        head.append(&gtk::Label::builder().label(sub.join(" · ")).xalign(0.0).wrap(true).css_classes(["dim-label"]).visible(!sub.is_empty()).build());
-        if let Some(m) = &who {
-            let line = [can_words(m), off_words(m)].iter().filter(|x| !x.is_empty()).cloned().collect::<Vec<_>>().join(" ");
+            let line = rw::permissions_line(m.owner, m.can_add, m.can_split, m.can_host);
             head.append(&gtk::Label::builder().label(line).xalign(0.0).wrap(true).css_classes(["dim-label", "caption"]).build());
         }
         r.page.append(&head);
@@ -810,7 +761,7 @@ impl Ui {
             line.append(&gtk::Label::builder().label(f.words(&server.name)).xalign(0.0).wrap(true).hexpand(true).build());
             card.append(&line);
             let buttons = adw::WrapBox::builder().child_spacing(8).line_spacing(8).build();
-            let again = icon_button("view-refresh-symbolic", "Try Again");
+            let again = icon_button("view-refresh-symbolic", rw::TRY_AGAIN);
             let (me, s) = (Rc::downgrade(self), server.clone());
             again.connect_clicked(move |_| {
                 if let Some(me) = me.upgrade() {
@@ -819,7 +770,7 @@ impl Ui {
             });
             buttons.append(&again);
             if f.signed_out() {
-                let open = icon_button("network-server-symbolic", "Servers…");
+                let open = icon_button("network-server-symbolic", rw::SERVERS_MENU);
                 let me = Rc::downgrade(self);
                 open.connect_clicked(move |_| {
                     if let Some(me) = me.upgrade() {
@@ -835,14 +786,14 @@ impl Ui {
         // play them all, or shuffled; ask again
         let tracks: Rc<Vec<Track>> = Rc::new(songs.as_ref().map(|l| l.iter().map(|s| s.track(&server)).collect()).unwrap_or_default());
         let buttons = adw::WrapBox::builder().child_spacing(10).line_spacing(10).build();
-        let play = icon_button("media-playback-start-symbolic", "Play");
+        let play = icon_button("media-playback-start-symbolic", rw::PLAY);
         play.add_css_class("suggested-action");
         play.add_css_class("pill-button");
-        let shuffle = icon_button("media-playlist-shuffle-symbolic", "Shuffle");
+        let shuffle = icon_button("media-playlist-shuffle-symbolic", rw::SHUFFLE);
         shuffle.add_css_class("pill-button");
-        let refresh = icon_button("view-refresh-symbolic", "Refresh");
+        let refresh = icon_button("view-refresh-symbolic", rw::REFRESH);
         refresh.add_css_class("pill-button");
-        refresh.set_tooltip_text(Some("Ask the server again for its songs and its party"));
+        refresh.set_tooltip_text(Some(rw::REFRESH_TIP));
         play.set_sensitive(!tracks.is_empty());
         shuffle.set_sensitive(!tracks.is_empty());
         let (me, l) = (Rc::downgrade(self), tracks.clone());
@@ -871,7 +822,7 @@ impl Ui {
         r.page.append(&r.party_box);
         self.render_party_card();
 
-        r.search.set_placeholder_text(Some(&format!("Search {}", server.name)));
+        r.search.set_placeholder_text(Some(&rw::search_placeholder(&server.name)));
         r.page.append(&r.search);
         // the songs (in a party: a click adds one to it)
         for (_, row) in r.rows.borrow_mut().drain(..) {
@@ -882,11 +833,10 @@ impl Ui {
         for (i, t) in tracks.iter().enumerate() {
             let row = self.track_row(t, Place::Server(tracks.clone(), i));
             if let Some(by) = songs.as_ref().and_then(|l| l.get(i)).and_then(|s| s.added_by.clone()) {
-                let line = t.byline();
-                row.set_subtitle(&if line.is_empty() { format!("Added by {by}") } else { format!("{line} · added by {by}") });
+                row.set_subtitle(&rw::added_by(&t.byline(), &by));
             }
             if in_party {
-                let add = gtk::Button::builder().icon_name("list-add-symbolic").tooltip_text("Add to the party's queue").valign(gtk::Align::Center).css_classes(["flat", "circular"]).build();
+                let add = gtk::Button::builder().icon_name("list-add-symbolic").tooltip_text(rw::ADD_TO_PARTY_TIP).valign(gtk::Align::Center).css_classes(["flat", "circular"]).build();
                 let (me, t2) = (Rc::downgrade(self), t.clone());
                 add.connect_clicked(move |_| {
                     if let Some(me) = me.upgrade() {
@@ -916,15 +866,15 @@ impl Ui {
         }
         let (songs, problem, fetching, who) = self.known(&address, |k| (k.songs.as_ref().map(|s| s.len()), k.problem.is_some(), k.fetching, k.me.clone()));
         let text = match songs {
-            None if fetching => format!("Getting the songs on {name}…"),
+            None if fetching => rw::getting_songs(&name),
             None => String::new(), // (the card above says why)
-            Some(0) if who.as_ref().is_some_and(|m| m.can_add) => format!("No songs on {name} yet. Add one of yours: right-click a liked song, then “Add to {name}”."),
-            Some(0) => format!("No songs on {name} yet."),
-            Some(_) if shown == 0 => format!("No songs on {name} match “{q}”."),
-            Some(n) if self.in_party_on(&address) => format!("{n} songs. Click one to add it to the party."),
-            Some(n) if !q.is_empty() => format!("{shown} of {n} songs match."),
-            Some(_) if problem => format!("As {name} last sent them."),
-            Some(_) => "Click one to play it. Like it (the heart) to save it, with its parts, lyrics and cover, into your own library.".to_string(),
+            Some(0) if who.as_ref().is_some_and(|m| m.can_add) => rw::no_songs_add(&name),
+            Some(0) => rw::no_songs(&name),
+            Some(_) if shown == 0 => rw::no_match(&name, &q),
+            Some(n) if self.in_party_on(&address) => rw::party_songs(n),
+            Some(n) if !q.is_empty() => rw::some_match(shown, n),
+            Some(_) if problem => rw::as_last_sent(&name),
+            Some(_) => rw::SONGS_HINT.to_string(),
         };
         self.rms.group.set_description(if text.is_empty() { None } else { Some(&text) });
         self.rms.search.set_visible(songs.is_some_and(|n| n > 0));
@@ -936,7 +886,7 @@ impl Ui {
     pub fn open_app_link(self: &Rc<Self>, uri: &str) {
         let Some(link) = servers::invite_in_app_link(uri) else {
             self.window.present();
-            self.toast("That link isn't a Radiance Music Server invite. Ask the server's owner for a new one.");
+            self.toast(rw::NOT_AN_INVITE);
             return;
         };
         crate::log::note("opened with a server's invite link");
@@ -1006,13 +956,13 @@ impl Ui {
         let (me, song) = (Rc::downgrade(self), t.clone());
         bg(move || servers::fetch_parts(&song), {
             let (key, title) = (t.key(), t.title.clone());
-            move |got| {
+            move |got: Result<usize, String>| {
                 let Some(me) = me.upgrade() else { return };
                 me.rms.fetching_parts.borrow_mut().remove(&key);
                 match got {
                     Ok(n) => crate::log::note(&format!("“{title}”: its {n} parts from its server, for the Mixer")),
                     Err(e) => {
-                        me.toast(&format!("“{title}”'s parts didn't come from its server: {e}"));
+                        me.toast(&rw::parts_didnt_come(&title, &e));
                         return;
                     }
                 }
@@ -1054,14 +1004,14 @@ impl Ui {
             let Some(me) = me.upgrade() else { return };
             match asked {
                 Ok(Asked::Split) => {
-                    me.toast(&format!("“{}” is split on {} already: its parts are there for everyone", track.title, server.name));
+                    me.toast(&rw::split_already(&track.title, &server.name));
                     if let Some((_, song)) = servers::song_of(&track) {
                         me.refresh_song(&server, song.id);
                     }
                 }
                 Ok(Asked::Queued(job)) => {
                     crate::log::note(&format!("asked {} to split “{}”", server.name, track.title));
-                    me.toast(&format!("{} splits “{}”: {}", server.name, track.title, job.note));
+                    me.toast(&rw::splits_now(&server.name, &track.title, &job.note));
                     me.rms.away.borrow_mut().push(Away { server, job, track, ahead: None, next_turn: None });
                     me.follow_away();
                     me.update_voice_status();
@@ -1116,14 +1066,14 @@ impl Ui {
                 Some(j) if j.state == "done" => {
                     // its words may be timed now: the server's lyrics again, not a copy kept here
                     let _ = fs::remove_file(lyrics_path(&t));
-                    self.toast(&format!("“{}” is split on {}: its parts are there for everyone", t.title, server.name));
+                    self.toast(&rw::split_done(&t.title, &server.name));
                     crate::log::note(&format!("{} split “{}”", server.name, t.title));
                     if self.current.borrow().as_ref().is_some_and(|c| c.key() == t.key()) {
                         self.refresh_lyrics();
                     }
                 }
-                Some(j) if j.state == "failed" => self.toast(&format!("{}: {}", server.name, j.note)),
-                _ => self.toast(&format!("“{}” was taken out of {}'s split queue", t.title, server.name)),
+                Some(j) if j.state == "failed" => self.toast(&rw::split_failed(&server.name, &j.note)),
+                _ => self.toast(&rw::taken_out(&t.title, &server.name)),
             }
             // the song as it is now (its parts), not the whole list
             if let Some((_, song)) = servers::song_of(&t) {
@@ -1143,20 +1093,14 @@ impl Ui {
             r.away_bar.set_visible(false);
             return false;
         };
-        let more = if away.len() > 1 { format!(" ({} more on servers)", away.len() - 1) } else { String::new() };
-        let turn = a.next_turn.as_ref().map(|n| format!(" Next turn: {n}.")).unwrap_or_default();
-        let text = match a.job.state.as_str() {
-            "splitting" => format!("Splitting “{}” on {}{more}", a.track.title, a.server.name),
-            "timing" => format!("Timing “{}”'s words on {}{more}", a.track.title, a.server.name),
-            _ => format!("“{}” on {}: {}{turn}{more}", a.track.title, a.server.name, a.job.note),
-        };
+        let text = rw::away_line(&a.job.state, &a.track.title, &a.server.name, &a.job.note, a.next_turn.as_deref(), away.len() - 1);
         r.away_line.set_label(&text);
         r.away_line.set_visible(true);
         let working = matches!(a.job.state.as_str(), "splitting" | "timing");
         r.away_bar.set_visible(working);
         if working {
             r.away_bar.set_fraction(a.job.progress.clamp(0.0, 1.0));
-            r.away_bar.set_text(Some(&format!("{} · {:.0}%", if a.job.state == "timing" { "Timing the words" } else { "Splitting" }, a.job.progress * 100.0)));
+            r.away_bar.set_text(Some(&rw::away_bar(&a.job.state, a.job.progress)));
         }
         true
     }
@@ -1167,39 +1111,25 @@ impl Ui {
             .away
             .borrow()
             .iter()
-            .map(|a| {
-                let where_ = match (a.job.state.as_str(), a.ahead) {
-                    ("splitting" | "timing", _) => format!("On {} · {}", a.server.name, a.job.note),
-                    (_, Some(n)) => format!("On {} · number {} in line{}", a.server.name, n + 1, a.next_turn.as_ref().map(|t| format!(" · next turn: {t}")).unwrap_or_default()),
-                    _ => format!("On {} · {}", a.server.name, a.job.note),
-                };
-                (a.track.clone(), where_)
-            })
+            .map(|a| (a.track.clone(), rw::away_row(&a.job.state, a.ahead, &a.server.name, &a.job.note, a.next_turn.as_deref())))
             .collect()
     }
 
     /// Adds one of your saved songs to a server (POST /api/songs).
     pub(super) fn add_to_server(self: &Rc<Self>, t: &Track, server: &Joined) {
-        self.toast(&format!("Adding “{}” to {}…", t.title, server.name));
+        self.toast(&rw::adding(&t.title, &server.name));
         let (me, s, song) = (Rc::downgrade(self), server.clone(), t.clone());
         bg(move || servers::upload(&s, &song), {
             let (server, title) = (server.clone(), t.title.clone());
             move |added: Result<servers::Added, String>| {
                 let Some(me) = me.upgrade() else { return };
-                // what went: its extras, its parts (when this computer had split it)
-                let went = |a: &servers::Added| {
-                    let mut w: Vec<&str> = a.extras.iter().map(String::as_str).collect();
-                    if !a.parts.is_empty() {
-                        w.push("parts");
-                    }
-                    and_list(&w)
-                };
                 match added {
-                    Ok(a) if a.skipped && a.extras.is_empty() && a.parts.is_empty() => me.toast(&format!("{} has “{title}” already", server.name)),
-                    Ok(a) if a.skipped => me.toast(&format!("{} had “{title}” already; its {} went with it", server.name, went(&a))),
+                    Ok(a) if a.skipped && a.extras.is_empty() && a.parts.is_empty() => me.toast(&rw::has_already(&server.name, &title)),
+                    // what went: its extras, its parts (when this computer had split it)
+                    Ok(a) if a.skipped => me.toast(&rw::had_already(&server.name, &title, &rw::what_went(&a.extras, !a.parts.is_empty()))),
                     Ok(a) => {
                         crate::log::note(&format!("added “{title}” to {}{}", server.name, if a.parts.is_empty() { "" } else { " with its parts" }));
-                        me.toast(&if a.parts.is_empty() { format!("“{title}” is on {} now, for everyone there", server.name) } else { format!("“{title}” is on {} now with its parts, for everyone there", server.name) });
+                        me.toast(&rw::on_it_now(&title, &server.name, !a.parts.is_empty()));
                     }
                     Err(e) => me.toast(&e),
                 }
@@ -1228,7 +1158,7 @@ impl Ui {
                     match went {
                         Ok((parts, _)) if !parts.is_empty() => {
                             crate::log::note(&format!("the parts of “{title}” went to {}", s.name));
-                            me.toast(&format!("“{title}”'s parts are on {} now, for everyone there", s.name));
+                            me.toast(&rw::parts_on_it_now(&title, &s.name));
                         }
                         Ok(_) => {}
                         Err(e) => crate::log::note(&format!("the parts of “{title}” didn't go to {}: {e}", s.name)),
@@ -1250,15 +1180,15 @@ impl Ui {
     /// Why a server's song won't play, in plain words (None: not a server's song).
     pub(super) fn server_reason(&self, why: &str) -> Option<(String, bool)> {
         let t = self.current.borrow().clone().filter(|t| t.source == Source::Server && t.file.is_none())?;
-        let Some(s) = servers::of_track(&t) else { return Some(("you left its server".into(), false)) };
+        let Some(s) = servers::of_track(&t) else { return Some((rw::LEFT_ITS_SERVER.into(), false)) };
         let e = why.to_lowercase();
         let any = |words: &[&str]| words.iter().any(|w| e.contains(w));
         Some(if any(&["unauthorized", "401", "forbidden"]) {
-            (format!("this computer isn't joined to {} anymore", s.name), true)
+            (rw::not_joined_anymore(&s.name), true)
         } else if any(&["not found", "404"]) {
-            (format!("it isn't on {} anymore", s.name), false)
+            (rw::not_on_it_anymore(&s.name), false)
         } else if any(&["resolve", "could not connect", "connection refused", "unreachable", "timed out", "timeout", "no route", "failed to connect"]) {
-            (format!("{} isn't answering", s.name), true)
+            (rw::not_answering(&s.name), true)
         } else {
             return None;
         })
@@ -1339,15 +1269,15 @@ impl Ui {
         let text = |t: &str| gtk::Label::builder().label(t).xalign(0.0).wrap(true).wrap_mode(gtk::pango::WrapMode::WordChar).css_classes(["dim-label"]).build();
         match party {
             None => {
-                b.append(&heading("Listening party", "audio-headphones-symbolic"));
-                b.append(&text(&format!("Asking {} about its party…", server.name)));
+                b.append(&heading(rw::PARTY_HEADING, "audio-headphones-symbolic"));
+                b.append(&text(&rw::asking_party(&server.name)));
             }
             Some(p) if !p.on => {
-                b.append(&heading("Listening party", "audio-headphones-symbolic"));
-                b.append(&text("Nobody's having a party right now. In one, everyone hears the same song at the same moment and anyone adds songs."));
+                b.append(&heading(rw::PARTY_HEADING, "audio-headphones-symbolic"));
+                b.append(&text(rw::NO_PARTY));
                 if who.as_ref().is_none_or(|m| m.can_host) {
-                    let everyone = gtk::CheckButton::builder().label("Let everyone play, pause and skip").build();
-                    let start = icon_button("media-playback-start-symbolic", "Start a Party");
+                    let everyone = gtk::CheckButton::builder().label(rw::LET_EVERYONE).build();
+                    let start = icon_button("media-playback-start-symbolic", rw::START_PARTY);
                     start.add_css_class("suggested-action");
                     start.add_css_class("pill-button");
                     start.set_halign(gtk::Align::Start);
@@ -1361,24 +1291,19 @@ impl Ui {
                     b.append(&everyone);
                     b.append(&start);
                 } else {
-                    b.append(&text(&format!("Hosting a party is off for you on {}: its owner's choice. You can join one when someone starts it.", server.name)));
+                    b.append(&text(&rw::hosting_off(&server.name)));
                 }
             }
             Some(p) => {
                 b.add_css_class("on");
                 let yours = who.as_ref().is_some_and(|m| m.person == p.host.0);
-                b.append(&heading(&if yours { "Your listening party is on".to_string() } else { format!("{} is hosting a listening party", p.host.1) }, "audio-headphones-symbolic"));
+                b.append(&heading(&rw::party_heading(yours, &p.host.1), "audio-headphones-symbolic"));
                 let now = match &p.song {
-                    Some(e) => format!("Playing “{}”{}.", e.title, if e.artist.is_empty() { String::new() } else { format!(" by {}", e.artist) }),
-                    None => "Nothing's playing yet: add a song and it starts.".to_string(),
+                    Some(e) => rw::playing(&e.title, &e.artist),
+                    None => rw::NOTHING_YET.to_string(),
                 };
-                let listening = match p.members.len() {
-                    0 => "Nobody's listening right now.".to_string(),
-                    1 => "1 person listening.".to_string(),
-                    n => format!("{n} people listening."),
-                };
-                b.append(&text(&format!("{now} {listening} Join, and you hear it here in step with everyone.")));
-                let join = icon_button("audio-headphones-symbolic", if yours { "Join Your Party" } else { "Join the Party" });
+                b.append(&text(&rw::party_line(&now, &rw::listening(p.members.len()))));
+                let join = icon_button("audio-headphones-symbolic", if yours { rw::JOIN_YOUR_PARTY } else { rw::JOIN_THE_PARTY });
                 join.add_css_class("suggested-action");
                 join.add_css_class("pill-button");
                 join.set_halign(gtk::Align::Start);
@@ -1391,7 +1316,7 @@ impl Ui {
                 });
                 b.append(&join);
                 if let Some(other) = self.rms.party.borrow().as_ref() {
-                    b.append(&text(&format!("Joining leaves {}'s party.", other.party.host.1)));
+                    b.append(&text(&rw::joining_leaves(&other.party.host.1)));
                 }
             }
         }
@@ -1409,13 +1334,13 @@ impl Ui {
         let control = party.can_control(me_id);
         let top = gtk::Box::builder().spacing(10).build();
         top.append(&gtk::Image::builder().icon_name("audio-headphones-symbolic").pixel_size(20).build());
-        top.append(&gtk::Label::builder().label(if host { "You're hosting the party".to_string() } else { format!("You're in {}'s party", party.host.1) }).xalign(0.0).hexpand(true).wrap(true).css_classes(["heading"]).build());
-        let pill = gtk::Label::builder().label(if party.playing { "Playing" } else if party.song.is_some() { "Paused" } else { "Quiet" }).css_classes(["pill", if party.playing { "split" } else { "compressed" }]).valign(gtk::Align::Center).build();
+        top.append(&gtk::Label::builder().label(rw::in_party_heading(host, &party.host.1)).xalign(0.0).hexpand(true).wrap(true).css_classes(["heading"]).build());
+        let pill = gtk::Label::builder().label(rw::party_pill(party.playing, party.song.is_some())).css_classes(["pill", if party.playing { "split" } else { "compressed" }]).valign(gtk::Align::Center).build();
         top.append(&pill);
         b.append(&top);
         b.append(&self.rms.sync_label);
         if lost {
-            self.rms.sync_label.set_label("Lost the party: joining again…");
+            self.rms.sync_label.set_label(rw::LOST_PARTY);
         }
 
         // what plays
@@ -1426,7 +1351,7 @@ impl Ui {
         match &party.song {
             Some(e) => {
                 words.append(&gtk::Label::builder().label(&e.title).xalign(0.0).wrap(true).wrap_mode(gtk::pango::WrapMode::WordChar).css_classes(["title-3"]).build());
-                let by = if e.artist.is_empty() { format!("Added by {}", e.added_by.1) } else { format!("{} · added by {}", e.artist, e.added_by.1) };
+                let by = rw::added_by(&e.artist, &e.added_by.1);
                 words.append(&gtk::Label::builder().label(by).xalign(0.0).wrap(true).css_classes(["dim-label"]).build());
                 let t = e.track(server);
                 let weak = art.downgrade();
@@ -1437,8 +1362,8 @@ impl Ui {
                 });
             }
             None => {
-                words.append(&gtk::Label::builder().label("Nothing playing").xalign(0.0).css_classes(["title-3"]).build());
-                words.append(&gtk::Label::builder().label("Add a song from the list below: it starts at once.").xalign(0.0).wrap(true).css_classes(["dim-label"]).build());
+                words.append(&gtk::Label::builder().label(rw::NOTHING_PLAYING).xalign(0.0).css_classes(["title-3"]).build());
+                words.append(&gtk::Label::builder().label(rw::ADD_A_SONG).xalign(0.0).wrap(true).css_classes(["dim-label"]).build());
             }
         }
         now.append(&words);
@@ -1447,7 +1372,7 @@ impl Ui {
         // its controls (the host's, or everyone's when the host allows), and hearing it here
         let controls = adw::WrapBox::builder().child_spacing(8).line_spacing(8).build();
         if control {
-            let (icon, label, action) = if party.playing { ("media-playback-pause-symbolic", "Pause", "pause") } else { ("media-playback-start-symbolic", "Play", "play") };
+            let (icon, label, action) = if party.playing { ("media-playback-pause-symbolic", rw::PAUSE, "pause") } else { ("media-playback-start-symbolic", rw::PLAY, "play") };
             let pp = icon_button(icon, label);
             pp.set_sensitive(party.song.is_some() || !party.queue.is_empty());
             let me = Rc::downgrade(self);
@@ -1457,7 +1382,7 @@ impl Ui {
                 }
             });
             controls.append(&pp);
-            let skip = icon_button("media-skip-forward-symbolic", "Skip");
+            let skip = icon_button("media-skip-forward-symbolic", rw::SKIP);
             skip.set_sensitive(party.song.is_some());
             let me = Rc::downgrade(self);
             skip.connect_clicked(move |_| {
@@ -1467,9 +1392,9 @@ impl Ui {
             });
             controls.append(&skip);
         }
-        let (icon, label) = if listening { ("audio-volume-muted-symbolic", "Stop Hearing It Here") } else { ("audio-volume-high-symbolic", "Hear It Here") };
+        let (icon, label) = if listening { ("audio-volume-muted-symbolic", rw::STOP_HEARING) } else { ("audio-volume-high-symbolic", rw::HEAR_IT_HERE) };
         let hear = icon_button(icon, label);
-        hear.set_tooltip_text(Some("The party plays on either way; back on, it's in step again at once"));
+        hear.set_tooltip_text(Some(rw::HEAR_TIP));
         let me = Rc::downgrade(self);
         hear.connect_clicked(move |_| {
             if let Some(me) = me.upgrade() {
@@ -1479,7 +1404,7 @@ impl Ui {
         controls.append(&hear);
         b.append(&controls);
         if !control {
-            b.append(&gtk::Label::builder().label(format!("{} (the host) plays, pauses and skips.", party.host.1)).xalign(0.0).wrap(true).css_classes(["dim-label", "caption"]).build());
+            b.append(&gtk::Label::builder().label(rw::host_controls(&party.host.1)).xalign(0.0).wrap(true).css_classes(["dim-label", "caption"]).build());
         }
 
         // reactions: the server's own pictures
@@ -1502,7 +1427,7 @@ impl Ui {
             let line = adw::WrapBox::builder().child_spacing(6).line_spacing(6).build();
             for r in fresh {
                 let (icon, name) = servers::reaction_icon(&r.emoji);
-                let chip = gtk::Box::builder().spacing(6).css_classes(["rms-chip"]).tooltip_text(format!("{}: {name}", r.by)).build();
+                let chip = gtk::Box::builder().spacing(6).css_classes(["rms-chip"]).tooltip_text(rw::reaction_tip(&r.by, name)).build();
                 chip.append(&gtk::Image::builder().icon_name(icon).pixel_size(22).build());
                 chip.append(&gtk::Label::new(Some(&r.by)));
                 line.append(&chip);
@@ -1515,23 +1440,23 @@ impl Ui {
         for m in &party.members {
             let chip = gtk::Box::builder().spacing(8).css_classes(["rms-chip"]).build();
             chip.append(&adw::Avatar::builder().size(24).text(&m.name).show_initials(true).build());
-            chip.append(&gtk::Label::new(Some(&if m.host { format!("{} · host", m.name) } else { m.name.clone() })));
+            chip.append(&gtk::Label::new(Some(&rw::member(&m.name, m.host))));
             people.append(&chip);
         }
         let listeners = gtk::Box::builder().orientation(gtk::Orientation::Vertical).spacing(6).build();
-        listeners.append(&gtk::Label::builder().label(format!("Listening ({})", party.members.len())).xalign(0.0).css_classes(["caption-heading"]).build());
+        listeners.append(&gtk::Label::builder().label(rw::listening_heading(party.members.len())).xalign(0.0).css_classes(["caption-heading"]).build());
         listeners.append(&people);
         b.append(&listeners);
 
         // up next
-        b.append(&gtk::Label::builder().label("Up next").xalign(0.0).css_classes(["caption-heading"]).build());
+        b.append(&gtk::Label::builder().label(rw::UP_NEXT).xalign(0.0).css_classes(["caption-heading"]).build());
         let next = gtk::ListBox::builder().selection_mode(gtk::SelectionMode::None).css_classes(["boxed-list"]).build();
         if party.queue.is_empty() {
-            next.append(&adw::ActionRow::builder().title("Nothing up next").subtitle("Click a song in the list below to add it: anyone in the party can.").build());
+            next.append(&adw::ActionRow::builder().title(rw::NOTHING_UP_NEXT).subtitle(rw::NOTHING_UP_NEXT_SUB).build());
         }
         let n = party.queue.len();
         for (i, e) in party.queue.iter().enumerate() {
-            let row = adw::ActionRow::builder().use_markup(false).title(&e.title).subtitle(if e.artist.is_empty() { format!("Added by {}", e.added_by.1) } else { format!("{} · added by {}", e.artist, e.added_by.1) }).title_lines(1).subtitle_lines(1).build();
+            let row = adw::ActionRow::builder().use_markup(false).title(&e.title).subtitle(rw::added_by(&e.artist, &e.added_by.1)).title_lines(1).subtitle_lines(1).build();
             let tool = |icon: &str, tip: &str, action: &'static str, extra: serde_json::Value, on: bool| {
                 let btn = gtk::Button::builder().icon_name(icon).tooltip_text(tip).valign(gtk::Align::Center).css_classes(["flat", "circular"]).sensitive(on).build();
                 let me = Rc::downgrade(self);
@@ -1543,11 +1468,11 @@ impl Ui {
                 btn
             };
             if control {
-                row.add_suffix(&tool("go-up-symbolic", "Earlier", "reorder", serde_json::json!({ "entry": e.entry, "to": i.saturating_sub(1) }), i > 0));
-                row.add_suffix(&tool("go-down-symbolic", "Later", "reorder", serde_json::json!({ "entry": e.entry, "to": i + 1 }), i + 1 < n));
+                row.add_suffix(&tool("go-up-symbolic", rw::EARLIER, "reorder", serde_json::json!({ "entry": e.entry, "to": i.saturating_sub(1) }), i > 0));
+                row.add_suffix(&tool("go-down-symbolic", rw::LATER, "reorder", serde_json::json!({ "entry": e.entry, "to": i + 1 }), i + 1 < n));
             }
             if control || e.added_by.0 == me_id {
-                row.add_suffix(&tool("list-remove-symbolic", "Take it out of the queue", "remove", serde_json::json!({ "entry": e.entry }), true));
+                row.add_suffix(&tool("list-remove-symbolic", rw::TAKE_OUT, "remove", serde_json::json!({ "entry": e.entry }), true));
             }
             next.append(&row);
         }
@@ -1556,7 +1481,7 @@ impl Ui {
         // the host's: who controls it, the end; everyone's: leave
         let end_row = adw::WrapBox::builder().child_spacing(8).line_spacing(8).margin_top(4).build();
         if host {
-            let (icon, label) = if party.everyone_controls { ("system-users-symbolic", "Only I Play, Pause and Skip") } else { ("system-users-symbolic", "Let Everyone Play, Pause and Skip") };
+            let (icon, label) = if party.everyone_controls { ("system-users-symbolic", rw::ONLY_I_CONTROL) } else { ("system-users-symbolic", rw::LET_EVERYONE_CONTROL) };
             let allow = icon_button(icon, label);
             let (me, everyone) = (Rc::downgrade(self), !party.everyone_controls);
             allow.connect_clicked(move |_| {
@@ -1566,17 +1491,17 @@ impl Ui {
             });
             end_row.append(&allow);
         }
-        let leave = icon_button("system-log-out-symbolic", "Leave the Party");
+        let leave = icon_button("system-log-out-symbolic", rw::LEAVE_PARTY);
         let me = Rc::downgrade(self);
         leave.connect_clicked(move |_| {
             if let Some(me) = me.upgrade() {
                 me.leave_party(true);
-                me.toast("You left the party: back to your own music");
+                me.toast(rw::YOU_LEFT_PARTY);
             }
         });
         end_row.append(&leave);
         if host || owner {
-            let end = icon_button("process-stop-symbolic", "End the Party");
+            let end = icon_button("process-stop-symbolic", rw::END_PARTY);
             end.add_css_class("destructive-action");
             let (me, s) = (Rc::downgrade(self), server.clone());
             end.connect_clicked(move |_| {
@@ -1595,25 +1520,25 @@ impl Ui {
         let link = self.rms.party.borrow();
         let Some(l) = link.as_ref() else { return };
         if l.lost {
-            self.rms.sync_label.set_label("Lost the party: joining again…");
+            self.rms.sync_label.set_label(rw::LOST_PARTY);
             return;
         }
-        let clock = format!(" · clock ±{} ms", ((l.rtt / 2.0).round() as i64).max(1));
+        let clock = ((l.rtt / 2.0).round() as i64).max(1);
         let text = if !l.listening {
-            "Not heard here: the party plays on. Hear It Here to be back in step.".to_string()
+            rw::NOT_HEARD_HERE.to_string()
         } else if l.party.song.is_none() {
-            "Waiting for a song.".to_string()
+            rw::WAITING_FOR_SONG.to_string()
         } else if !l.party.playing {
-            format!("Paused by {}", if l.party.host.0 == l.me.person { "you".to_string() } else { l.party.host.1.clone() })
+            rw::paused_by(l.party.host.0 == l.me.person, &l.party.host.1)
         } else {
             match (l.party.position_ms(servers::now_ms() + l.offset), l.drift_ms) {
-                (Some(p), _) if p < 0.0 => "Starting…".to_string(),
-                (_, Some(d)) if d.abs() <= servers::IN_STEP * 1000.0 => format!("In time with the party ({:+.0} ms)", d),
-                (_, Some(d)) => format!("Catching up ({:+.0} ms)", d),
-                _ => "Getting in step…".to_string(),
+                (Some(p), _) if p < 0.0 => rw::STARTING.to_string(),
+                (_, Some(d)) if d.abs() <= servers::IN_STEP * 1000.0 => rw::in_time(d),
+                (_, Some(d)) => rw::catching_up(d),
+                _ => rw::GETTING_IN_STEP.to_string(),
             }
         };
-        self.rms.sync_label.set_label(&format!("{text}{clock}"));
+        self.rms.sync_label.set_label(&rw::sync_line(&text, clock));
     }
 
     fn start_party(self: &Rc<Self>, server: &Joined, everyone: bool) {
@@ -1625,7 +1550,7 @@ impl Ui {
                 match started {
                     Ok(p) => {
                         me.know(&server.address, |k| k.party = Some(p));
-                        me.toast("The party is on. Add a song: it starts at once.");
+                        me.toast(rw::PARTY_ON_TOAST);
                         me.join_party(&server); // the host is in it at once
                     }
                     Err(f) => {
@@ -1638,9 +1563,9 @@ impl Ui {
     }
 
     fn end_party(self: &Rc<Self>, server: &Joined) {
-        let ask = adw::AlertDialog::new(Some("End the party for everyone?"), Some("Everyone in it goes back to their own music."));
-        ask.add_response("cancel", "Cancel");
-        ask.add_response("end", "End the Party");
+        let ask = adw::AlertDialog::new(Some(rw::END_PARTY_HEADING), Some(rw::END_PARTY_BODY));
+        ask.add_response("cancel", rw::CANCEL);
+        ask.add_response("end", rw::END_PARTY);
         ask.set_response_appearance("end", adw::ResponseAppearance::Destructive);
         ask.set_close_response("cancel");
         let (w, s) = (Rc::downgrade(self), server.clone());
@@ -1689,7 +1614,7 @@ impl Ui {
                         }
                     };
                     let Some((offset, rtt)) = clock else {
-                        me.toast(&format!("{} isn't answering. Try joining again in a moment.", server.name));
+                        me.toast(&rw::not_answering_try_again(&server.name));
                         me.render_party_card();
                         return;
                     };
@@ -1792,7 +1717,7 @@ impl Ui {
                     // (the host who ended it is told no news of their own)
                     let host = self.rms.party.borrow().as_ref().filter(|l| l.party.host.0 != l.me.person).map(|l| l.party.host.1.clone()).unwrap_or_default();
                     self.leave_party(true);
-                    self.toast(&if host.is_empty() { "The party is over: back to your own music".to_string() } else { format!("{host} ended the party: back to your own music") });
+                    self.toast(&rw::party_ended(&host));
                     self.know(&address, |k| k.party = Some(p));
                     return;
                 }
@@ -1809,7 +1734,7 @@ impl Ui {
             }
             Live::Removed(why) => {
                 self.leave_party(true);
-                self.toast(&format!("{why} You're out of the party: back to your own music."));
+                self.toast(&rw::removed_from_party(&why));
             }
             Live::Lost | Live::Back => {
                 if let Some(l) = self.rms.party.borrow_mut().as_mut() {
@@ -2081,7 +2006,7 @@ impl Ui {
         if by > 0 && control {
             self.party_act("skip", serde_json::json!({}));
         } else if by > 0 {
-            self.toast(&format!("{host} (the host) skips songs in this party"));
+            self.toast(&rw::host_skips(&host));
         }
     }
 
@@ -2116,7 +2041,7 @@ impl Ui {
             crate::player::Event::Ended => true,
             crate::player::Event::Error(e) => {
                 let reason = self.server_reason(e).map(|r| r.0).unwrap_or_else(|| self.why_not(e).0.to_string());
-                self.toast(&format!("The party's song can't play here: {reason}"));
+                self.toast(&rw::party_song_cant_play(&reason));
                 true
             }
         }
@@ -2166,7 +2091,7 @@ impl Ui {
                     }
                     me.party_sync();
                     me.render_party_card();
-                    me.toast(&format!("Added “{title}” to the party"));
+                    me.toast(&rw::added_to_party(&title));
                 }
                 Err(e) => me.toast(&e),
             }

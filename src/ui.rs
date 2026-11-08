@@ -511,8 +511,8 @@ fn quality_badge(t: &Track) -> gtk::Widget {
     if t.video {
         badge("camera-video-symbolic", "video", "Music video", "From YouTube; plays with its picture in Now Playing (up to 720p).")
     } else if t.source == Source::Server {
-        let name = servers::of_track(t).map(|s| s.name).unwrap_or_else(|| "a Radiance Music Server".into());
-        badge("network-server-symbolic", if t.lossless() { "lossless" } else { "compressed" }, &format!("From {name} · {}", t.format), "Streams from the server you joined. Like it to save it, with its parts, lyrics and cover, into your own library.")
+        let name = servers::of_track(t).map(|s| s.name).unwrap_or_else(|| radiance_core::server_words::A_SERVER.into());
+        badge("network-server-symbolic", if t.lossless() { "lossless" } else { "compressed" }, &radiance_core::server_words::from_server(&name, &t.format), radiance_core::server_words::SERVER_SONG_BODY)
     } else if t.lossless() {
         let what = if t.format == "24-bit FLAC" { "24-bit FLAC" } else { "FLAC" };
         badge("lossless-symbolic", "lossless", &format!("Lossless · {what}"), "The full recording from the Internet Archive, nothing thrown away. Played first.")
@@ -2197,7 +2197,7 @@ impl Ui {
         menu.append_section(None, &splitting);
         let app = gio::Menu::new();
         app.append(Some("Share Songs with a Phone…"), Some("win.share-songs"));
-        app.append(Some("Servers…"), Some("win.servers"));
+        app.append(Some(radiance_core::server_words::SERVERS_MENU), Some("win.servers"));
         app.append(Some("Storage and Folder"), Some("win.storage"));
         app.append(Some("Open the Music Folder"), Some("win.music-folder"));
         app.append(Some("How to Use It"), Some("win.guide"));
@@ -3295,7 +3295,7 @@ impl Ui {
         let waiting = place.filter(|p| *p > 0).map(|p| p - 1);
         let on_server = t.source == Source::Server && t.file.is_none() && !servers::mix_parts(t).is_empty();
         if on_server {
-            slot.append(&badge("edit-cut-symbolic", "split", "Split on its server", "Its parts are on the server: the Mixer, No vocals and Vocals only play them from there."));
+            slot.append(&badge("edit-cut-symbolic", "split", radiance_core::server_words::SPLIT_ON_ITS_SERVER, radiance_core::server_words::SPLIT_ON_ITS_SERVER_BODY));
         } else if splitting {
             let spin = gtk::Spinner::builder().spinning(true).tooltip_text(words::SPLITTING_NOW).build();
             slot.append(&spin);
@@ -4049,7 +4049,7 @@ impl Ui {
         if let Some(s) = self.splits_on_server(&t) {
             if Self::shown_parts(&t).is_empty() && !self.away_on_server(&t) {
                 let t1 = t.clone();
-                add(&mine, &format!("Split on {}", s.name), "split", Box::new(move |me| me.split_on_server(&t1)));
+                add(&mine, &radiance_core::server_words::split_on(&s.name), "split", Box::new(move |me| me.split_on_server(&t1)));
             }
         } else {
             // core's split items (the Windows beta's menu has the same)
@@ -4073,15 +4073,15 @@ impl Ui {
         let server = gio::Menu::new();
         if t.source == Source::Server && servers::of_track(&t).is_some_and(|s| self.in_party_on(&s.address)) {
             let t1 = t.clone();
-            add(&server, "Add to the Party", "party-add", Box::new(move |me| me.add_to_party(&t1)));
+            add(&server, radiance_core::server_words::MENU_ADD_TO_PARTY, "party-add", Box::new(move |me| me.add_to_party(&t1)));
         }
         if t.source == Source::Server && t.file.is_none() && !liked {
             let t1 = t.clone();
-            add(&server, "Save to Your Library", "save", Box::new(move |me| me.toggle_like(&t1)));
+            add(&server, radiance_core::server_words::SAVE_TO_LIBRARY, "save", Box::new(move |me| me.toggle_like(&t1)));
         }
         for (i, s) in self.servers_for(&t).into_iter().enumerate() {
             let t1 = t.clone();
-            add(&server, &format!("Add to {}", s.name), &format!("to-server-{i}"), Box::new(move |me| me.add_to_server(&t1, &s)));
+            add(&server, &radiance_core::server_words::add_to(&s.name),&format!("to-server-{i}"), Box::new(move |me| me.add_to_server(&t1, &s)));
         }
         if server.n_items() > 0 {
             menu.append_section(None, &server);
@@ -4203,7 +4203,7 @@ impl Ui {
         lines.push(format!(
             "From: {}",
             match t.source {
-                Source::Server => format!("{} ({})", servers::of_track(t).map(|s| s.name).unwrap_or_else(|| "a Radiance Music Server".into()), t.format),
+                Source::Server => format!("{} ({})", servers::of_track(t).map(|s| s.name).unwrap_or_else(|| radiance_core::server_words::A_SERVER.into()), t.format),
                 _ if t.lossless() => format!("Internet Archive, lossless ({})", t.format),
                 _ => "YouTube Music, compressed (Opus)".into(),
             }
@@ -5077,7 +5077,7 @@ impl Ui {
         crate::watch::doing("starting a song");
         if self.in_party() {
             self.leave_party(false); // a song of your own picked: out of the party
-            self.toast("You left the party to play your own music");
+            self.toast(radiance_core::server_words::LEFT_FOR_YOUR_OWN);
         }
         let Some(t) = self.queue.borrow().at_index().cloned() else { return };
         // the saved copy when there is one: instant, and works offline
@@ -5140,7 +5140,7 @@ impl Ui {
         } else if t.source == Source::Server {
             match self.uri_plain(&t) {
                 Some(uri) => self.start(&uri, gen),
-                None => self.unavailable(&t.title, "you left its server"),
+                None => self.unavailable(&t.title, radiance_core::server_words::LEFT_ITS_SERVER),
             }
         } else if let Some((uri, kbps)) = self.fresh_stream(&t.id) {
             self.kbps.set(kbps);
@@ -5639,12 +5639,7 @@ impl Ui {
             self.play.set_icon_name(if playing { "media-playback-pause-symbolic" } else { "media-playback-start-symbolic" });
             self.prev.set_sensitive(false);
             self.next.set_sensitive(control && song);
-            self.play.set_tooltip_text(Some(match (control, playing) {
-                (true, true) => "Pause the party",
-                (true, false) => "Play the party",
-                (false, true) => "Stop hearing the party here",
-                (false, false) => "Hear the party here",
-            }));
+            self.play.set_tooltip_text(Some(radiance_core::server_words::bar_tooltip(control, playing)));
         }
         self.bar_heart.set_sensitive(has);
         self.seek.set_sensitive(has);

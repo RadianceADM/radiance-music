@@ -13,6 +13,7 @@ pub mod quality;
 pub mod release_notes;
 pub mod queue;
 pub mod search;
+pub mod server_words;
 pub mod share_words;
 pub mod sing;
 pub mod suggest;
