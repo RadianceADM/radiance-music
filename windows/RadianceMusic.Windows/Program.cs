@@ -15,10 +15,10 @@ public static class Program
 {
     public static Dev Dev { get; private set; } = new();
 
-    [STAThread]
     /// <summary>The radiancemusic:// link this start came with (none: null).</summary>
     public static string? Link { get; private set; }
 
+    [STAThread]
     public static int Main(string[] args)
     {
         var bin = Path.Combine(AppContext.BaseDirectory, "bin");
