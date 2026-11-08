@@ -7,7 +7,7 @@
 declare(strict_types=1);
 
 $home = '/home/' . get_current_user() . '/downloads-gate'; // (the hosting account's home, never served)
-$limits = ['json' => 600, 'file' => 60]; // per address per hour (json: any; file: the same file)
+$limits = ['json' => 3000, 'file' => 300]; // per address per hour (json: any; file: the same file). Generous: many Converge homes share one address, and a release day sends them all for the same file
 if (is_file("$home/limits.json")) {
     $limits = array_merge($limits, json_decode((string) file_get_contents("$home/limits.json"), true) ?: []);
 }
