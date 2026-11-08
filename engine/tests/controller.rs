@@ -2613,3 +2613,516 @@ fn a_server_song_is_known_after_a_restart() {
     assert!(until(5.0, || c.servers().rows.is_empty()));
     c.quit();
 }
+
+// ---------------------------------------------------------------- listening parties (stage 4c-2)
+
+/// A Radiance Music Server's party, stood in: its clock (`ahead_ms` ahead of this computer's), the party as its API
+/// and WebSocket send it, the controls asked for, a song file, and its WebSocket dropped on demand. This computer is
+/// Ana (3), who may host; Bassi (1) hosts the party a test starts by itself.
+#[derive(Default)]
+struct PartySim {
+    on: bool,
+    host: (i64, String),
+    everyone: bool,
+    song: Option<serde_json::Value>,
+    playing: bool,
+    started: f64,
+    paused_at: f64,
+    queue: Vec<serde_json::Value>,
+    members: Vec<(i64, String)>,
+    reactions: Vec<serde_json::Value>,
+    ahead_ms: f64,
+    actions: Vec<String>,
+    line_down: bool,
+    next: u64,
+    sockets: Vec<std::sync::mpsc::Sender<String>>,
+}
+
+const PARTY_LEAD_MS: f64 = 800.0;
+
+impl PartySim {
+    fn server_now(&self) -> f64 {
+        radiance_engine::servers::now_ms() + self.ahead_ms
+    }
+
+    fn entry(&mut self, title: &str, by: (i64, &str)) -> serde_json::Value {
+        self.next += 1;
+        serde_json::json!({"entry": self.next, "id": 9, "artist": "Party Band", "title": title, "url": "/files/party.wav", "cover": null,
+            "duration_ms": 120000.0, "added_by": {"id": by.0, "name": by.1}})
+    }
+
+    /// Bassi's party, its song `title` playing since `ago_ms` (server time), Bassi listening.
+    fn bassis_party(&mut self, title: &str, ago_ms: f64) {
+        self.on = true;
+        self.host = (1, "Bassi".into());
+        self.members = vec![(1, "Bassi".into())];
+        let e = self.entry(title, (1, "Bassi"));
+        self.song = Some(e);
+        self.playing = true;
+        self.started = self.server_now() - ago_ms;
+    }
+
+    fn state(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "state", "on": self.on, "host": {"id": self.host.0, "name": self.host.1}, "everyone_controls": self.everyone,
+            "song": self.song, "playing": self.playing, "started_at_server_ms": self.started, "paused_at_ms": self.paused_at,
+            "lead_ms": PARTY_LEAD_MS, "queue": self.queue,
+            "members": self.members.iter().map(|(id, name)| serde_json::json!({"id": id, "name": name, "host": *id == self.host.0})).collect::<Vec<_>>(),
+            "reactions": self.reactions,
+        })
+    }
+
+    /// The party as it is now, to everyone on its WebSocket.
+    fn tell(&mut self) {
+        let text = self.state().to_string();
+        self.sockets.retain(|s| s.send(text.clone()).is_ok());
+    }
+
+    fn control(&mut self, who: i64, body: &serde_json::Value) -> Result<(), String> {
+        let action = body["action"].as_str().unwrap_or("").to_string();
+        if !(self.on && (self.host.0 == who || self.everyone)) && action != "remove" {
+            return Err("Only the host plays, pauses and skips in this party.".into());
+        }
+        self.actions.push(action.clone());
+        let now = self.server_now();
+        match action.as_str() {
+            "play" if !self.playing => {
+                self.playing = true;
+                self.started = now + PARTY_LEAD_MS - self.paused_at;
+            }
+            "pause" if self.playing => {
+                self.playing = false;
+                self.paused_at = now - self.started;
+            }
+            "skip" => {
+                self.song = if self.queue.is_empty() { None } else { Some(self.queue.remove(0)) };
+                self.playing = self.song.is_some();
+                self.started = now + PARTY_LEAD_MS;
+                self.paused_at = 0.0;
+            }
+            "seek" => {
+                let at = body["position_ms"].as_f64().unwrap_or(0.0);
+                if self.playing {
+                    self.started = now + PARTY_LEAD_MS - at;
+                } else {
+                    self.paused_at = at;
+                }
+            }
+            "allow" => self.everyone = body["everyone"].as_bool().unwrap_or(false),
+            "remove" => {
+                let entry = body["entry"].as_u64();
+                self.queue.retain(|e| e["entry"].as_u64() != entry);
+            }
+            "reorder" => {
+                let entry = body["entry"].as_u64();
+                if let Some(from) = self.queue.iter().position(|e| e["entry"].as_u64() == entry) {
+                    let e = self.queue.remove(from);
+                    let to = (body["to"].as_u64().unwrap_or(0) as usize).min(self.queue.len());
+                    self.queue.insert(to, e);
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+}
+
+/// A tone `secs` long, 8 kHz mono WAV (a party song the stand-in serves).
+fn tone(secs: f64) -> Vec<u8> {
+    let rate = 8_000u32;
+    let n = (secs * rate as f64) as u32;
+    let mut b = Vec::with_capacity(44 + 2 * n as usize);
+    b.extend_from_slice(b"RIFF");
+    b.extend_from_slice(&(36 + 2 * n).to_le_bytes());
+    b.extend_from_slice(b"WAVEfmt ");
+    b.extend_from_slice(&16u32.to_le_bytes());
+    b.extend_from_slice(&1u16.to_le_bytes());
+    b.extend_from_slice(&1u16.to_le_bytes());
+    b.extend_from_slice(&rate.to_le_bytes());
+    b.extend_from_slice(&(rate * 2).to_le_bytes());
+    b.extend_from_slice(&2u16.to_le_bytes());
+    b.extend_from_slice(&16u16.to_le_bytes());
+    b.extend_from_slice(b"data");
+    b.extend_from_slice(&(2 * n).to_le_bytes());
+    for i in 0..n {
+        let s = (0.05 * (i as f64 * 330.0 * std::f64::consts::TAU / rate as f64).sin() * 32767.0) as i16;
+        b.extend_from_slice(&s.to_le_bytes());
+    }
+    b
+}
+
+/// The party stand-in on 127.0.0.1 (a thread per connection: the player keeps its song's open).
+fn party_stand_in() -> (String, Arc<Mutex<PartySim>>) {
+    use std::io::{BufRead, BufReader, Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = format!("http://{}", listener.local_addr().unwrap());
+    // a server of its own each time (the tests share settings.json: one id for all would be one server that moved)
+    let id = Arc::new(format!("srv-party-{}", listener.local_addr().unwrap().port()));
+    let sim = Arc::new(Mutex::new(PartySim::default()));
+    let song = Arc::new(tone(120.0));
+    let shared = sim.clone();
+    std::thread::spawn(move || {
+        for conn in listener.incoming() {
+            let Ok(conn) = conn else { continue };
+            let (sim, song, id) = (shared.clone(), song.clone(), id.clone());
+            std::thread::spawn(move || {
+                let mut peek = [0u8; 256];
+                let n = conn.peek(&mut peek).unwrap_or(0);
+                let first = String::from_utf8_lossy(&peek[..n]).lines().next().unwrap_or("").to_string();
+                let keyed_ws = first.contains("t=tok-party");
+                if first.starts_with("GET /api/party/ws") || first.starts_with("GET /api/events") {
+                    let events = first.starts_with("GET /api/events");
+                    if !keyed_ws || (!events && sim.lock().unwrap().line_down) {
+                        let mut c = conn;
+                        let _ = c.write_all(b"HTTP/1.1 503 X\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+                        return;
+                    }
+                    let Ok(mut ws) = tungstenite::accept(conn) else { return };
+                    let (tx, rx) = std::sync::mpsc::channel::<String>();
+                    if events {
+                        let _ = ws.send(tungstenite::Message::text(serde_json::json!({"type": "hello", "server": {"id": *id, "name": "Party server"}}).to_string()));
+                    } else {
+                        let mut s = sim.lock().unwrap();
+                        let _ = ws.send(tungstenite::Message::text(s.state().to_string()));
+                        s.sockets.push(tx);
+                    }
+                    loop {
+                        if !events && sim.lock().unwrap().line_down {
+                            return; // dropped, as a network that went
+                        }
+                        match rx.recv_timeout(Duration::from_millis(100)) {
+                            Ok(text) => {
+                                if ws.send(tungstenite::Message::text(text)).is_err() {
+                                    return;
+                                }
+                            }
+                            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                            Err(_) if events => std::thread::sleep(Duration::from_millis(100)),
+                            Err(_) => return,
+                        }
+                    }
+                }
+                let mut conn = conn;
+                let mut reader = BufReader::new(conn.try_clone().unwrap());
+                let mut line = String::new();
+                let _ = reader.read_line(&mut line);
+                let (mut keyed, mut length, mut range) = (false, 0usize, None::<usize>);
+                loop {
+                    let mut h = String::new();
+                    if reader.read_line(&mut h).is_err() || h.trim().is_empty() {
+                        break;
+                    }
+                    let low = h.to_ascii_lowercase();
+                    keyed |= low.trim() == "authorization: bearer tok-party";
+                    if let Some(v) = low.strip_prefix("content-length:") {
+                        length = v.trim().parse().unwrap_or(0);
+                    }
+                    if let Some(v) = low.trim().strip_prefix("range: bytes=") {
+                        range = v.split('-').next().and_then(|s| s.parse().ok());
+                    }
+                }
+                let mut body = vec![0u8; length];
+                let _ = reader.read_exact(&mut body);
+                let body: serde_json::Value = serde_json::from_slice(&body).unwrap_or_default();
+                let mut parts = line.split_whitespace();
+                let method = parts.next().unwrap_or("").to_string();
+                let target = parts.next().unwrap_or("").to_string();
+                keyed |= target.contains("t=tok-party");
+                let path = target.split('?').next().unwrap_or("").to_string();
+                if path == "/files/party.wav" && keyed {
+                    let from = range.unwrap_or(0).min(song.len());
+                    let head = if range.is_some() {
+                        format!("HTTP/1.1 206 X\r\nContent-Type: audio/wav\r\nAccept-Ranges: bytes\r\nContent-Range: bytes {from}-{}/{}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", song.len() - 1, song.len(), song.len() - from)
+                    } else {
+                        format!("HTTP/1.1 200 X\r\nContent-Type: audio/wav\r\nAccept-Ranges: bytes\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", song.len())
+                    };
+                    let _ = conn.write_all(head.as_bytes());
+                    let _ = conn.write_all(&song[from..]);
+                    return;
+                }
+                let me = serde_json::json!({"person": {"id": 3, "name": "Ana", "role": "friend"}, "device": {"id": 7, "name": "laptop"},
+                    "server": {"name": "Party server", "id": *id}, "can": {"add": true, "split": false, "host": true}}).to_string();
+                let library = r#"{"server":"Party server","count":1,"songs":[
+                    {"id":9,"artist":"Party Band","title":"Party Song","file":"party.wav","url":"/files/party.wav","duration_ms":120000,"split":false,"parts":[],"files":{},"added_by":{"id":1,"name":"Bassi"}}]}"#;
+                let mut s = sim.lock().unwrap();
+                let (status, json): (u16, String) = match (method.as_str(), path.as_str(), keyed) {
+                    ("GET", "/api/status", _) => (200, serde_json::json!({"server": "Party server", "id": *id, "needs_setup": false}).to_string()),
+                    ("POST", "/api/join", _) => (201, r#"{"token":"tok-party","person":{"id":3,"name":"Ana","role":"friend"},"device":{"id":7,"name":"laptop"},"server":{"name":"Party server"}}"#.into()),
+                    // (no key needed for the time: rms/src/party.rs time)
+                    ("GET", "/api/time", _) => (200, serde_json::json!({ "now_ms": s.server_now() }).to_string()),
+                    (_, _, false) => (401, r#"{"error":"This needs your device's key"}"#.into()),
+                    ("GET", "/api/me", _) => (200, me),
+                    ("GET", "/api/library", _) => (200, library.into()),
+                    ("GET", "/api/party", _) => (200, s.state().to_string()),
+                    ("POST", "/api/party/start", _) => {
+                        s.on = true;
+                        s.host = (3, "Ana".into());
+                        s.everyone = body["everyone_controls"].as_bool().unwrap_or(false);
+                        s.members = vec![(3, "Ana".into())];
+                        s.tell();
+                        (200, s.state().to_string())
+                    }
+                    ("POST", "/api/party/add", _) => {
+                        let e = s.entry(body["song"]["title"].as_str().unwrap_or("Party Song"), (3, "Ana"));
+                        if s.song.is_none() {
+                            s.song = Some(e);
+                            s.playing = true;
+                            s.started = s.server_now() + PARTY_LEAD_MS;
+                        } else {
+                            s.queue.push(e);
+                        }
+                        s.tell();
+                        (200, s.state().to_string())
+                    }
+                    ("POST", "/api/party/control", _) => match s.control(3, &body) {
+                        Ok(()) => {
+                            s.tell();
+                            (200, s.state().to_string())
+                        }
+                        Err(e) => (403, serde_json::json!({ "error": e }).to_string()),
+                    },
+                    ("POST", "/api/party/react", _) => {
+                        let at = s.server_now();
+                        s.reactions.push(serde_json::json!({"emoji": body["emoji"], "by": {"name": "Ana"}, "at_server_ms": at}));
+                        s.tell();
+                        (200, r#"{"ok":true}"#.into())
+                    }
+                    ("POST", "/api/party/end", _) => {
+                        *s = PartySim { ahead_ms: s.ahead_ms, sockets: std::mem::take(&mut s.sockets), next: s.next, ..Default::default() };
+                        s.tell();
+                        (200, r#"{"ok":true}"#.into())
+                    }
+                    ("POST", p, _) if p.starts_with("/api/devices/") => (200, r#"{"ok":true}"#.into()),
+                    _ => (404, r#"{"error":"no such page"}"#.into()),
+                };
+                drop(s);
+                let reply = format!("HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{json}", json.len());
+                let _ = conn.write_all(reply.as_bytes());
+            });
+        }
+    });
+    (address, sim)
+}
+
+/// The party server joined (its songs fetched).
+fn on_party_server(c: &Controller, address: &str) {
+    c.server_join(&format!("{address}/join/ABCD-EFGH-JKMN"));
+    assert!(until(5.0, || c.servers().rows.iter().any(|r| r.address == address && r.songs == Some(1))), "{:?}", c.servers());
+}
+
+/// The party server left at a test's end (the tests share settings.json: the next test starts with no server).
+fn off_party_server(c: &Controller, address: &str) {
+    c.server_leave(address);
+    assert!(until(5.0, || !c.servers().rows.iter().any(|r| r.address == address)), "{:?}", c.servers());
+}
+
+/// Where the party's song is now, by the stand-in's clock (s).
+fn party_at(sim: &Arc<Mutex<PartySim>>) -> f64 {
+    let s = sim.lock().unwrap();
+    if s.playing {
+        (s.server_now() - s.started) / 1000.0
+    } else {
+        s.paused_at / 1000.0
+    }
+}
+
+/// Every toast said within `secs` until one has `words` in it (all of them, for the message).
+fn toast_with(c: &Controller, words: &str, secs: f64) -> Result<String, Vec<String>> {
+    let mut seen = vec![];
+    let end = Instant::now() + Duration::from_secs_f64(secs);
+    while Instant::now() < end {
+        while let Some(t) = c.toast() {
+            if t.contains(words) {
+                return Ok(t);
+            }
+            seen.push(t);
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    Err(seen)
+}
+
+/// Joining a party (stage 4c-2, the Linux app's join_party and party_sync): its song plays here where everyone is, the
+/// in-party view says whose party it is, and the bar's Previous and (not the host's) Next are off.
+#[test]
+fn joining_a_party_plays_its_song_at_its_place() {
+    let _l = setup();
+    let (address, sim) = party_stand_in();
+    sim.lock().unwrap().bassis_party("Party Song", 20_000.0);
+    let (c, _f, _rx) = with_songs("party join", vec![]);
+    on_party_server(&c, &address);
+    assert!(until(5.0, || c.party_card(&address).join == "Join the Party"), "{:?}", c.party_card(&address));
+    let card = c.party_card(&address);
+    assert_eq!(card.heading, "Bassi is hosting a listening party");
+    assert_eq!(card.line, "Playing “Party Song” by Party Band. 1 person listening. Join, and you hear it here in step with everyone.");
+    c.party_join(&address);
+    assert!(until(10.0, || c.now().song.is_some_and(|t| t.title == "Party Song") && c.now().playing), "{:?}", c.now());
+    assert!(until(8.0, || (c.now().at - party_at(&sim)).abs() < 0.3), "here {:.2} s, the party {:.2} s", c.now().at, party_at(&sim));
+    let p = c.party();
+    assert_eq!(p.server, address);
+    assert_eq!(p.heading, "You're in Bassi's party");
+    assert_eq!(p.pill, "Playing");
+    assert!(!p.control && !p.host && !p.can_end && p.hearing);
+    assert_eq!(p.controls_note, "Bassi (the host) plays, pauses and skips.");
+    assert!(until(5.0, || c.party().sync_line.starts_with("In time with the party")), "{}", c.party().sync_line);
+    assert!(c.party().sync_line.contains(" · clock ±"), "{}", c.party().sync_line);
+    assert!(c.party_card(&address).in_it);
+    let now = c.now();
+    assert!(!now.can_previous && !now.can_next, "Previous never, Next only for who controls it");
+    c.party_leave();
+    off_party_server(&c, &address);
+    c.quit();
+}
+
+/// The party's place follows the server's clock, not this computer's (the clock offset measured as you join).
+#[test]
+fn the_party_follows_the_clock_offset() {
+    let _l = setup();
+    let (address, sim) = party_stand_in();
+    {
+        let mut s = sim.lock().unwrap();
+        s.ahead_ms = 7_000.0; // the server's clock is 7 s ahead of this one
+        s.bassis_party("Party Song", 15_000.0);
+    }
+    let (c, _f, _rx) = with_songs("party clock", vec![]);
+    on_party_server(&c, &address);
+    c.party_join(&address);
+    assert!(until(10.0, || c.now().playing), "{:?}", c.now());
+    assert!(until(8.0, || (c.now().at - party_at(&sim)).abs() < 0.3), "here {:.2} s, the party {:.2} s", c.now().at, party_at(&sim));
+    c.party_leave();
+    off_party_server(&c, &address);
+    c.quit();
+}
+
+/// Leaving the party brings back your own music where it was (the song, its place, playing as it was).
+#[test]
+fn leaving_brings_back_your_own_music() {
+    let _l = setup();
+    let (address, sim) = party_stand_in();
+    sim.lock().unwrap().bassis_party("Party Song", 5_000.0);
+    let mine = vec![wav("party-mine-a", 30.0), wav("party-mine-b", 30.0)];
+    let (c, _f, rx, list) = with_list("party leave", mine.clone());
+    c.play_from(list, 1, &mine[1].key());
+    assert!(until(5.0, || c.now().playing && c.now().at > 1.0), "{:?}", c.now());
+    on_party_server(&c, &address);
+    c.party_join(&address);
+    assert!(until(10.0, || c.now().song.is_some_and(|t| t.title == "Party Song")), "{:?}", c.now());
+    let was = c.queue();
+    assert_eq!(was.0.len(), 1, "the party's song alone while in it");
+    c.party_leave();
+    assert_eq!(toast_with(&c, "back to your own music", 3.0).map(|_| ()), Ok(()));
+    assert!(until(5.0, || c.now().song.is_some_and(|t| t.key() == mine[1].key()) && c.now().playing), "{:?}", c.now());
+    assert!(c.now().at >= 1.0, "from where it was: {:.2}", c.now().at);
+    assert_eq!(c.queue().0.len(), 2, "your own queue back");
+    assert!(c.party().server.is_empty());
+    let _ = rx;
+    off_party_server(&c, &address);
+    c.quit();
+}
+
+/// Only the host plays, pauses and skips (the Linux app's party_play_pause / party_skip): for the others Play/Pause
+/// is hearing it here or not and Next says the host skips; once the host lets everyone, it's for everyone.
+#[test]
+fn only_the_host_controls_unless_everyone_may() {
+    let _l = setup();
+    let (address, sim) = party_stand_in();
+    sim.lock().unwrap().bassis_party("Party Song", 5_000.0);
+    let (c, _f, _rx) = with_songs("party control", vec![]);
+    on_party_server(&c, &address);
+    c.party_join(&address);
+    assert!(until(10.0, || c.now().playing), "{:?}", c.now());
+    c.toggle_play();
+    assert!(until(3.0, || !c.party().hearing && !c.now().playing), "{:?}", c.party());
+    assert_eq!(c.party().sync_line.split(" · ").next(), Some("Not heard here: the party plays on. Hear It Here to be back in step."));
+    assert!(sim.lock().unwrap().playing, "the party plays on");
+    c.toggle_play();
+    assert!(until(5.0, || c.party().hearing && c.now().playing), "{:?}", c.party());
+    c.skip(1);
+    assert_eq!(toast_with(&c, "skips songs", 3.0), Ok("Bassi (the host) skips songs in this party".to_string()));
+    assert!(sim.lock().unwrap().actions.is_empty(), "nothing asked of the server");
+    // the host lets everyone
+    {
+        let mut s = sim.lock().unwrap();
+        s.everyone = true;
+        s.tell();
+    }
+    assert!(until(3.0, || c.party().control), "{:?}", c.party());
+    assert!(c.now().can_next);
+    c.toggle_play();
+    assert!(until(3.0, || !sim.lock().unwrap().playing), "a pause for everyone");
+    assert!(until(3.0, || c.party().pill == "Paused" && !c.now().playing), "{:?}", c.party());
+    assert_eq!(sim.lock().unwrap().actions, ["pause"]);
+    c.party_leave();
+    off_party_server(&c, &address);
+    c.quit();
+}
+
+/// The party's line drops: the view says so ("Lost the party: joining again…") and it's back by itself.
+#[test]
+fn a_lost_party_joins_again() {
+    let _l = setup();
+    let (address, sim) = party_stand_in();
+    sim.lock().unwrap().bassis_party("Party Song", 5_000.0);
+    let (c, _f, _rx) = with_songs("party lost", vec![]);
+    on_party_server(&c, &address);
+    c.party_join(&address);
+    assert!(until(10.0, || c.now().playing), "{:?}", c.now());
+    sim.lock().unwrap().line_down = true;
+    assert!(until(5.0, || c.party().lost), "{:?}", c.party());
+    assert_eq!(c.party().sync_line, "Lost the party: joining again…");
+    assert!(!c.party().server.is_empty(), "still in it");
+    sim.lock().unwrap().line_down = false;
+    assert!(until(10.0, || !c.party().lost), "{:?}", c.party());
+    c.party_leave();
+    off_party_server(&c, &address);
+    c.quit();
+}
+
+/// A song of your own picked in a party leaves it (the Linux app's play_current), with a toast.
+#[test]
+fn picking_your_own_song_leaves_the_party() {
+    let _l = setup();
+    let (address, sim) = party_stand_in();
+    sim.lock().unwrap().bassis_party("Party Song", 5_000.0);
+    let mine = vec![wav("party-own-a", 30.0)];
+    let (c, _f, _rx, list) = with_list("party own", mine.clone());
+    on_party_server(&c, &address);
+    c.party_join(&address);
+    assert!(until(10.0, || c.now().song.is_some_and(|t| t.title == "Party Song")), "{:?}", c.now());
+    c.play_from(list, 0, &mine[0].key());
+    assert_eq!(toast_with(&c, "own music", 3.0), Ok("You left the party to play your own music".to_string()));
+    assert!(until(5.0, || c.now().song.is_some_and(|t| t.key() == mine[0].key())), "{:?}", c.now());
+    assert!(c.party().server.is_empty());
+    off_party_server(&c, &address);
+    c.quit();
+}
+
+/// Hosting: Start a Party puts you in it as its host (the controls, End), a song clicked on the server's page goes
+/// into the party, and End ends it for everyone (your own music back).
+#[test]
+fn hosting_a_party_from_start_to_end() {
+    let _l = setup();
+    let (address, sim) = party_stand_in();
+    let (c, _f, _rx) = with_songs("party host", vec![]);
+    on_party_server(&c, &address);
+    assert!(until(5.0, || c.party_card(&address).can_start), "{:?}", c.party_card(&address));
+    assert_eq!(c.party_card(&address).line, "Nobody's having a party right now. In one, everyone hears the same song at the same moment and anyone adds songs.");
+    c.party_start(&address, false);
+    assert_eq!(toast_with(&c, "party is on", 5.0), Ok("The party is on. Add a song: it starts at once.".to_string()));
+    assert!(until(5.0, || c.party().host), "{:?}", c.party());
+    let p = c.party();
+    assert_eq!(p.heading, "You're hosting the party");
+    assert!(p.control && p.can_end);
+    assert_eq!(p.pill, "Quiet");
+    assert_eq!(p.members, ["Ana · host"]);
+    c.play_from(ListRef::Server(address.clone(), String::new()), 0, &c.server_page(&address, "").songs[0].0.key());
+    assert_eq!(toast_with(&c, "to the party", 3.0), Ok("Added “Party Song” to the party".to_string()));
+    assert!(until(10.0, || c.now().playing && c.party().now.is_some()), "{:?}", c.party());
+    c.party_react("🔥");
+    assert!(until(3.0, || c.party().reactions.first().is_some_and(|r| r.tip == "Ana: Fire")), "{:?}", c.party().reactions);
+    c.party_end();
+    assert!(until(5.0, || c.party().server.is_empty()), "{:?}", c.party());
+    assert!(!sim.lock().unwrap().on);
+    off_party_server(&c, &address);
+    c.quit();
+}

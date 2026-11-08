@@ -19,6 +19,13 @@
 - **Where Servers lives in the beta:** each joined server is a sidebar row under Library (as Linux); "Servers…" is a Settings card (Settings → Servers, as Share Songs with a Phone sits in Settings → Help), since the beta has no main menu. Cost if wrong: a button's place.
 - **The controller calls `servers::set_joined`** at start and on every change (the gap the map found: without it, server songs in History and the queue say "you left its server"). Cost if wrong: none.
 
+## Rulings (made while building 4c-2)
+
+- **The party lives in its own engine module** (engine/src/controller/party.rs, beside rms.rs), a straight port of the Linux app's join_party, party_news, party_sync, party_load, party_listen and leave_party; the controls go to it from toggle_play, skip, seek and play_current (a song of your own leaves the party). Cost if wrong: none (same behaviour, one place).
+- **Party cards are kept in the shared view** (every joined server's, made on each party or server change), never asked of the engine thread synchronously. Cost if wrong: a little work per change.
+- **The stand-in party server in the engine tests** speaks the same API and WebSocket messages as rms/src/party.rs (state on every change, the clock without a key) and serves a WAV with Range support; each stand-in has its own server id (the tests share settings.json). Cost if wrong: a test passing on a server that behaves differently; the VM check against the real rms covers it.
+- **Left from 4c-1, moved here as Task 4b:** the song menu's server items other than Add to the Party (Save to Your Library, Add to NAME, Split on NAME and the server's split queue). They weren't in beta.9 (its CHANGELOG lists what was). Cost if wrong: beta.10 waits on them, or they follow in beta.11.
+
 ## Global Constraints
 
 - Words are the Linux app's, moved into `core` (`src/ui/rms.rs`: the Servers dialog, the four permission rows "Play its songs and join its parties" / "Add songs to it" / "Split songs on it" / "Host a listening party" with "Yes" / "Off for you: its owner's choice", the server page lines, the party card, the in-party view, `server_reason`).

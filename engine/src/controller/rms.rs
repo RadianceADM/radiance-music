@@ -79,7 +79,7 @@ pub(super) struct Rms {
 }
 
 impl Engine {
-    fn rms_joined(&self, address: &str) -> Option<Joined> {
+    pub(super) fn rms_joined(&self, address: &str) -> Option<Joined> {
         self.settings.borrow().servers.iter().find(|s| s.address == address).cloned()
     }
 
@@ -87,6 +87,16 @@ impl Engine {
     fn rms_save(&self) {
         settings::save(&self.settings.borrow());
         servers::set_joined(&self.settings.borrow().servers);
+    }
+
+    /// Who this computer is on a server, as last heard.
+    pub(super) fn rms_me(&self, address: &str) -> Option<Me> {
+        self.rms.known.borrow().get(address).and_then(|k| k.me.clone())
+    }
+
+    /// A server's events line is open (it says when its party starts or ends).
+    pub(super) fn rms_live(&self, address: &str) -> bool {
+        self.rms.known.borrow().get(address).is_some_and(|k| k.live)
     }
 
     fn rms_know(&self, address: &str, f: impl FnOnce(&mut Known)) {
@@ -164,7 +174,8 @@ impl Engine {
                 self.rms_close_line(address);
                 self.rms_fetch(&server); // (its row and page say so, in plain words)
             }
-            Live::Party | Live::Queue(_) | Live::State(_) => {} // (the party and the split queue: stage 4c-2)
+            Live::Party => self.party_ask(&server),
+            Live::Queue(_) | Live::State(_) => {} // (the split queue: stage 4c-2's Task 4b)
         }
     }
 
@@ -200,9 +211,13 @@ impl Engine {
             move || {
                 let who = servers::me(&s);
                 let songs = who.as_ref().ok().map(|_| servers::library(&s));
-                (who, songs)
+                let party = who.as_ref().ok().and_then(|_| servers::party(&s).ok());
+                (who, songs, party)
             },
-            move |e, (who, songs): (Result<Me, Failure>, Option<Result<Vec<Song>, Failure>>)| {
+            move |e, (who, songs, party): (Result<Me, Failure>, Option<Result<Vec<Song>, Failure>>, Option<servers::Party>)| {
+                if let Some(p) = party {
+                    e.party_known(&address, p);
+                }
                 // its id, for an older join that didn't keep it
                 if let Some(id) = who.as_ref().ok().and_then(|m| m.server_id.clone()) {
                     let learnt = e.settings.borrow_mut().servers.iter_mut().find(|s| s.address == address && s.id.is_none()).map(|s| s.id = Some(id)).is_some();
@@ -293,6 +308,9 @@ impl Engine {
     }
 
     fn rms_forget(self: &Rc<Self>, s: &Joined, told: bool) {
+        if self.in_party_on(&s.address) {
+            self.party_leave(true); // (its party goes with it)
+        }
         self.settings.borrow_mut().servers.retain(|x| x.address != s.address);
         self.rms_save();
         self.rms_close_line(&s.address);
@@ -390,6 +408,7 @@ impl Engine {
             v.server_pages = pages;
         });
         self.shared.tell(Change::Servers);
+        self.publish_party(); // (the party cards follow what each server lets you do)
     }
 }
 

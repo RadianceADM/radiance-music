@@ -45,6 +45,8 @@ pub enum ChangeKind {
     Share,
     /// Radiance Music Servers: joined, left, a server's songs or what it lets you do (stage 4c).
     Servers,
+    /// The listening party you're in, or a server page's party card (stage 4c-2).
+    Party,
 }
 
 impl From<Change> for ChangeKind {
@@ -72,6 +74,7 @@ impl From<Change> for ChangeKind {
             Change::Storage => ChangeKind::Storage,
             Change::Share => ChangeKind::Share,
             Change::Servers => ChangeKind::Servers,
+            Change::Party => ChangeKind::Party,
             Change::Suggestions => ChangeKind::Suggestions,
         }
     }
@@ -980,6 +983,94 @@ impl MusicEngine {
     }
     pub fn shuffle_server(&self, address: String, query: String) {
         self.inner.shuffle_from(ListRef::Server(address, query));
+    }
+
+    // listening parties (stage 4c-2)
+    /// The server page open now ("" : none): its party card is kept fresh.
+    pub fn server_shown(&self, address: String) {
+        self.inner.server_shown(&address);
+    }
+    pub fn party_card(&self, address: String) -> PartyCardView {
+        let c = self.inner.party_card(&address);
+        PartyCardView { heading: c.heading, line: c.line, can_start: c.can_start, join: c.join, joining: c.joining, leaves: c.leaves, in_it: c.in_it }
+    }
+    /// The party you're in (`server` empty: none).
+    pub fn party(&self) -> PartyView {
+        let p = self.inner.party();
+        let rows = Rows::of(&self.inner);
+        PartyView {
+            server: p.server,
+            name: p.name,
+            heading: p.heading,
+            pill: p.pill,
+            playing: p.playing,
+            sync_line: p.sync_line,
+            lost: p.lost,
+            now: p.now.map(|(t, line)| {
+                let mut v = rows.song(&t);
+                v.subtitle = line;
+                v
+            }),
+            control: p.control,
+            host: p.host,
+            can_end: p.can_end,
+            everyone_controls: p.everyone_controls,
+            hearing: p.hearing,
+            controls_note: p.controls_note,
+            reactions: p.reactions.into_iter().map(|r| PartyReactionView { emoji: r.emoji, icon: r.icon, by: r.by, tip: r.tip }).collect(),
+            listening: p.listening,
+            members: p.members,
+            up_next: p
+                .up_next
+                .into_iter()
+                .map(|n| {
+                    let mut song = rows.song(&n.track);
+                    song.subtitle = n.line;
+                    PartyNextView { entry: n.entry, song, earlier: n.earlier, later: n.later, take_out: n.take_out }
+                })
+                .collect(),
+            bar_tip: p.bar_tip,
+        }
+    }
+    pub fn party_start(&self, address: String, everyone: bool) {
+        self.inner.party_start(&address, everyone);
+    }
+    pub fn party_join(&self, address: String) {
+        self.inner.party_join(&address);
+    }
+    pub fn party_leave(&self) {
+        self.inner.party_leave();
+    }
+    pub fn party_end(&self) {
+        self.inner.party_end();
+    }
+    pub fn party_play(&self, on: bool) {
+        self.inner.party_play(on);
+    }
+    pub fn party_skip(&self) {
+        self.inner.party_skip();
+    }
+    pub fn party_hear(&self, on: bool) {
+        self.inner.party_hear(on);
+    }
+    pub fn party_move(&self, entry: u64, to: u32) {
+        self.inner.party_move(entry, to as usize);
+    }
+    pub fn party_remove(&self, entry: u64) {
+        self.inner.party_remove(entry);
+    }
+    pub fn party_allow(&self, everyone: bool) {
+        self.inner.party_allow(everyone);
+    }
+    pub fn party_react(&self, emoji: String) {
+        self.inner.party_react(&emoji);
+    }
+    pub fn party_add(&self, key: String) {
+        self.inner.party_add(&key);
+    }
+    /// A song's menu offers Add to the Party (a song of the server whose party you're in).
+    pub fn can_add_to_party(&self, key: String) -> bool {
+        self.inner.can_add_to_party(&key)
     }
     pub fn song_menu(&self, key: String, place: MenuPlace) -> Vec<MenuSectionView> {
         self.inner
@@ -1902,6 +1993,129 @@ pub struct ServerPageView {
     pub note: String,
 }
 
+/// A server page's party card when you're not in its party: its heading and line, Start a Party offered, Join's
+/// label ("" : none to join), a join under way, "Joining leaves NAME's party.", and whether you're in it.
+#[derive(Clone, Debug, uniffi::Record)]
+pub struct PartyCardView {
+    pub heading: String,
+    pub line: String,
+    pub can_start: bool,
+    pub join: String,
+    pub joining: bool,
+    pub leaves: String,
+    pub in_it: bool,
+}
+
+/// A reaction in the party (the last minute's, newest first): its emoji, its picture's name, who, its tooltip.
+#[derive(Clone, Debug, uniffi::Record)]
+pub struct PartyReactionView {
+    pub emoji: String,
+    pub icon: String,
+    pub by: String,
+    pub tip: String,
+}
+
+/// A song up next in the party (its subtitle "artist · added by NAME") and what you can do with it.
+#[derive(Clone, Debug, uniffi::Record)]
+pub struct PartyNextView {
+    pub entry: u64,
+    pub song: SongView,
+    pub earlier: bool,
+    pub later: bool,
+    pub take_out: bool,
+}
+
+/// The listening party you're in, as its view shows it (`server` empty: you're in none).
+#[derive(Clone, Debug, uniffi::Record)]
+pub struct PartyView {
+    pub server: String,
+    pub name: String,
+    pub heading: String,
+    pub pill: String,
+    pub playing: bool,
+    pub sync_line: String,
+    pub lost: bool,
+    pub now: Option<SongView>,
+    pub control: bool,
+    pub host: bool,
+    pub can_end: bool,
+    pub everyone_controls: bool,
+    pub hearing: bool,
+    pub controls_note: String,
+    pub reactions: Vec<PartyReactionView>,
+    pub listening: String,
+    pub members: Vec<String>,
+    pub up_next: Vec<PartyNextView>,
+    pub bar_tip: String,
+}
+
+/// The party's fixed words (the Linux app's, core::server_words), and its six reactions (emoji, name, picture).
+#[derive(Clone, Debug, uniffi::Record)]
+pub struct PartyWords {
+    pub let_everyone: String,
+    pub start_party: String,
+    pub nothing_playing: String,
+    pub add_a_song: String,
+    pub play: String,
+    pub pause: String,
+    pub skip: String,
+    pub hear_it_here: String,
+    pub stop_hearing: String,
+    pub hear_tip: String,
+    pub up_next: String,
+    pub nothing_up_next: String,
+    pub nothing_up_next_sub: String,
+    pub earlier: String,
+    pub later: String,
+    pub take_out: String,
+    pub only_i_control: String,
+    pub let_everyone_control: String,
+    pub leave_party: String,
+    pub end_party: String,
+    pub end_heading: String,
+    pub end_body: String,
+    pub cancel: String,
+    pub add_to_party: String,
+    pub add_to_party_tip: String,
+    pub reactions: Vec<PartyReactionView>,
+}
+
+#[uniffi::export]
+pub fn party_words() -> PartyWords {
+    use radiance_core::server_words as w;
+    PartyWords {
+        let_everyone: w::LET_EVERYONE.into(),
+        start_party: w::START_PARTY.into(),
+        nothing_playing: w::NOTHING_PLAYING.into(),
+        add_a_song: w::ADD_A_SONG.into(),
+        play: w::PLAY.into(),
+        pause: w::PAUSE.into(),
+        skip: w::SKIP.into(),
+        hear_it_here: w::HEAR_IT_HERE.into(),
+        stop_hearing: w::STOP_HEARING.into(),
+        hear_tip: w::HEAR_TIP.into(),
+        up_next: w::UP_NEXT.into(),
+        nothing_up_next: w::NOTHING_UP_NEXT.into(),
+        nothing_up_next_sub: w::NOTHING_UP_NEXT_SUB.into(),
+        earlier: w::EARLIER.into(),
+        later: w::LATER.into(),
+        take_out: w::TAKE_OUT.into(),
+        only_i_control: w::ONLY_I_CONTROL.into(),
+        let_everyone_control: w::LET_EVERYONE_CONTROL.into(),
+        leave_party: w::LEAVE_PARTY.into(),
+        end_party: w::END_PARTY.into(),
+        end_heading: w::END_PARTY_HEADING.into(),
+        end_body: w::END_PARTY_BODY.into(),
+        cancel: w::CANCEL.into(),
+        add_to_party: w::MENU_ADD_TO_PARTY.into(),
+        add_to_party_tip: w::ADD_TO_PARTY_TIP.into(),
+        reactions: radiance_engine::servers::REACTIONS
+            .iter()
+            .map(|(emoji, name, icon)| PartyReactionView { emoji: emoji.to_string(), icon: icon.to_string(), by: String::new(), tip: name.to_string() })
+            .collect(),
+    }
+}
+
 /// Servers… and a server page's fixed words (the Linux app's, core::server_words).
 #[derive(Clone, Debug, uniffi::Record)]
 pub struct ServerWords {
@@ -2295,6 +2509,18 @@ mod tests {
         assert_eq!(server_search_words("Bassi's server".into(), "https://m.example".into())[0], "Search Bassi's server");
     }
 
+    /// Stage 4c-2: the party's words and its six reactions (emoji, name, the picture beside the app) reach the beta.
+    #[test]
+    fn parties_reach_the_beta() {
+        let w = party_words();
+        assert_eq!((w.start_party.as_str(), w.leave_party.as_str(), w.end_party.as_str(), w.add_to_party.as_str()), ("Start a Party", "Leave the Party", "End the Party", "Add to the Party"));
+        assert_eq!(w.end_heading, "End the party for everyone?");
+        let r: Vec<(&str, &str, &str)> = w.reactions.iter().map(|r| (r.emoji.as_str(), r.tip.as_str(), r.icon.as_str())).collect();
+        assert_eq!(r.len(), 6);
+        assert_eq!(r[0], ("🔥", "Fire", "rms-react-fire"));
+        assert!(r.iter().all(|(_, _, icon)| std::path::Path::new(&format!("{}/../data/icons/{icon}.svg", env!("CARGO_MANIFEST_DIR"))).exists()), "{r:?}");
+    }
+
     #[test]
     fn sharing_reaches_the_beta() {
         assert_eq!(menu_action_round_trip(MenuAction::CopyLink), MenuAction::CopyLink);
@@ -2432,7 +2658,7 @@ mod tests {
 
     #[test]
     fn the_versions_and_the_browse_tiles() {
-        assert_eq!(beta_version(), "0.8.0-beta.9");
+        assert_eq!(beta_version(), "0.8.0-beta.10");
         assert_eq!(engine_version(), radiance_engine::VERSION);
         let tiles = browse_tiles();
         assert_eq!(tiles.len(), 12);

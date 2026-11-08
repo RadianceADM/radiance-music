@@ -38,7 +38,9 @@ use crate::effects::{self, Sound};
 use radiance_core::mix::{part_volumes, preset, Voice};
 use crate::track::{Source, Track};
 
+mod party;
 mod rms;
+pub use party::{PartyCard, PartyNext, PartyReaction, PartyState};
 pub use rms::{ServerPage, ServerRow, ServersState};
 
 /// What changed (read it again with the getter of the same name).
@@ -82,6 +84,8 @@ pub enum Change {
     Share,
     /// Radiance Music Servers: one joined or left, a server's songs or what it lets you do, the invite box's line (stage 4c).
     Servers,
+    /// The listening party you're in, or a server's party card (stage 4c-2).
+    Party,
 }
 
 /// Share Songs with a Phone as its dialog shows it (stage 4b, the Linux app's src/ui/sharing.rs): which way, the QR's
@@ -464,6 +468,8 @@ struct View {
     suggestions: Vec<radiance_core::suggest::Chip>,
     /// Radiance Music Servers (stage 4c): Servers…, and each joined server's page (all its songs; searched as asked).
     servers: ServersState,
+    party: PartyState,
+    party_cards: HashMap<String, PartyCard>,
     server_pages: HashMap<String, ServerPage>,
 }
 
@@ -578,6 +584,8 @@ impl Controller {
                 mixing: false,
                 suggestions: Vec::new(),
                 servers: ServersState::default(),
+                party: PartyState::default(),
+                party_cards: HashMap::new(),
                 server_pages: HashMap::new(),
             }),
             liked_q: Mutex::new(String::new()),
@@ -1220,6 +1228,100 @@ impl Controller {
         page.map(|p| rms::page_for(p, q)).unwrap_or_default()
     }
 
+    /// The server page open now ("" : none): its party card is kept fresh while it's open (stage 4c-2).
+    pub fn server_shown(&self, address: &str) {
+        let address = address.to_string();
+        self.post(move |e| e.party_shown(address));
+    }
+
+    /// The listening party you're in (`server` empty: none).
+    pub fn party(&self) -> PartyState {
+        self.shared.view(|v| v.party.clone())
+    }
+
+    /// A server page's party card: start one, join it, or (`in_it`) the party view.
+    pub fn party_card(&self, address: &str) -> PartyCard {
+        self.shared.view(|v| v.party_cards.get(address).cloned()).unwrap_or_default()
+    }
+
+    /// Start a Party on a server (`everyone`: everyone plays, pauses and skips); you're in it at once.
+    pub fn party_start(&self, address: &str, everyone: bool) {
+        let address = address.to_string();
+        self.post(move |e| e.party_start(address, everyone));
+    }
+
+    /// Join a server's party: your own music waits, and comes back as it was when you leave.
+    pub fn party_join(&self, address: &str) {
+        let address = address.to_string();
+        self.post(move |e| e.party_join(address));
+    }
+
+    /// Leave the Party: your own music back (a toast says so).
+    pub fn party_leave(&self) {
+        self.post(|e| {
+            if e.in_party() {
+                e.party_leave(true);
+                e.toast(radiance_core::server_words::YOU_LEFT_PARTY.to_string());
+            }
+        });
+    }
+
+    /// End the Party, for everyone (the app asks first).
+    pub fn party_end(&self) {
+        self.post(|e| e.party_end());
+    }
+
+    /// The party view's Play / Pause (for everyone; you control it).
+    pub fn party_play(&self, on: bool) {
+        self.post(move |e| e.party_act(if on { "play" } else { "pause" }, serde_json::json!({})));
+    }
+
+    /// The party view's Skip (for everyone; you control it).
+    pub fn party_skip(&self) {
+        self.post(|e| e.party_act("skip", serde_json::json!({})));
+    }
+
+    /// Hear It Here, or not (the party plays on either way).
+    pub fn party_hear(&self, on: bool) {
+        self.post(move |e| e.party_hear(on));
+    }
+
+    /// Up next: a song to place `to` (Earlier, Later).
+    pub fn party_move(&self, entry: u64, to: usize) {
+        self.post(move |e| e.party_act("reorder", serde_json::json!({ "entry": entry, "to": to })));
+    }
+
+    /// Up next: a song taken out of the queue.
+    pub fn party_remove(&self, entry: u64) {
+        self.post(move |e| e.party_act("remove", serde_json::json!({ "entry": entry })));
+    }
+
+    /// The host's: everyone plays, pauses and skips, or only the host.
+    pub fn party_allow(&self, everyone: bool) {
+        self.post(move |e| e.party_act("allow", serde_json::json!({ "everyone": everyone })));
+    }
+
+    /// A reaction, for everyone in the party (one of servers::REACTIONS' emoji).
+    pub fn party_react(&self, emoji: &str) {
+        let emoji = emoji.to_string();
+        self.post(move |e| e.party_react(emoji));
+    }
+
+    /// A song's menu offers Add to the Party: it's a song of the server whose party you're in.
+    pub fn can_add_to_party(&self, key: &str) -> bool {
+        self.shared.view(|v| !v.party.server.is_empty() && v.server_pages.get(&v.party.server).is_some_and(|p| p.songs.iter().any(|(t, _)| t.key() == key)))
+    }
+
+    /// Add to the Party (a server song's menu): into its queue, or playing at once when nothing does.
+    pub fn party_add(&self, key: &str) {
+        let key = key.to_string();
+        self.post(move |e| {
+            if let Some(t) = e.find_track(&key) {
+                e.party_add(t);
+            }
+        });
+    }
+
     /// The first-start guide was seen (in the settings both apps share).
     pub fn guide_seen(&self) -> bool {
         self.shared.view(|v| v.guide_seen)
@@ -1480,6 +1582,8 @@ struct Engine {
     two_q: RefCell<VecDeque<(Track, bool)>>,
     /// Radiance Music Servers (stage 4c, controller/rms.rs).
     rms: rms::Rms,
+    /// Listening parties (stage 4c-2, controller/party.rs).
+    party: party::Parties,
     splitting_two: RefCell<Option<Track>>,
     split_asked: RefCell<HashSet<String>>,
     /// The Mixer's sliders for this run (not kept, as the GTK app's), and the voice button.
@@ -1579,6 +1683,7 @@ impl Engine {
             current_uri: RefCell::default(),
             pulse_for: RefCell::default(),
             rms: rms::Rms::default(),
+            party: party::Parties::default(),
         }
     }
 
@@ -1695,6 +1800,9 @@ impl Engine {
     }
 
     fn save_session(&self) {
+        if self.in_party() {
+            return; // a party's song isn't where you are (your own music was kept as you joined)
+        }
         let position = self.player.borrow().as_ref().and_then(|p| p.position()).or(self.restore_at.get()).unwrap_or(self.position.get());
         let (queue, index) = {
             let q = self.queue.borrow();
@@ -1736,6 +1844,12 @@ impl Engine {
         let tracks = self.list(&list);
         // the song clicked: at its place, or (the list moved since) wherever it is now; gone: nothing
         let Some(i) = tracks.get(i).filter(|t| t.key() == key).map(|_| i).or_else(|| tracks.iter().position(|t| t.key() == key)) else { return };
+        if let ListRef::Server(address, _) = &list {
+            if self.in_party_on(address) {
+                self.party_add(tracks[i].clone()); // in its party: into the party's queue (the Linux app's play_from_server)
+                return;
+            }
+        }
         if list == ListRef::Queue {
             self.restored.set(false);
             self.restore_at.set(None);
@@ -1835,6 +1949,10 @@ impl Engine {
     /// The queue's song at its index, from its saved copy, a stream, or the Archive. (Stage 1
     /// of the Windows app: no parts, voices or videos yet; a video plays its sound.)
     fn play_current(self: &Rc<Self>) {
+        if self.in_party() {
+            self.party_leave(false); // a song of your own picked: out of the party
+            self.toast(radiance_core::server_words::LEFT_FOR_YOUR_OWN.to_string());
+        }
         self.let_go_of_video(); // before the old video's pipeline goes (review I5)
         self.replan(); // a new song: its own plan and cue
         let Some(t) = self.queue.borrow().at_index().cloned() else { return };
@@ -2022,6 +2140,9 @@ impl Engine {
             Event::Ended => crate::log::note(&format!("ended “{song}”")),
             Event::Error(e) => crate::log::note(&format!("error playing “{song}”: {e}")),
         }
+        if self.party_event(&ev) {
+            return; // a party's song: its end waits for the server's next one
+        }
         match ev {
             Event::Ready => {
                 self.fails.set(0);
@@ -2127,6 +2248,8 @@ impl Engine {
             .or_else(|| self.history.borrow().iter().map(|(t, _)| t).find(|t| t.key() == key).cloned())
             // a playlist's song found nowhere else (its page's menu, heart, Play Next)
             .or_else(|| crate::db::playlists().into_iter().find_map(|(id, _, _)| crate::db::playlist_songs(id).into_iter().find(|t| t.key() == key)))
+            // a server's song (its page's menu: Add to the Party)
+            .or_else(|| self.shared.view(|v| v.server_pages.values().flat_map(|p| p.songs.iter().map(|(t, _)| t)).find(|t| t.key() == key).cloned()))
     }
 
     fn saved_state(&self, t: &Track) -> Saved {
@@ -3681,6 +3804,10 @@ impl Engine {
     }
 
     fn toggle_play(self: &Rc<Self>) {
+        if self.in_party() {
+            self.party_play_pause();
+            return;
+        }
         if self.current.borrow().is_none() {
             return;
         }
@@ -3719,6 +3846,10 @@ impl Engine {
     }
 
     fn skip(self: &Rc<Self>, by: i32) {
+        if self.in_party() {
+            self.party_skip(by);
+            return;
+        }
         if by > 0 {
             self.note_skip_if_early();
         }
@@ -3751,7 +3882,11 @@ impl Engine {
         }
     }
 
-    fn seek(&self, at: f64) {
+    fn seek(self: &Rc<Self>, at: f64) {
+        if self.in_party() {
+            self.party_seek(at);
+            return;
+        }
         self.drop_cue(); // (the player's seek resets the other deck: cued again from here)
         if self.restored.get() {
             self.restore_at.set(Some(at)); // not started yet: from there when it is
@@ -3884,7 +4019,9 @@ impl Engine {
         if self.last_save.get().is_none_or(|t| t.elapsed() > Duration::from_secs(5)) {
             self.save_session(); // where you are, in case the app closes
         }
-        self.transitions(at);
+        if !self.in_party() {
+            self.transitions(at); // (a party's songs follow the server, never a mix)
+        }
     }
 
     // ------------------------------------------------------------------ between songs (stage 4a-2, GTK's transitions)
@@ -4130,6 +4267,14 @@ impl Engine {
             song,
         };
         drop(q);
+        // in a party: Next skips for everyone (when you control it), there's no going back, and Play/Pause shows the
+        // party's (not this computer's short waits to stay in step)
+        let mut now = now;
+        if let Some((control, song, heard)) = self.party_bar() {
+            now.can_previous = false;
+            now.can_next = control && song;
+            now.playing = heard;
+        }
         let swapchain = if video { self.swapchain.get() } else { 0 };
         self.shared.view(|v| {
             v.now = now;
