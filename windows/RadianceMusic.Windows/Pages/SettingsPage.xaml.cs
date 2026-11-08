@@ -230,6 +230,8 @@ public sealed partial class SettingsPage : Page
         help.Children.Add(PageKit.IconButton("", w.GuideTitle, () => _ = Dialogs.GuideDialog.Show(hub!, XamlRoot)));
         // Share Songs with a Phone (stage 4b; the Linux app's main menu has it, the guide's fifth card says it's here)
         help.Children.Add(PageKit.IconButton("\uE8EA", Ffi.ShareWords().Menu, () => _ = Dialogs.ShareDialog.Show(hub!, XamlRoot)));
+        // Servers… (stage 4c; the Linux app's main menu has it, beside Share Songs with a Phone)
+        help.Children.Add(PageKit.IconButton("\uE968", Ffi.ServerWords().Menu, () => _ = Dialogs.ServersDialog.Show(hub!, XamlRoot)));
         help.Children.Add(PageKit.IconButton("", w.WhatsNew, () => _ = Dialogs.WhatsNewDialog.Show(XamlRoot)));
         help.Children.Add(PageKit.IconButton("", w.Look, () => hub!.Engine.LookForUpdates(true)));
         help.Children.Add(PageKit.IconButton("", w.ReportTitle + "…", () => _ = Dialogs.ReportDialog.Show(hub!, XamlRoot)));

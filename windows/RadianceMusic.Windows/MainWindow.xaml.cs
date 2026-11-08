@@ -53,6 +53,7 @@ public sealed partial class MainWindow : Window
         toastTimer.Tick += (_, _) => { toastTimer.Stop(); Toast.IsOpen = false; NextToast(); };
         Toast.Closed += (_, _) => { toastTimer.Stop(); NextToast(); };
         RenderPlaylists();
+        RenderServers();
         // Splitting… (stage 3): the cores it may use, Pause Splitting, at the sidebar's foot
         // Downloading (owner, 2026-11-07): the liked songs not saved yet, with how many; always there
         downloadingItem = new NavigationViewItem { Content = hub.Engine.Downloading().Title, Tag = "downloading", Icon = new FontIcon { Glyph = "\uE896" } };
@@ -159,6 +160,7 @@ public sealed partial class MainWindow : Window
             "settings" => (typeof(SettingsPage), hub),
             "downloading" => (typeof(DownloadingPage), hub),
             _ when name.StartsWith("playlist:") && long.TryParse(name["playlist:".Length..], out var id) => (typeof(PlaylistPage), new PageArgs(hub, id)),
+            _ when name.StartsWith("server:") => (typeof(ServerPage), new PageArgs(hub, name["server:".Length..])),
             _ => (typeof(HomePage), hub),
         };
         var whatNow = args is PageArgs a ? a.What : null;
@@ -175,6 +177,29 @@ public sealed partial class MainWindow : Window
     private async Task NewPlaylist()
     {
         if (await Dialogs.NameDialog.NewPlaylist(hub, Content.XamlRoot, null) is { } id) Show("playlist:" + id);
+    }
+
+    /// <summary>Each joined Radiance Music Server under Library, after Genres (as the Linux app's sidebar, stage 4c),
+    /// named as it's called; made again only when the list changed.</summary>
+    private void RenderServers()
+    {
+        var rows = hub.Engine.Servers().Rows;
+        var want = string.Join("\n", rows.Select(r => r.Address + "|" + r.Name));
+        var have = string.Join("\n", Nav.MenuItems.OfType<NavigationViewItem>().Where(i => i.Tag is string t && t.StartsWith("server:")).Select(i => ((string)i.Tag)["server:".Length..] + "|" + i.Content));
+        if (want == have) return;
+        foreach (var old in Nav.MenuItems.OfType<NavigationViewItem>().Where(i => i.Tag is string t && t.StartsWith("server:")).ToList())
+            Nav.MenuItems.Remove(old);
+        var at = Nav.MenuItems.IndexOf(PlaylistsHeader);
+        foreach (var r in rows)
+        {
+            var item = new NavigationViewItem { Content = r.Name, Tag = "server:" + r.Address, Icon = new FontIcon { Glyph = "\uE968" } };
+            ToolTipService.SetToolTip(item, Native.Native.ServerSearchWords(r.Name, r.Address)[1]);
+            Nav.MenuItems.Insert(at++, item);
+        }
+        // its page left when it's left
+        if (page.StartsWith("server:") && !rows.Any(r => "server:" + r.Address == page)) Show("liked");
+        foreach (var item in Nav.MenuItems.OfType<NavigationViewItem>())
+            if ((string)item.Tag == page && !ReferenceEquals(Nav.SelectedItem, item)) Nav.SelectedItem = item;
     }
 
     /// <summary>The playlists under their heading, then "New Playlist" (as the GTK app's sidebar).</summary>
@@ -296,6 +321,7 @@ public sealed partial class MainWindow : Window
     private void OnChange(ChangeKind what)
     {
         if (what == ChangeKind.Playlists) RenderPlaylists();
+        if (what == ChangeKind.Servers) RenderServers();
         if (what == ChangeKind.Liked) downloadingItem.Content = hub.Engine.Downloading().Title;
         if (what == ChangeKind.Online) ShowOnline();
         if (what == ChangeKind.Toast)
