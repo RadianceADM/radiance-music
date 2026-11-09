@@ -48,6 +48,8 @@ pub enum Action {
     CopyLink,
     /// One of your saved songs sent to a joined server (its address): the Linux menu's "Add to NAME" (beta.11).
     AddToServer(String),
+    /// A server's song split on its server, for everyone there: "Split on NAME" (beta.11).
+    SplitOnServer,
 }
 
 /// What splitting can do for a song now, for its menu (stage 3): online, how many parts it has

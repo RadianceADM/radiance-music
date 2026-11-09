@@ -216,7 +216,7 @@ internal sealed class QueuePanel : Grid
     private void RenderSplits()
     {
         var s = hub.Engine.Splits();
-        var key = $"{s.Now?.Song.Key}|{s.Now?.Phase}|{s.TwoNow?.Key}|{string.Join(",", s.Waiting.Select(x => x.Key))}|{string.Join(",", s.TwoWaiting.Select(x => x.Key))}|{s.Paused}";
+        var key = $"{s.Now?.Song.Key}|{s.Now?.Phase}|{s.TwoNow?.Key}|{string.Join(",", s.Waiting.Select(x => x.Key))}|{string.Join(",", s.TwoWaiting.Select(x => x.Key))}|{s.Paused}|{string.Join(",", s.Away.Select(x => x.Key + x.Subtitle))}";
         if (key == splitsShown) return;
         splitsShown = key;
         splitsView.Children.Clear();
@@ -238,6 +238,12 @@ internal sealed class QueuePanel : Grid
         {
             splitsView.Children.Add(new TextBlock { Text = waiting[i].Title, Style = (Style)Application.Current.Resources["BodyTextBlockStyle"], TextTrimming = TextTrimming.CharacterEllipsis, Margin = new Thickness(0, i == 0 ? 10 : 2, 0, 0) });
             splitsView.Children.Add(Small(Ffi.InLine((uint)(i + 1), waiting[i].Byline)));
+        }
+        // your songs in a server's split queue (beta.11): "On NAME · number 2 in line"
+        for (var i = 0; i < s.Away.Length; i++)
+        {
+            splitsView.Children.Add(new TextBlock { Text = s.Away[i].Title, Style = (Style)Application.Current.Resources["BodyTextBlockStyle"], TextTrimming = TextTrimming.CharacterEllipsis, Margin = new Thickness(0, i == 0 ? 10 : 2, 0, 0) });
+            splitsView.Children.Add(Small(s.Away[i].Subtitle));
         }
         splitsView.Children.Add(new TextBlock { Text = W.SplitsNote, Style = (Style)Application.Current.Resources["CaptionTextBlockStyle"], Foreground = (Brush)Application.Current.Resources["TextFillColorTertiaryBrush"], TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 12, 0, 0) });
         var pause = new ToggleSwitch { Header = W.PauseSplitting, IsOn = s.Paused, Margin = new Thickness(0, 8, 0, 0) };

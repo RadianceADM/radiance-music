@@ -69,9 +69,20 @@ pub(super) struct Known {
     live: bool,
 }
 
+/// One of your songs in a server's split queue (the Linux app's Away): its server, its job there, where it is in line.
+pub(super) struct Away {
+    server: Joined,
+    job: servers::Job,
+    track: Track,
+    ahead: Option<usize>,
+    next_turn: Option<String>,
+}
+
 /// The servers' part of the engine.
 #[derive(Default)]
 pub(super) struct Rms {
+    /// Your songs in servers' split queues (beta.11).
+    away: RefCell<Vec<Away>>,
     known: RefCell<HashMap<String, Known>>,
     /// Each joined server's events line (by its address).
     lines: RefCell<HashMap<String, servers::Socket>>,
@@ -177,7 +188,8 @@ impl Engine {
                 self.rms_fetch(&server); // (its row and page say so, in plain words)
             }
             Live::Party => self.party_ask(&server),
-            Live::Queue(_) | Live::State(_) => {} // (the split queue: stage 4c-2's Task 4b)
+            Live::Queue(v) => self.rms_queue_news(&server, &servers::parse_queue(&v)),
+            Live::State(_) => {} // (the party's line's, not the events line's)
         }
     }
 
@@ -250,6 +262,12 @@ impl Engine {
                     }
                 }
                 e.rms_publish();
+                // your songs in its split queue: where they are now (its events line pushes it; this when it's down)
+                if e.rms.away.borrow().iter().any(|a| a.server.address == address) {
+                    if let Some(s) = e.rms_joined(&address) {
+                        e.rms_ask_queue(&s);
+                    }
+                }
                 if again {
                     if let Some(s) = e.rms_joined(&address) {
                         e.rms_fetch(&s);
@@ -367,6 +385,146 @@ impl Engine {
                 e.rms_fetch(&server);
             }
         });
+    }
+
+    /// A server's song its server can split for you: its server (a joined one that lets you split, or hasn't said yet).
+    pub(super) fn rms_splits_on(&self, t: &Track) -> Option<Joined> {
+        if t.source != Source::Server || t.file.is_some() || t.video {
+            return None;
+        }
+        let s = servers::of_track(t)?;
+        self.rms_me(&s.address).is_none_or(|m| m.can_split).then_some(s)
+    }
+
+    /// Split on NAME (its menu, or a split asked by hand of a server's song).
+    pub(super) fn rms_split_on_key(self: &Rc<Self>, key: &str) {
+        if let Some(t) = self.find_track(key) {
+            self.rms_split_on(t);
+        }
+    }
+
+    /// Asks the song's server to split it (POST /api/split): its parts are then there for everyone (the Linux app's
+    /// split_on_server). Asked again while it waits there: nothing more.
+    pub(super) fn rms_split_on(self: &Rc<Self>, t: Track) {
+        let Some(server) = servers::of_track(&t) else { return };
+        if self.rms.away.borrow().iter().any(|a| a.track.key() == t.key()) {
+            return;
+        }
+        let (s, asked_for) = (server.clone(), t.clone());
+        self.bg(move || servers::split(&s, &asked_for), move |e, asked: Result<servers::Asked, Failure>| match asked {
+            Ok(servers::Asked::Split) => {
+                e.toast(rw::split_already(&t.title, &server.name));
+                if let Some((_, song)) = servers::song_of(&t) {
+                    e.rms_refresh_song(&server, song.id);
+                }
+            }
+            Ok(servers::Asked::Queued(job)) => {
+                crate::log::note(&format!("asked {} to split “{}”", server.name, t.title));
+                e.toast(rw::splits_now(&server.name, &t.title, &job.note));
+                e.rms.away.borrow_mut().push(Away { server: server.clone(), job, track: t, ahead: None, next_turn: None });
+                e.rms_ask_queue(&server);
+                e.publish_splits();
+            }
+            Err(f) => e.toast(f.words(&server.name)),
+        });
+    }
+
+    /// A server's split queue asked for (where your songs are in it).
+    fn rms_ask_queue(self: &Rc<Self>, server: &Joined) {
+        let (s, server) = (server.clone(), server.clone());
+        self.bg(move || servers::queue(&s), move |e, q| {
+            if let Ok(q) = q {
+                e.rms_queue_news(&server, &q);
+            }
+        });
+    }
+
+    /// A server's split queue as it is now: where your songs are, and those that are done (the Linux app's queue_news).
+    fn rms_queue_news(self: &Rc<Self>, server: &Joined, q: &servers::Queue) {
+        if !self.rms.away.borrow().iter().any(|a| a.server.address == server.address) {
+            return; // none of yours there
+        }
+        let mut done = vec![];
+        self.rms.away.borrow_mut().retain_mut(|a| {
+            if a.server.address != server.address {
+                return true;
+            }
+            match q.job(a.job.id) {
+                Some(j) if !j.finished() => {
+                    a.job = j.clone();
+                    a.ahead = q.ahead(j.id);
+                    a.next_turn = q.next_turn.clone();
+                    true
+                }
+                found => {
+                    done.push((a.track.clone(), found.cloned()));
+                    false
+                }
+            }
+        });
+        for (t, job) in done {
+            match job {
+                Some(j) if j.state == "done" => {
+                    crate::log::note(&format!("{} split “{}”", server.name, t.title));
+                    self.toast(rw::split_done(&t.title, &server.name));
+                }
+                Some(j) if j.state == "failed" => self.toast(rw::split_failed(&server.name, &j.note)),
+                _ => self.toast(rw::taken_out(&t.title, &server.name)),
+            }
+            // the song as it is now (its parts), not the whole list
+            if let Some((_, song)) = servers::song_of(&t) {
+                self.rms_refresh_song(server, song.id);
+            }
+        }
+        self.publish_splits();
+    }
+
+    /// One song of a server asked for again (its parts after a split).
+    fn rms_refresh_song(self: &Rc<Self>, server: &Joined, id: i64) {
+        let (s, address) = (server.clone(), server.address.clone());
+        self.bg(move || servers::song(&s, id), move |e, song: Result<Song, Failure>| {
+            let Ok(song) = song else { return };
+            e.rms_know(&address, |k| {
+                if let Some(list) = k.songs.as_mut() {
+                    match list.iter_mut().find(|s| s.id == song.id) {
+                        Some(s) => *s = song,
+                        None => list.push(song),
+                    }
+                }
+            });
+            e.rms_publish();
+        });
+    }
+
+    /// Your songs in servers' split queues, as the Splits tab shows them: the song, and where it is.
+    pub(super) fn rms_away_rows(&self) -> Vec<(Track, String)> {
+        self.rms.away.borrow().iter().map(|a| (a.track.clone(), rw::away_row(&a.job.state, a.ahead, &a.server.name, &a.job.note, a.next_turn.as_deref()))).collect()
+    }
+
+    /// A song just split on this computer: its parts go to a server's copy of it that has none (a server's own song, or
+    /// one of yours added there), for everyone there. Servers that don't let you add songs are left alone (the Linux
+    /// app's share_parts).
+    pub(super) fn rms_share_parts(self: &Rc<Self>, t: &Track) {
+        for s in self.settings.borrow().servers.clone() {
+            if self.rms_me(&s.address).is_some_and(|m| !m.can_add) {
+                continue;
+            }
+            let (song, server, title) = (t.clone(), s.clone(), t.title.clone());
+            self.bg(
+                move || {
+                    let copy = servers::copy_on(&server, &song).filter(|c| !c.split)?;
+                    Some(servers::upload_parts(&server, copy.id, &song))
+                },
+                move |e, went| match went {
+                    Some(Ok((parts, _))) if !parts.is_empty() => {
+                        crate::log::note(&format!("the parts of “{title}” went to {}", s.name));
+                        e.toast(rw::parts_on_it_now(&title, &s.name));
+                    }
+                    Some(Err(err)) => crate::log::note(&format!("the parts of “{title}” didn't go to {}: {err}", s.name)),
+                    _ => {}
+                },
+            );
+        }
     }
 
     /// Refresh (a server's page): asked again now.
@@ -492,4 +650,15 @@ pub(super) fn server_items(t: &Track, liked: bool, saved: bool, rows: &[ServerRo
         }
     }
     v
+}
+
+/// A server's song its server can split for you (a joined server that lets you split, or hasn't said yet): its name ("",
+/// while it waits in that server's queue: nothing to offer, and no splitting here either). None: split here as any song.
+pub(super) fn split_there(t: &Track, rows: &[ServerRow], away: bool) -> Option<String> {
+    if t.source != Source::Server || t.file.is_some() || t.video {
+        return None;
+    }
+    let s = servers::of_track(t)?;
+    let r = rows.iter().find(|r| r.address == s.address)?;
+    (!r.known || r.can[2]).then(|| if away { String::new() } else { r.name.clone() })
 }

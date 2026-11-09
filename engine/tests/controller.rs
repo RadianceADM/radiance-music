@@ -2467,6 +2467,8 @@ fn a_playing_song_gets_its_pulse() {
 /// reply), 2: the key revoked (401 for every keyed call). Anything else: 404 (the events line too: it tries again).
 /// Songs the 4c-1 stand-in was sent (POST /api/songs), by title.
 static RMS_UPLOADS: Mutex<Vec<String>> = Mutex::new(Vec::new());
+/// The 4c-1 stand-in's split queue: its one job's state (0 none asked, 1 waiting, 2 done).
+static RMS_SPLIT: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
 
 fn rms_stand_in(mode: Arc<std::sync::atomic::AtomicU8>) -> String {
     use std::io::{BufRead, BufReader, Read, Write};
@@ -2514,6 +2516,16 @@ fn rms_stand_in(mode: Arc<std::sync::atomic::AtomicU8>) -> String {
                 ("GET", "/api/library", true, _) => (200, library.into()),
                 ("GET", "/api/party", true, _) => (200, r#"{"party":null}"#.into()),
                 ("POST", p, true, _) if p.starts_with("/api/devices/") => (200, r#"{"ok":true}"#.into()),
+                ("POST", "/api/split", true, _) => {
+                    RMS_SPLIT.store(1, Ordering::SeqCst);
+                    (200, r#"{"job":{"id":21,"song":{"id":4,"title":"Para Sa Streets","artist":"Hev Abi"},"asked_by":{"name":"Ana"},"state":"waiting","progress":0,"note":"1 song first"}}"#.into())
+                }
+                ("GET", "/api/queue", true, _) => {
+                    let state = match RMS_SPLIT.load(Ordering::SeqCst) { 1 => "waiting", 2 => "done", _ => "" };
+                    let jobs = if state.is_empty() { serde_json::json!([]) } else { serde_json::json!([{"id": 21, "song": {"id": 4, "title": "Para Sa Streets", "artist": "Hev Abi"}, "asked_by": {"name": "Ana"}, "state": state, "progress": 0, "note": "1 song first"}]) };
+                    (200, serde_json::json!({"jobs": jobs, "next_turn": {"name": "Bassi"}}).to_string())
+                }
+                ("GET", "/api/songs/4", true, _) => (200, r#"{"id":4,"artist":"Hev Abi","title":"Para Sa Streets","file":"Hev Abi - Para Sa Streets.opus","url":"/files/Hev%20Abi%20-%20Para%20Sa%20Streets.opus","duration_ms":201500,"split":true,"parts":["vocals","drums","bass","other"],"files":{},"added_by":{"id":1,"name":"Bassi"}}"#.into()),
                 ("POST", "/api/songs", true, _) => {
                     // the title field of the form (name="title"\r\n\r\nTITLE\r\n)
                     let form = String::from_utf8_lossy(&body);
@@ -3267,6 +3279,34 @@ fn a_songs_menu_has_its_server_items() {
     c.do_menu(&mine.key(), 0, add.action);
     assert_eq!(toast_with(&c, "is on Bassi's server now", 10.0), Ok("“Song server-menu-mine” is on Bassi's server now, for everyone there".to_string()));
     assert!(RMS_UPLOADS.lock().unwrap().contains(&"Song server-menu-mine".to_string()));
+    c.server_leave(&address);
+    assert!(until(5.0, || c.servers().rows.is_empty()));
+    c.quit();
+}
+
+/// Beta.11: a server's song split on its server (the Linux app's split_on_server): its menu says Split on NAME; asking
+/// puts it in the Splits tab with its place in the server's line, and when the server has split it a note says its parts
+/// are there for everyone (and it's out of the tab).
+#[test]
+fn a_song_split_on_its_server_is_followed() {
+    use radiance_core::menu::{Action, Place};
+    let _l = setup();
+    RMS_SPLIT.store(0, Ordering::SeqCst);
+    let (c, _f, _rx) = with_songs("server split", vec![]);
+    let address = rms_stand_in(Arc::new(std::sync::atomic::AtomicU8::new(0)));
+    c.server_join(&format!("{address}/join/ABCD-EFGH-JKMN"));
+    assert!(until(5.0, || c.servers().rows.iter().any(|r| r.address == address && r.songs == Some(2))), "{:?}", c.servers());
+    let song = c.server_page(&address, "").songs[0].0.clone();
+    let split = c.song_menu(&song.key(), Place::Row).concat().into_iter().find(|i| i.label == "Split on Bassi's server");
+    assert_eq!(split.as_ref().map(|i| i.action.clone()), Some(Action::SplitOnServer), "{:?}", c.song_menu(&song.key(), Place::Row));
+    c.do_menu(&song.key(), 0, Action::SplitOnServer);
+    assert_eq!(toast_with(&c, "splits", 5.0), Ok("Bassi's server splits “Para Sa Streets”: 1 song first".to_string()));
+    assert!(until(5.0, || c.splits().away.iter().any(|(t, row)| t.key() == song.key() && row == "On Bassi's server · number 1 in line · next turn: Bassi")), "{:?}", c.splits().away);
+    assert!(!c.song_menu(&song.key(), Place::Row).concat().iter().any(|i| i.action == Action::SplitOnServer), "not offered again while it waits");
+    RMS_SPLIT.store(2, Ordering::SeqCst);
+    c.server_refresh(&address); // (its events line would say so; the stand-in has none)
+    assert_eq!(toast_with(&c, "is split on", 10.0), Ok("“Para Sa Streets” is split on Bassi's server: its parts are there for everyone".to_string()));
+    assert!(until(3.0, || c.splits().away.is_empty()), "{:?}", c.splits().away);
     c.server_leave(&address);
     assert!(until(5.0, || c.servers().rows.is_empty()));
     c.quit();

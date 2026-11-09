@@ -409,6 +409,8 @@ pub struct SplitsState {
     pub paused: bool,
     pub can_split: bool,
     pub can_split_two: bool,
+    /// Your songs in a server's split queue (beta.11): each one and where it is ("On NAME · number 2 in line").
+    pub away: Vec<(Track, String)>,
 }
 
 /// Splitting set up at the first start (stage 3; the GTK app's get_splitter_ready): not needed (set up
@@ -916,6 +918,19 @@ impl Controller {
         let lists: Vec<(i64, String)> = crate::db::playlists().into_iter().map(|(id, name, _)| (id, name)).collect();
         let split = self.shared.view(|v| split_ability(v, &t));
         let mut sections = menu::song_menu(&t, place, liked, saved, &lists, &split);
+        // a server's song its server can split: Split on NAME instead of splitting here (the Linux menu's), not while
+        // it waits there or once it has its parts
+        let split_there = self.shared.view(|v| rms::split_there(&t, &v.servers.rows, v.splits.away.iter().any(|(a, _)| a.key() == t.key())));
+        if let Some(name) = split_there {
+            for s in sections.iter_mut() {
+                s.retain(|i| !matches!(i.action, Action::SplitTwo | Action::SplitFour));
+            }
+            if split.parts == 0 && !name.is_empty() {
+                if let Some(mine) = sections.iter_mut().find(|s| s.iter().any(|i| i.action == Action::Radio)) {
+                    mine.push(menu::Item { label: radiance_core::server_words::split_on(&name), action: Action::SplitOnServer });
+                }
+            }
+        }
         // a Radiance Music Server's (the Linux menu's, after liking and the radio): saving its song, adding yours
         let server = self.shared.view(|v| rms::server_items(&t, liked, saved, &v.servers.rows));
         if !server.is_empty() {
@@ -930,6 +945,10 @@ impl Controller {
     pub fn do_menu(&self, key: &str, index: usize, action: Action) {
         match action {
             Action::Play | Action::NewPlaylistWith | Action::ShowLyrics | Action::EditLyrics | Action::CopyLink => {}
+            Action::SplitOnServer => {
+                let key = key.to_string();
+                self.post(move |e| e.rms_split_on_key(&key));
+            }
             Action::AddToServer(address) => {
                 let key = key.to_string();
                 self.post(move |e| e.rms_add_to(&key, &address));
@@ -2687,6 +2706,13 @@ impl Engine {
         if t.video {
             return;
         }
+        // a server's song its server can split: split there, for everyone (the Linux app's split_now), once
+        if self.rms_splits_on(&t).is_some() {
+            if servers_parts(&t) == 0 {
+                self.rms_split_on(t);
+            }
+            return;
+        }
         split::ask_two(&t, two);
         if two {
             self.split_fast(&t, true);
@@ -3547,6 +3573,7 @@ impl Engine {
         self.shared.view(|v| {
             v.split_done.insert(t.key(), mark);
         });
+        self.rms_share_parts(t); // a server's copy of it without parts gets these (the Linux app's split_landed)
         // the song playing: on with its parts from where it's got to (fading over), its lyrics again
         // (its words may be timed now)
         let cur = self.current.borrow().clone();
@@ -3589,9 +3616,10 @@ impl Engine {
         drop(q);
         let two_now = self.splitting_two.borrow().clone();
         let two_waiting: Vec<Track> = self.two_q.borrow().iter().map(|(t, _)| t.clone()).collect();
+        let away = self.rms_away_rows();
         self.shared.view(|v| {
             let phase = v.splits.now.as_ref().filter(|(t, _)| now.as_ref().is_some_and(|n| n.key() == t.key())).map(|(_, p)| *p).unwrap_or(Phase::Splitting(0.0));
-            v.splits = SplitsState { now: now.map(|t| (t, phase)), waiting, two_now, two_waiting, paused, can_split, can_split_two };
+            v.splits = SplitsState { now: now.map(|t| (t, phase)), waiting, two_now, two_waiting, paused, can_split, can_split_two, away };
         });
         self.shared.tell(Change::Splits);
         self.publish_now(); // the Mixer's "Splitting for No vocals…" comes and goes with the song's split
@@ -4530,4 +4558,9 @@ fn setup_retry() -> Duration {
 /// progress and its offline buttons); the engine tests' RADIANCE_SETUP_TEST=1 runs the Fake's install.
 fn acted_setup() -> bool {
     std::env::var("RADIANCE_SETUP_TEST").as_deref() == Ok("act")
+}
+
+/// How many parts a server's song has on its server (as last sent).
+fn servers_parts(t: &Track) -> usize {
+    crate::servers::mix_parts(t).len()
 }

@@ -62,6 +62,11 @@ internal static class DevActs
             "server-first" => App.Hub.Engine.Servers().Rows is { Length: > 0 } sr && Do(() => window.Show("server:" + sr[0].Address)),
             "server-play" => App.Hub.Engine.Servers().Rows is { Length: > 0 } sp0 && App.Hub.Engine.ServerPage(sp0[0].Address, "").Songs is { Length: > 0 } sps && Do(() => App.Hub.Engine.PlayServer(sp0[0].Address, "", 0, sps[0].Key)),
             "server-leave" => App.Hub.Engine.Servers().Rows is { Length: > 0 } sl && Do(() => App.Hub.Engine.ServerLeave(sl[0].Address)),
+            // beta.11: a saved liked song added to the first server; the first server song split there; the Splits tab's server rows
+            "server-add" => App.Hub.Engine.Servers().Rows is { Length: > 0 } sa0 && App.Hub.Engine.LikedPage("").Songs.FirstOrDefault(l => l.Saved == SavedState.Saved) is { } la && Do(() => App.Hub.Engine.DoMenu(la.Key, 0, new MenuAction.AddToServer(sa0[0].Address))),
+            "server-split" => App.Hub.Engine.Servers().Rows is { Length: > 0 } ss0 && App.Hub.Engine.ServerPage(ss0[0].Address, "").Songs is { Length: > 0 } sss && Do(() => App.Hub.Engine.DoMenu(sss[0].Key, 0, new MenuAction.SplitOnServer())),
+            "splits-log" => Do(() => Crash.Note($"splits: away [{string.Join("; ", App.Hub.Engine.Splits().Away.Select(a => a.Title + " / " + a.Subtitle))}]")),
+            "menu-log" => App.Hub.Engine.Servers().Rows is { Length: > 0 } ml0 && App.Hub.Engine.ServerPage(ml0[0].Address, "").Songs is { Length: > 0 } mls && Do(() => Crash.Note($"server song menu: [{string.Join(" | ", App.Hub.Engine.SongMenu(mls[0].Key, new MenuPlace.Row()).SelectMany(x => x.Items).Select(i => i.Label))}]")),
             "party-start" => App.Hub.Engine.Servers().Rows is { Length: > 0 } ps0 && Do(() => App.Hub.Engine.PartyStart(ps0[0].Address, arg == "everyone")),
             "party-join" => App.Hub.Engine.Servers().Rows is { Length: > 0 } pj0 && Do(() => App.Hub.Engine.PartyJoin(pj0[0].Address)),
             "party-add" => App.Hub.Engine.Servers().Rows is { Length: > 0 } pa0 && App.Hub.Engine.ServerPage(pa0[0].Address, "").Songs is { Length: > 0 } pas && Do(() => App.Hub.Engine.PartyAdd(pas[0].Key)),

@@ -18,6 +18,12 @@
 - **Updates come from Radiance's own site:** the app asks downloads.radianceph.com for the newest version and downloads it from there. GitHub had started refusing update checks for whole neighbourhoods sharing one internet address, and its downloads were timing out. GitHub is used only if our site doesn't answer, and a download carries on from GitHub's copy if ours stops.
 - **Share Songs with a Phone sends songs without music videos:** phones have no music videos now, so the "With music videos" switch is gone and a phone gets the song, its parts, lyrics and cover.
 
+## Windows beta 0.8.0-beta.11 — not released yet (#45, before the switch)
+
+- **A server's song has its menu** (it was empty): **Save to Your Library** for one you haven't saved, and **Split on NAME** for one its server can split for you: it's split there, for everyone on it. The Splits tab shows where it is in that server's line ("On NAME · number 2 in line"), and a note says when its parts are there.
+- **Add to NAME** in one of your saved songs' menu, for each server that lets you add songs: the song goes there with its cover, lyrics and parts.
+- **Songs split on this computer share their parts** with a server's copy that has none, as the Linux app does.
+
 ## Windows beta 0.8.0-beta.10 — not released yet (#45, stage 4c-2)
 
 - **Listening parties**, as the Linux app's: a server's page has its party card. Start a Party (and, if you like, let everyone play, pause and skip), or Join the one that's on. In it, everyone hears the same song at the same moment: the beta follows the server's clock and keeps in step by itself (the line under the heading says how close: "In time with the party (+12 ms)").

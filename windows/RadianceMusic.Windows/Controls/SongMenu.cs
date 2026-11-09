@@ -152,6 +152,7 @@ internal static class SongMenu
         MenuAction.FindLyricsAgain => "\uE72C",
         MenuAction.CopyLink => "\uE71B",
         MenuAction.AddToServer => "\uE898",
+        MenuAction.SplitOnServer => "\uE8C6",
         _ => "",
     };
 }

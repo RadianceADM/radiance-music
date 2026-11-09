@@ -562,6 +562,7 @@ pub enum MenuAction {
     CopyLink,
     /// Beta.11: one of your saved songs sent to a joined server (its address).
     AddToServer { address: String },
+    SplitOnServer,
 }
 
 impl From<MenuAction> for menu::Action {
@@ -588,6 +589,7 @@ impl From<MenuAction> for menu::Action {
             MenuAction::FindLyricsAgain => A::FindLyricsAgain,
             MenuAction::CopyLink => A::CopyLink,
             MenuAction::AddToServer { address } => A::AddToServer(address),
+            MenuAction::SplitOnServer => A::SplitOnServer,
         }
     }
 }
@@ -616,6 +618,7 @@ impl From<menu::Action> for MenuAction {
             A::FindLyricsAgain => MenuAction::FindLyricsAgain,
             A::CopyLink => MenuAction::CopyLink,
             A::AddToServer(address) => MenuAction::AddToServer { address },
+            A::SplitOnServer => MenuAction::SplitOnServer,
         }
     }
 }
@@ -1369,6 +1372,8 @@ pub struct SplitsView {
     pub paused: bool,
     pub can_split: bool,
     pub can_split_two: bool,
+    /// Your songs in a server's split queue (beta.11), each one's subtitle where it is ("On NAME · number 2 in line").
+    pub away: Vec<SongView>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, uniffi::Enum)]
@@ -1548,6 +1553,15 @@ impl MusicEngine {
             paused: s.paused,
             can_split: s.can_split,
             can_split_two: s.can_split_two,
+            away: s
+                .away
+                .iter()
+                .map(|(t, line)| {
+                    let mut v = rows.song(t);
+                    v.subtitle = line.clone();
+                    v
+                })
+                .collect(),
         }
     }
     pub fn split_mark(&self, key: String) -> SplitMarkView {
@@ -2672,7 +2686,7 @@ mod tests {
 
     #[test]
     fn the_versions_and_the_browse_tiles() {
-        assert_eq!(beta_version(), "0.8.0-beta.10");
+        assert_eq!(beta_version(), "0.8.0-beta.11");
         assert_eq!(engine_version(), radiance_engine::VERSION);
         let tiles = browse_tiles();
         assert_eq!(tiles.len(), 12);

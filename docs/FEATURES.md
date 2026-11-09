@@ -103,7 +103,7 @@ marked 🔜.
 
 | Feature | Linux | Windows | Windows beta | Phone | Notes |
 |---|---|---|---|---|---|
-| Join a server, browse, save, add your songs | ✅ | ✅ | 🔜 4c | ✅ | the beta: join, browse and play its songs (beta.9); Save to Your Library, Add to NAME and Split on NAME come next (beta.11) |
+| Join a server, browse, save, add your songs | ✅ | ✅ | ✅ | ✅ | the beta: beta.9 (join, browse, play) and beta.11 (Save to Your Library, Add to NAME, Split on NAME) |
 | radiancemusic:// invite links | ✅ | ✅ | ✅ | ✅ | the beta: an invite opens the Servers dialog; a clicked link opens today's Windows app until the beta replaces it (stage 5) |
 | Listening parties: in sync, reactions, host controls | ✅ | ✅ | ✅ | ✅ | the beta: beta.10 |
 
