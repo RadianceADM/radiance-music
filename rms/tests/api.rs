@@ -1,6 +1,6 @@
 //! The server end to end, over real HTTP on 127.0.0.1: setup → invite → join
 //! → tokens, removing people and devices, the library and its files (Range),
-//! the split queue (with a stand-in for the splitter's Python), the listening
+//! the split queue (with the stand-in engine), the listening
 //! party (its states, a late joiner's position, the WebSocket) and /api/time.
 
 use std::path::{Path, PathBuf};
@@ -10,30 +10,6 @@ use futures_util::{SinkExt, StreamExt};
 use reqwest::{Client, StatusCode};
 use serde_json::{json, Value};
 
-/// A stand-in for the splitter's Python: answers the checks, "downloads" the
-/// models, and splits and aligns as the real scripts say they do.
-const FAKE_PYTHON: &str = r#"#!/bin/bash
-here="$(dirname "$0")"
-case "$1" in
-  -c)
-    echo "progress 6"
-    echo ok ;;
-  */split.py)
-    out="$3"; mkdir -p "$out"
-    echo "progress 5"; sleep 0.2; echo "progress 50"; sleep 0.2
-    for p in vocals music drums bass other; do head -c 4096 /dev/urandom > "$out/$p.ogg"; done
-    echo "args $*" >> "$here/split-args.txt"
-    echo "progress 100"
-    echo "files vocals.ogg music.ogg drums.ogg bass.ogg other.ogg" ;;
-  */align.py)
-    cat > "$here/given.json"
-    echo "progress 40" >&2
-    printf 'version: "1.0"\n# word times: MMS forced alignment (Meta, torchaudio MMS_FA) on the song Vocals part\nlines:\n  - text: "hello there"\n    start_ms: 1000\n    end_ms: 2000\n    words:\n      - text: "hello "\n        start_ms: 1000\n        end_ms: 1500\n      - text: "there"\n        start_ms: 1500\n        end_ms: 2000\n' > "$3"
-    cat "$3"
-    echo "progress 100" >&2 ;;
-  *) echo "the fake python doesn't know $*" >&2; exit 2 ;;
-esac
-"#;
 
 struct Server {
     base: String,
@@ -92,39 +68,42 @@ impl Server {
 /// The setup key the test servers are deployed with.
 const TEST_KEY: &str = "Our-Test-Key-1234";
 
-/// A fresh server on its own port and data folder. `python`: None for the
-/// stand-in splitter, or a path (one that isn't there: no splitter).
-async fn server(python: Option<&str>) -> Server {
-    server_with(python, Some(TEST_KEY)).await
+/// A fresh server on its own port and data folder. `splits`: the stand-in
+/// engine splits, or says it can't (no splitter here).
+async fn server(splits: bool) -> Server {
+    server_with(splits, Some(TEST_KEY)).await
 }
 
 /// …and its setup key from the deploy (None: the server makes one).
-async fn server_with(python: Option<&str>, setup_key: Option<&str>) -> Server {
+async fn server_with(splits: bool, setup_key: Option<&str>) -> Server {
+    let dir = test_dir();
+    server_in(dir, splits, setup_key).await
+}
+
+fn test_dir() -> PathBuf {
     static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
     let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let dir = std::env::temp_dir().join(format!("rms-test-{}-{n}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
-    let scripts = dir.join("scripts");
-    std::fs::create_dir_all(&scripts).unwrap();
-    std::fs::write(scripts.join("split.py"), "# the stand-in reads only its name\n").unwrap();
-    std::fs::write(scripts.join("align.py"), "# the stand-in reads only its name\n").unwrap();
-    let fake = dir.join("fakepy");
-    std::fs::write(&fake, FAKE_PYTHON).unwrap();
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
-    }
-    let cfg = rms::Config {
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+fn config(dir: &Path, setup_key: Option<&str>, threads: usize) -> rms::Config {
+    rms::Config {
         data: dir.join("data"),
         bind: "127.0.0.1:0".into(),
-        python: python.map(String::from).unwrap_or_else(|| fake.display().to_string()),
-        scripts,
         domain: None,
         public_url: None,
         setup_key: setup_key.map(String::from),
-        threads: 2,
-    };
-    let app = rms::open(cfg).unwrap();
+        threads,
+    }
+}
+
+async fn server_in(dir: PathBuf, splits: bool, setup_key: Option<&str>) -> Server {
+    let cfg = config(&dir, setup_key, 2);
+    let engine = std::sync::Arc::new(rms::engine::StandIn::new(dir.clone(), splits));
+    let app = rms::open_with(cfg, engine).unwrap();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
     tokio::spawn(async move { axum::serve(listener, rms::router(app)).await.unwrap() });
@@ -170,7 +149,7 @@ fn now_ms() -> i64 {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn setup_invite_join_and_tokens() {
-    let s = server(None).await;
+    let s = server(true).await;
     let (st, v) = s.get("/api/status", None).await;
     assert_eq!(st, StatusCode::OK);
     assert_eq!(v["needs_setup"], true);
@@ -269,7 +248,7 @@ async fn setup_invite_join_and_tokens() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn removing_devices_friends_and_invites() {
-    let s = server(None).await;
+    let s = server(true).await;
     let owner = s.setup("Bassi").await;
     let (mika, mika_id) = s.friend(&owner, "Mika").await;
     let (_, me) = s.get("/api/me", Some(&mika)).await;
@@ -333,7 +312,7 @@ async fn removing_devices_friends_and_invites() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn library_listing_files_and_uploads() {
-    let s = server(None).await;
+    let s = server(true).await;
     let owner = s.setup("Bassi").await;
     let (mika, _) = s.friend(&owner, "Mika").await;
     let lib = s.library();
@@ -439,7 +418,7 @@ async fn library_listing_files_and_uploads() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn split_queue_runs_the_splitter() {
-    let s = server(None).await;
+    let s = server(true).await;
     let owner = s.setup("Bassi").await;
     let (mika, _) = s.friend(&owner, "Mika").await;
     let lib = s.library();
@@ -478,7 +457,7 @@ async fn split_queue_runs_the_splitter() {
     }
     // the splitter was given the song and a work folder; the aligner the lyrics' lines
     let args = std::fs::read_to_string(s.dir.join("split-args.txt")).unwrap();
-    assert!(args.contains("/split.py") && (args.contains("Eve - Five.flac") || args.contains("Dee - Four.flac")), "{args}");
+    assert!(args.contains("Eve - Five.flac") || args.contains("Dee - Four.flac"), "{args}");
     let given: Value = serde_json::from_str(&std::fs::read_to_string(s.dir.join("given.json")).unwrap()).unwrap();
     assert_eq!(given, json!({ "lines": [{ "start": 1.0, "end": 2.0, "text": "hello there" }] }));
     let lyrics = std::fs::read_to_string(lib.join("Dee - Four.lyrics.yaml")).unwrap();
@@ -500,8 +479,43 @@ async fn split_queue_runs_the_splitter() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn another_engines_models_are_fetched_again() {
+    // a server that had the Python splitter's models (its marker says so) gets this engine's own, once
+    let dir = test_dir();
+    put(&dir.join("data/models"), ".ready", b"htdemucs mms_fa\n");
+    let s = server_in(dir, true, Some(TEST_KEY)).await;
+    wait_for(&s, "/api/status", None, |v| v["models"]["state"] == "ready", 20).await;
+    assert_eq!(std::fs::read_to_string(s.dir.join("data/models/.ready")).unwrap().trim(), "stand-in");
+    assert_eq!(std::fs::read_to_string(s.dir.join("fetches.txt")).unwrap().lines().count(), 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn removing_the_song_being_split_stops_it() {
+    let s = server(true).await;
+    let owner = s.setup("Bassi").await;
+    let lib = s.library();
+    // the stand-in takes its time over a "Slow" song (until it's told to stop)
+    put(&lib, "Gus - Slow.flac", &flac(5_000));
+    put(&lib, "Hal - Quick.flac", &flac(5_000));
+    wait_for(&s, "/api/status", None, |v| v["models"]["state"] == "ready", 20).await;
+    let (_, v) = s.post("/api/split", Some(&owner), json!({ "song": "Gus - Slow.flac" })).await;
+    let slow = v["job"]["id"].clone();
+    s.post("/api/split", Some(&owner), json!({ "song": "Hal - Quick.flac" })).await;
+    wait_for(&s, "/api/queue", Some(&owner), |q| q["jobs"].as_array().is_some_and(|j| j.iter().any(|j| j["id"] == slow && j["state"] == "splitting")), 10).await;
+    let asked = std::time::Instant::now();
+    let (st, _) = s.delete(&format!("/api/queue/{slow}"), &owner).await;
+    assert_eq!(st, StatusCode::OK);
+    // the next song is split soon after: the slow one stopped
+    let q = wait_for(&s, "/api/queue", Some(&owner), |q| q["jobs"].as_array().is_some_and(|j| j.iter().any(|j| j["song"]["artist"] == "Hal" && j["state"] == "done")), 10).await;
+    assert!(asked.elapsed() < Duration::from_secs(5), "{:?}", asked.elapsed());
+    assert!(q["jobs"].as_array().unwrap().iter().all(|j| j["id"] != slow), "{q}");
+    assert!(!lib.join("Gus - Slow.vocals.ogg").exists());
+    assert!(std::fs::read_to_string(s.dir.join("stopped.txt")).unwrap().contains("Gus - Slow.flac"));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn queue_says_when_the_splitter_is_missing() {
-    let s = server(Some("/nowhere/python3")).await;
+    let s = server(false).await;
     let owner = s.setup("Bassi").await;
     let (mika, _) = s.friend(&owner, "Mika").await;
     put(&s.library(), "Fay - Six.flac", &flac(3_000));
@@ -524,7 +538,7 @@ async fn queue_says_when_the_splitter_is_missing() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn time_is_the_servers_clock() {
-    let s = server(None).await;
+    let s = server(true).await;
     let before = now_ms();
     let (st, v) = s.get("/api/time", None).await;
     let after = now_ms();
@@ -535,7 +549,7 @@ async fn time_is_the_servers_clock() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn listening_party() {
-    let s = server(None).await;
+    let s = server(true).await;
     let owner = s.setup("Bassi").await;
     let (mika, mika_id) = s.friend(&owner, "Mika").await;
     let lib = s.library();
@@ -711,7 +725,7 @@ async fn listening_party() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_setup_key_is_made_when_none_was_given() {
-    let s = server_with(None, None).await;
+    let s = server_with(true, None).await;
     // made at the first start: readable like an invite code, on file
     let file = s.dir.join("data/setup-key.txt");
     let key = std::fs::read_to_string(&file).unwrap().trim().to_string();
@@ -730,16 +744,7 @@ async fn a_setup_key_is_made_when_none_was_given() {
     assert_eq!(st, StatusCode::CREATED, "{v}");
     // set up: no key any more (a restart makes none)
     std::fs::remove_file(&file).unwrap();
-    let cfg = rms::Config {
-        data: s.dir.join("data"),
-        bind: "127.0.0.1:0".into(),
-        python: "/nowhere/python3".into(),
-        scripts: s.dir.join("scripts"),
-        domain: None,
-        public_url: None,
-        setup_key: None,
-        threads: 1,
-    };
+    let cfg = rms::Config { domain: None, ..config(&s.dir, None, 1) };
     let again = rms::open(cfg).unwrap();
     assert!(again.cfg.setup_key.is_none());
     assert!(!file.exists());
@@ -749,7 +754,7 @@ async fn a_setup_key_is_made_when_none_was_given() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_owners_switches_for_a_friend() {
-    let s = server(None).await;
+    let s = server(true).await;
     let owner = s.setup("Bassi").await;
     let (mika, mika_id) = s.friend(&owner, "Mika").await;
     put(&s.library(), "Gio - Seven.flac", &flac(4_000));
@@ -812,7 +817,7 @@ async fn the_owners_switches_for_a_friend() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_split_queue_takes_turns() {
-    let s = server(None).await;
+    let s = server(true).await;
     let owner = s.setup("Bassi").await;
     let (mika, _) = s.friend(&owner, "Mika").await;
     for n in 1..=3 {
@@ -849,7 +854,7 @@ async fn the_split_queue_takes_turns() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn invites_expire_after_seven_days() {
-    let s = server(None).await;
+    let s = server(true).await;
     let owner = s.setup("Bassi").await;
     let (_, inv) = s.post("/api/invites", Some(&owner), json!({ "name": "Mika" })).await;
     assert_eq!(inv["expires_in_days"], 7);
@@ -887,7 +892,7 @@ const FOUR_AND_MUSIC: [&str; 5] = ["drums", "bass", "other", "vocals", "music"];
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn parts_split_on_a_device_come_to_the_server() {
     // no splitter here: a song asked for waits in the queue
-    let s = server(Some("/nowhere/python3")).await;
+    let s = server(false).await;
     let owner = s.setup("Bassi").await;
     let (mika, mika_id) = s.friend(&owner, "Mika").await;
     let lib = s.library();
@@ -966,7 +971,7 @@ async fn parts_split_on_a_device_come_to_the_server() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn one_song_and_searching_the_library() {
-    let s = server(None).await;
+    let s = server(true).await;
     let owner = s.setup("Bassi").await;
     for (name, ms) in [("Ben&Ben - Leaves", 271_000), ("Ben&Ben - Maybe the Night", 250_000), ("NIKI - Every Summertime", 198_000), ("Zack Tabudlo - Binibini", 233_000), ("Moira - Paubaya", 284_000)] {
         put(&s.library(), &format!("{name}.flac"), &flac(ms));
@@ -1007,7 +1012,7 @@ async fn one_song_and_searching_the_library() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_server_keeps_its_id() {
-    let s = server(None).await;
+    let s = server(true).await;
     let (_, v) = s.get("/api/status", None).await;
     let id = v["id"].as_str().unwrap().to_string();
     assert_eq!(id.len(), 32);
@@ -1019,26 +1024,17 @@ async fn the_server_keeps_its_id() {
     let (_, joined) = s.post("/api/join", None, json!({ "code": inv["code"] })).await;
     assert_eq!(joined["server"]["id"], id.as_str());
     // the same after a restart (its address may have changed meanwhile)
-    let cfg = rms::Config {
-        data: s.dir.join("data"),
-        bind: "127.0.0.1:0".into(),
-        python: "/nowhere/python3".into(),
-        scripts: s.dir.join("scripts"),
-        domain: Some("music.example.com".into()),
-        public_url: None,
-        setup_key: None,
-        threads: 1,
-    };
+    let cfg = rms::Config { domain: Some("music.example.com".into()), ..config(&s.dir, None, 1) };
     assert_eq!(rms::open(cfg).unwrap().server_id(), id);
     // another server: another id
-    let other = server(None).await;
+    let other = server(true).await;
     let (_, v) = other.get("/api/status", None).await;
     assert_ne!(v["id"], id.as_str());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_join_page_opens_the_app() {
-    let s = server(None).await;
+    let s = server(true).await;
     let owner = s.setup("Bassi").await;
     let (_, inv) = s.post("/api/invites", Some(&owner), json!({ "name": "Mika" })).await;
     let link = inv["link"].as_str().unwrap();
@@ -1069,7 +1065,7 @@ where
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn change_events_instead_of_polling() {
-    let s = server(None).await;
+    let s = server(true).await;
     let owner = s.setup("Bassi").await;
     let (mika, mika_id) = s.friend(&owner, "Mika").await;
     wait_for(&s, "/api/status", None, |v| v["models"]["state"] == "ready", 20).await;

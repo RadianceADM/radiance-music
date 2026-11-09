@@ -14,6 +14,7 @@
 
 pub mod auth;
 pub mod db;
+pub mod engine;
 pub mod events;
 pub mod library;
 pub mod lyrics;
@@ -42,10 +43,6 @@ pub struct Config {
     pub data: PathBuf,
     /// RMS_BIND: where it listens (Caddy talks to it there).
     pub bind: String,
-    /// RMS_PYTHON: the Python with Demucs and PyTorch (the splitter).
-    pub python: String,
-    /// RMS_SCRIPTS: the folder with split.py and align.py (the app's own).
-    pub scripts: PathBuf,
     /// RMS_DOMAIN: the server's domain (Caddy gets its certificate); links use https:// then.
     pub domain: Option<String>,
     /// RMS_PUBLIC_URL: the address links use, when it's neither of the above.
@@ -63,8 +60,6 @@ impl Config {
         Config {
             data: var("RMS_DATA").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("/data")),
             bind: var("RMS_BIND").unwrap_or_else(|| "0.0.0.0:8080".into()),
-            python: var("RMS_PYTHON").unwrap_or_else(|| "python3".into()),
-            scripts: var("RMS_SCRIPTS").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("/opt/rms/scripts")),
             domain: var("RMS_DOMAIN").map(|d| d.trim_start_matches("https://").trim_start_matches("http://").trim_end_matches('/').to_string()),
             public_url: var("RMS_PUBLIC_URL").map(|u| u.trim_end_matches('/').to_string()),
             setup_key: var("RMS_SETUP_KEY"),
@@ -90,6 +85,8 @@ pub struct App {
     pub cfg: Config,
     pub db: Mutex<rusqlite::Connection>,
     pub splitter: split::Splitter,
+    /// What splits and times words (engine.rs).
+    pub engine: Arc<dyn engine::SplitEngine>,
     pub party: party::Party,
     /// Change events for the apps (/api/events).
     pub events: events::Events,
@@ -170,7 +167,12 @@ pub fn broken(msg: impl Into<String>) -> ApiError {
 
 /// Opens the data folder and the database, and starts the helpers: the split
 /// worker (which first downloads the models), and the party's clock.
-pub fn open(mut cfg: Config) -> Result<Shared, String> {
+pub fn open(cfg: Config) -> Result<Shared, String> {
+    open_with(cfg, Arc::new(engine::Unbuilt))
+}
+
+/// `open`, with the engine that splits (the tests' stand-in, or the real one).
+pub fn open_with(mut cfg: Config, engine: Arc<dyn engine::SplitEngine>) -> Result<Shared, String> {
     for dir in [cfg.data.clone(), cfg.library(), cfg.models(), cfg.work(), cfg.data.join("logs")] {
         std::fs::create_dir_all(&dir).map_err(|e| format!("can't make {}: {e}", dir.display()))?;
     }
@@ -179,7 +181,7 @@ pub fn open(mut cfg: Config) -> Result<Shared, String> {
         cfg.setup_key = Some(setup_key(&cfg)?);
     }
     let id = db::server_id(&conn)?;
-    let app = Arc::new(App { cfg, db: Mutex::new(conn), splitter: split::Splitter::default(), party: party::Party::default(), events: events::Events::default(), id });
+    let app = Arc::new(App { cfg, db: Mutex::new(conn), splitter: split::Splitter::default(), engine, party: party::Party::default(), events: events::Events::default(), id });
     // a crashed upload's leftovers
     if let Ok(dir) = std::fs::read_dir(app.cfg.work()) {
         for e in dir.flatten() {
