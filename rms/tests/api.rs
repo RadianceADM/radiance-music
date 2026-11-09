@@ -520,6 +520,63 @@ async fn removing_the_song_being_split_stops_it() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn removing_a_song_while_its_parts_are_written_keeps_them_out() {
+    let s = server(true).await;
+    let owner = s.setup("Bassi").await;
+    let lib = s.library();
+    put(&lib, "Ivy - Late.flac", &flac(5_000));
+    wait_for(&s, "/api/status", None, |v| v["models"]["state"] == "ready", 20).await;
+    let (_, v) = s.post("/api/split", Some(&owner), json!({ "song": "Ivy - Late.flac" })).await;
+    let id = v["job"]["id"].clone();
+    wait_for(&s, "/api/queue", Some(&owner), |q| q["jobs"].as_array().is_some_and(|j| j.iter().any(|j| j["id"] == id && j["state"] == "splitting")), 10).await;
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    let (st, _) = s.delete(&format!("/api/queue/{id}"), &owner).await;
+    assert_eq!(st, StatusCode::OK);
+    // the engine finishes its writing; the parts never reach the library
+    tokio::time::sleep(Duration::from_millis(2500)).await;
+    assert!(!lib.join("Ivy - Late.vocals.ogg").exists());
+    let (_, v) = s.get("/api/library", Some(&owner)).await;
+    assert_eq!(v["songs"][0]["split"], false, "{v}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_song_that_stopped_the_server_twice_is_taken_out() {
+    let s = server(true).await;
+    let owner = s.setup("Bassi").await;
+    put(&s.library(), "Jo - Huge.flac", &flac(5_000));
+    wait_for(&s, "/api/status", None, |v| v["models"]["state"] == "ready", 20).await;
+    // its first job was started twice and never finished (the server stopped during it: memory)
+    put(&s.dir.join("data/work"), "job-1.tries", b"2");
+    let (_, v) = s.post("/api/split", Some(&owner), json!({ "song": "Jo - Huge.flac" })).await;
+    assert_eq!(v["job"]["id"], 1);
+    let q = wait_for(&s, "/api/queue", Some(&owner), |q| q["jobs"][0]["state"] == "failed", 10).await;
+    let note = q["jobs"][0]["note"].as_str().unwrap();
+    assert!(note.contains("stopped the server"), "{note}");
+    assert!(!s.dir.join("split-args.txt").exists(), "it wasn't split again");
+    assert!(!s.dir.join("data/work/job-1.tries").exists());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_splitter_that_wont_load_keeps_songs_waiting() {
+    let dir = test_dir();
+    let cfg = config(&dir, Some(TEST_KEY), 2);
+    let app = rms::open_with(cfg, std::sync::Arc::new(rms::engine::StandIn::not_loading(dir.clone()))).unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, rms::router(app)).await.unwrap() });
+    let s = Server { base, dir, http: Client::new() };
+    let owner = s.setup("Bassi").await;
+    put(&s.library(), "Kit - Wait.flac", &flac(5_000));
+    // fetched, then it can't load: the page says why, and songs wait (not one failure after another)
+    let v = wait_for(&s, "/api/status", None, |v| v["models"]["state"] == "ready" && v["splitter"]["ready"] == false, 20).await;
+    assert!(v["splitter"]["message"].as_str().unwrap().contains("didn't load"), "{v}");
+    s.post("/api/split", Some(&owner), json!({ "song": "Kit - Wait.flac" })).await;
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    let (_, q) = s.get("/api/queue", Some(&owner)).await;
+    assert_eq!(q["jobs"][0]["state"], "waiting", "{q}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn queue_says_when_the_splitter_is_missing() {
     let s = server(false).await;
     let owner = s.setup("Bassi").await;

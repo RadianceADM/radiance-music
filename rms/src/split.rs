@@ -121,17 +121,17 @@ fn log_file(app: &Shared) -> Option<std::fs::File> {
 /// Whether the engine can work here (it says what it runs on, or why not).
 async fn check(app: &Shared) -> bool {
     let engine = app.engine.clone();
-    let said = tokio::time::timeout(Duration::from_secs(300), tokio::task::spawn_blocking(move || engine.check())).await;
+    let said = tokio::time::timeout(Duration::from_secs(300), crate::engine::low(move || engine.check())).await;
     let why = match said {
         Ok(Ok(Ok(on))) => {
             if !app.splitter.status().ready {
                 crate::log(&format!("the splitter is ready ({on})"));
             }
-            app.splitter.set_status(true, "Ready.".into());
+            app.splitter.set_status(true, format!("Ready ({on})."));
             return true;
         }
         Ok(Ok(Err(e))) => e,
-        Ok(Err(e)) => e.to_string(),
+        Ok(Err(e)) => e,
         Err(_) => "it took too long to answer".into(),
     };
     app.splitter.set_status(false, format!("The splitter isn't installed on this server yet ({why}). Songs wait in the queue until it is."));
@@ -152,7 +152,7 @@ async fn download_models(app: &Shared) {
         m.message = "Downloading the splitting models…".into();
     });
     let (engine, a) = (app.engine.clone(), app.clone());
-    let result = tokio::task::spawn_blocking(move || {
+    let result = crate::engine::low(move || {
         engine.fetch(&|p: f64, what: &str| {
             a.splitter.set_models(|m| {
                 m.progress = p.clamp(0.0, 0.99);
@@ -161,7 +161,7 @@ async fn download_models(app: &Shared) {
         })
     })
     .await
-    .unwrap_or_else(|e| Err(e.to_string()));
+    .and_then(|r| r);
     match result {
         Ok(()) => {
             let _ = std::fs::write(app.cfg.models().join(".ready"), format!("{}\n", app.engine.models_id()));
@@ -171,6 +171,8 @@ async fn download_models(app: &Shared) {
                 m.message = "Ready.".into();
             });
             crate::log("the splitting models are ready");
+            // what runs them must load now that it's here (else songs wait, with why)
+            check(app).await;
         }
         Err(why) => {
             crate::log(&format!("the models' download stopped: {why}"));
@@ -232,7 +234,7 @@ pub async fn worker(app: Shared) {
             Some((job, song)) => run(&app, job, song).await,
             None => {
                 let engine = app.engine.clone();
-                let _ = tokio::task::spawn_blocking(move || engine.rest()).await;
+                let _ = crate::engine::low(move || engine.rest()).await;
                 rest(&app, 300).await
             }
         }
@@ -251,13 +253,27 @@ fn set_job(app: &Shared, job: i64, state: &str, progress: f64, note: Option<&str
     app.events.queue();
 }
 
+/// The note of a song that stopped the server twice while it was being split.
+const STOPPED_THE_SERVER: &str = "It stopped the server twice while it was being split (perhaps not enough memory for it), so it was taken out of the queue.";
+
 async fn run(app: &Shared, job: i64, song: i64) {
+    // the splitting runs inside the server: a song that takes it down (memory) mustn't take it down for ever
+    let tries_file = app.cfg.work().join(format!("job-{job}.tries"));
+    let tries: u32 = std::fs::read_to_string(&tries_file).ok().and_then(|t| t.trim().parse().ok()).unwrap_or(0);
+    if tries >= 2 {
+        let _ = std::fs::remove_file(&tries_file);
+        crate::log(&format!("split {job} taken out: it stopped the server twice"));
+        set_job(app, job, "failed", 0.0, Some(STOPPED_THE_SERVER));
+        return;
+    }
+    let _ = std::fs::write(&tries_file, (tries + 1).to_string());
     let stop = Arc::new(AtomicBool::new(false));
     *app.splitter.running.lock().unwrap_or_else(|e| e.into_inner()) = Some((job, stop.clone()));
     let work = app.cfg.work().join(format!("job-{job}"));
     let result = split_one(app, job, song, &work, &stop).await;
     *app.splitter.running.lock().unwrap_or_else(|e| e.into_inner()) = None;
     let _ = std::fs::remove_dir_all(&work);
+    let _ = std::fs::remove_file(&tries_file);
     match result {
         Ok(note) => set_job(app, job, "done", 1.0, Some(&note)),
         Err(e) if e == REMOVED => {}
@@ -306,8 +322,12 @@ async fn split_one(app: &Shared, job: i64, song_id: i64, work: &Path, stop: &Arc
     let out = work.join("out");
     let files = {
         let (engine, input, out, stop, report) = (app.engine.clone(), input.clone(), out.clone(), stop.clone(), report(0.0, share, "splitting"));
-        tokio::task::spawn_blocking(move || engine.split(&input, &out, &report, &stop)).await.map_err(|e| e.to_string())??
+        crate::engine::low(move || engine.split(&input, &out, &report, &stop)).await.and_then(|r| r)?
     };
+    // taken out of the queue while its parts were being written: they don't land
+    if stop.load(Ordering::Relaxed) {
+        return Err(REMOVED.into());
+    }
     let missing: Vec<&str> = library::FOUR.iter().copied().filter(|p| !files.iter().any(|f| f.split('.').next() == Some(*p))).collect();
     if !missing.is_empty() {
         return Err(format!("the split lacks its {}", missing.join(", ")));
@@ -330,8 +350,12 @@ async fn split_one(app: &Shared, job: i64, song_id: i64, work: &Path, stop: &Arc
             let vocals = files.iter().find(|f| f.starts_with("vocals.")).map(|f| dir.join(format!("{stem}.{f}"))).ok_or("no Vocals part")?;
             let aligned = {
                 let (engine, stop, report) = (app.engine.clone(), stop.clone(), report(share, 1.0 - share, "timing"));
-                tokio::task::spawn_blocking(move || engine.align(&vocals, &given, &report, &stop)).await.map_err(|e| e.to_string())?
+                // anything going wrong here (even a bug) leaves the song split, its words untimed
+                crate::engine::low(move || engine.align(&vocals, &given, &report, &stop)).await.and_then(|r| r)
             };
+            if stop.load(Ordering::Relaxed) {
+                return Err(REMOVED.into());
+            }
             match aligned {
                 Ok(aligned) if aligned.contains("lines:") => {
                     let kept = lyrics::finish(&aligned, singers.as_deref(), yaml.as_deref());

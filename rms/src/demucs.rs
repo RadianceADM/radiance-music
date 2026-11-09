@@ -19,6 +19,15 @@ pub const PARTS: [&str; 4] = ["drums", "bass", "other", "vocals"];
 /// A piece's frames (the exported model's fixed length), and its overlap.
 pub const N: usize = 343_980;
 const OVERLAP: usize = N / 4;
+/// The longest song the server splits: the splitting runs in the server's own memory (a 20-minute
+/// song's samples take about 2.7 GB while it works), and a song that takes it down takes everyone's down.
+pub const MOST_MINUTES: usize = 20;
+
+/// Why a song of `frames` (at RATE) is too long to split, if it is.
+pub fn too_long(frames: usize) -> Option<String> {
+    let minutes = frames / RATE as usize / 60;
+    (frames > MOST_MINUTES * 60 * RATE as usize).then(|| format!("it's {minutes} minutes long, and the server splits songs up to {MOST_MINUTES} minutes"))
+}
 const STRIDE: usize = N - OVERLAP;
 
 /// The model on one piece: planar stereo in ([left N][right N]), the four
@@ -98,9 +107,13 @@ pub fn separate(x: &[f32], run: Model, progress: &dyn Fn(f64), stop: &AtomicBool
 /// music first. `run`: the model on one piece (see `Model`).
 pub fn split(t: &Tools, run: Model, song: &Path, out: &Path, progress: &dyn Fn(f64), stop: &AtomicBool) -> Result<Vec<String>, String> {
     let x = audio::decode(t, song, RATE, 2)?;
+    if let Some(why) = too_long(x.len() / 2) {
+        return Err(why);
+    }
     let kind = audio::kind(t, song);
     progress(0.02);
     let parts = separate(&x, run, &|p| progress(0.02 + 0.93 * p), stop)?;
+    drop(x);
     std::fs::create_dir_all(out).map_err(|e| e.to_string())?;
     let vocals = &parts[3];
     let music: Vec<f32> = (0..vocals.len()).map(|i| parts[0][i] + parts[1][i] + parts[2][i]).collect();
@@ -167,6 +180,14 @@ mod tests {
         }, &|_| {}, &stop);
         assert_eq!(r.unwrap_err(), REMOVED);
         assert_eq!(*calls.lock().unwrap(), 1);
+    }
+
+    #[test]
+    fn songs_past_twenty_minutes_are_too_long() {
+        assert!(too_long(19 * 60 * RATE as usize).is_none());
+        assert!(too_long(20 * 60 * RATE as usize).is_none());
+        let why = too_long(61 * 60 * RATE as usize).unwrap();
+        assert_eq!(why, "it's 61 minutes long, and the server splits songs up to 20 minutes");
     }
 
     #[test]

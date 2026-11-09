@@ -22,6 +22,45 @@ use crate::{audio, demucs, fetch, mms};
 /// What a stopped job ends with.
 pub const REMOVED: &str = "removed";
 
+/// Puts the calling thread at the lowest priority (Linux: nice 19, which the
+/// threads and programs it starts inherit: ONNX Runtime's, ffmpeg; Windows: the
+/// background mode, its processor, disk and memory priority lowest).
+pub fn lower_this_thread() {
+    #[cfg(unix)]
+    unsafe {
+        // Linux: PRIO_PROCESS with 0 is the calling thread
+        libc::setpriority(libc::PRIO_PROCESS, 0, 19);
+    }
+    #[cfg(windows)]
+    unsafe {
+        SetThreadPriority(GetCurrentThread(), 0x0001_0000); // THREAD_MODE_BACKGROUND_BEGIN
+    }
+}
+
+#[cfg(windows)]
+#[link(name = "kernel32")]
+extern "system" {
+    fn GetCurrentThread() -> isize;
+    fn SetThreadPriority(thread: isize, priority: i32) -> i32;
+}
+
+/// Runs `f` (the engine's work: it blocks) on a thread of its own at the lowest
+/// priority, never on one the server shares; a panic comes back as an error.
+pub async fn low<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> Result<T, String> {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    std::thread::Builder::new()
+        .name("rms-splitter".into())
+        .spawn(move || {
+            lower_this_thread();
+            let _ = tx.send(std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)));
+        })
+        .map_err(|e| format!("couldn't start the splitter's thread: {e}"))?;
+    match rx.await {
+        Ok(Ok(v)) => Ok(v),
+        _ => Err("the splitter stopped unexpectedly".into()),
+    }
+}
+
 pub type Progress<'a> = &'a (dyn Fn(f64) + Send + Sync);
 /// How far the first start's downloads are (0-1), and what's arriving.
 pub type FetchProgress<'a> = &'a (dyn Fn(f64, &str) + Send + Sync);
@@ -66,16 +105,28 @@ impl SplitEngine for Unbuilt {
 }
 
 /// The tests' engine: splits at once into small made-up parts, takes its time
-/// over a song with "Slow" in its name (until it's stopped), and notes in
+/// over a song with "Slow" in its name (until it's stopped) and over one with
+/// "Late" in it (its parts' writing, which doesn't look at `stop`), and notes in
 /// `dir` what it was given (split-args.txt, given.json, fetches.txt, stopped.txt).
 pub struct StandIn {
     dir: PathBuf,
     works: bool,
+    /// what it runs on loads once fetched (false: as ONNX Runtime failing to load)
+    loads: bool,
 }
 
 impl StandIn {
     pub fn new(dir: PathBuf, works: bool) -> StandIn {
-        StandIn { dir, works }
+        StandIn { dir, works, loads: true }
+    }
+
+    /// One whose runtime won't load once it's been fetched.
+    pub fn not_loading(dir: PathBuf) -> StandIn {
+        StandIn { dir, works: true, loads: false }
+    }
+
+    fn fetched(&self) -> bool {
+        self.dir.join("fetches.txt").exists()
     }
 
     fn note(&self, file: &str, line: &str) {
@@ -95,10 +146,12 @@ impl SplitEngine for StandIn {
     }
 
     fn check(&self) -> Result<String, String> {
-        if self.works {
-            Ok("the stand-in".into())
-        } else {
+        if !self.works {
             Err("no splitter here (the stand-in)".into())
+        } else if self.fetched() && !self.loads {
+            Err("ONNX Runtime didn't load (the stand-in)".into())
+        } else {
+            Ok("the stand-in".into())
         }
     }
 
@@ -110,6 +163,9 @@ impl SplitEngine for StandIn {
 
     fn split(&self, song: &Path, out: &Path, progress: Progress, stop: &AtomicBool) -> Result<Vec<String>, String> {
         let name = song.display().to_string();
+        if !self.loads {
+            return Err("ONNX Runtime didn't load (the stand-in)".into());
+        }
         let steps = if name.contains("Slow") { 200 } else { 4 };
         for i in 0..steps {
             if stop.load(Ordering::Relaxed) {
@@ -118,6 +174,10 @@ impl SplitEngine for StandIn {
             }
             std::thread::sleep(Duration::from_millis(50));
             progress((i + 1) as f64 / steps as f64);
+        }
+        if name.contains("Late") {
+            // writing its parts: a while, not looking at `stop` (as ffmpeg encoding)
+            std::thread::sleep(Duration::from_millis(1500));
         }
         std::fs::create_dir_all(out).map_err(|e| e.to_string())?;
         let mut names = Vec::new();
@@ -150,7 +210,7 @@ const MMS: &str = "mms_fa_fp16w.onnx";
 /// The most of the graphics card's memory each model's ONNX Runtime may take (MB): left to
 /// itself, Demucs took 5.4 GB of ribs03's 6 GB (2026-11-09), starving the next song and any game.
 const DEMUCS_CARD_MB: u64 = 3_000;
-const MMS_CARD_MB: u64 = 2_000;
+const MMS_CARD_MB: u64 = 3_000; // 2 GB ran out on ribs03 (a 34 s pass)
 /// What a model newly put on the card needs free besides (CUDA's, cuDNN's and cuBLAS's own).
 const CARD_EXTRA_MB: u64 = 500;
 
@@ -236,14 +296,20 @@ impl Onnx {
         Onnx { models, threads: threads.max(1), windows, nvidia, held: Mutex::new(Held::default()) }
     }
 
+    /// ONNX Runtime's folder: the card's build (gpu/) or the processor's (cpu/), never mixed (#72 review).
+    fn runtime_dir(&self) -> PathBuf {
+        self.models.join(if self.nvidia { "gpu" } else { "cpu" })
+    }
+
     fn card_runtime(&self) -> bool {
-        self.models.join(if cfg!(windows) { "onnxruntime_providers_cuda.dll" } else { "libonnxruntime_providers_cuda.so" }).is_file()
+        self.nvidia && self.runtime_dir().join(if cfg!(windows) { "onnxruntime_providers_cuda.dll" } else { "libonnxruntime_providers_cuda.so" }).is_file()
     }
 
     /// ONNX Runtime, loaded once (only after it's been fetched: a failed load can't be tried again).
     fn env<'a>(&self, held: &'a mut Held) -> Result<&'a Environment, String> {
         if held.env.is_none() {
-            let path = self.models.join(RUNTIME);
+            let dir = self.runtime_dir();
+            let path = dir.join(RUNTIME);
             if !path.is_file() {
                 return Err("ONNX Runtime isn't downloaded yet".into());
             }
@@ -251,10 +317,14 @@ impl Onnx {
             {
                 // what onnxruntime.dll needs (the C++ runtime, CUDA, cuDNN) is beside it
                 use std::os::windows::ffi::OsStrExt;
-                let wide: Vec<u16> = self.models.as_os_str().encode_wide().chain([0]).collect();
+                let wide: Vec<u16> = dir.as_os_str().encode_wide().chain([0]).collect();
                 unsafe { SetDllDirectoryW(wide.as_ptr()) };
             }
-            let env = ort::init_from(&path).map_err(|e| format!("ONNX Runtime didn't load: {e}"))?.build().map_err(|e| format!("ONNX Runtime didn't start: {e}"))?;
+            let env = ort::init_from(&path)
+                .map_err(|e| format!("ONNX Runtime didn't load: {e}"))?
+                .with_telemetry(false)
+                .build()
+                .map_err(|e| format!("ONNX Runtime didn't start: {e}"))?;
             held.env = Some(env);
         }
         Ok(held.env.as_ref().expect("just made"))
@@ -268,6 +338,11 @@ impl Onnx {
             .with_intra_threads(self.threads)
             .map_err(|e| e.to_string())?
             .with_inter_threads(1)
+            .map_err(|e| e.to_string())?
+            // its threads sleep while they wait, not spin (the owner's computer stays quiet)
+            .with_intra_op_spinning(false)
+            .map_err(|e| e.to_string())?
+            .with_inter_op_spinning(false)
             .map_err(|e| e.to_string())?;
         if on == On::Card {
             let limit = if model == DEMUCS { DEMUCS_CARD_MB } else { MMS_CARD_MB } as usize * 1024 * 1024;
@@ -323,6 +398,13 @@ impl Onnx {
             }
         }
         let on = if at == Place::Processor { On::Processor } else { On::Card };
+        if on == On::Processor {
+            // on the processor, one model in memory at a time (the server's own memory now: #72 review)
+            let other = if model == DEMUCS { &mut held.mms } else { &mut held.demucs };
+            if other.as_ref().is_some_and(|(_, o)| *o == On::Processor) {
+                *other = None;
+            }
+        }
         if on == On::Card && !here {
             crate::log(&format!("{what} on the graphics card"));
         }
@@ -359,7 +441,7 @@ fn run_mms(session: &mut Session, wav: &[f32]) -> Result<(Vec<f32>, usize), Stri
 
 impl SplitEngine for Onnx {
     fn models_id(&self) -> String {
-        format!("onnx ort-{} {} htdemucs_fp16weights mms_fa_fp16w", fetch::ORT, if self.nvidia { "cuda12" } else { "cpu" })
+        format!("onnx2 ort-{} {} htdemucs_fp16weights mms_fa_fp16w", fetch::ORT, if self.nvidia { "cuda12" } else { "cpu" })
     }
 
     fn check(&self) -> Result<String, String> {
@@ -369,6 +451,11 @@ impl SplitEngine for Onnx {
         // Windows: ffmpeg comes with the models when there's none
         if !self.windows && audio::tools(&self.models).is_none() {
             return Err("ffmpeg isn't installed: the Docker image and install.sh bring it".into());
+        }
+        // once fetched, ONNX Runtime must load (a too-old Linux, a missing library): else songs wait
+        if self.runtime_dir().join(RUNTIME).is_file() {
+            let mut held = self.held.lock().unwrap_or_else(|e| e.into_inner());
+            self.env(&mut held)?;
         }
         Ok(if self.nvidia {
             format!("ONNX Runtime {}: the graphics card when it has room, else {} threads", fetch::ORT, self.threads)
@@ -407,14 +494,28 @@ impl SplitEngine for Onnx {
 mod tests {
     use super::*;
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn the_engine_works_at_the_lowest_priority() {
+        let nice = || unsafe { libc::getpriority(libc::PRIO_PROCESS, 0) };
+        let before = nice();
+        assert_eq!(low(nice).await.unwrap(), 19);
+        // and what it starts (ffmpeg) too
+        let child = low(|| String::from_utf8_lossy(&std::process::Command::new("sh").args(["-c", "cut -d' ' -f19 /proc/self/stat"]).output().unwrap().stdout).trim().to_string()).await.unwrap();
+        assert_eq!(child, "19");
+        assert_eq!(nice(), before, "the server's own threads keep theirs");
+        assert!(low(|| -> u8 { panic!("a bug") }).await.unwrap_err().contains("stopped unexpectedly"));
+    }
+
     #[test]
     fn the_card_only_with_room() {
         // ribs03's 6 GB card with the desktop on it: room for Demucs
         assert_eq!(place(true, Some(5_600), false, DEMUCS_CARD_MB, 0), Place::Card);
         // Demucs on it, then the words: not both on 6 GB, so Demucs lets go first
         assert_eq!(place(true, Some(2_200), false, MMS_CARD_MB, DEMUCS_CARD_MB), Place::CardWithoutOther);
+        assert_eq!(place(true, Some(2_200), false, MMS_CARD_MB + 4_000, DEMUCS_CARD_MB), Place::Processor, "not even then");
         // a bigger card keeps both
-        assert_eq!(place(true, Some(4_500), false, MMS_CARD_MB, DEMUCS_CARD_MB), Place::Card);
+        assert_eq!(place(true, Some(5_500), false, MMS_CARD_MB, DEMUCS_CARD_MB), Place::Card);
         // a model on the card already keeps its place (its memory is what the card shows as used)
         assert_eq!(place(true, Some(200), true, DEMUCS_CARD_MB, 0), Place::Card);
         assert_eq!(place(true, None, true, DEMUCS_CARD_MB, 0), Place::Card);
@@ -430,7 +531,7 @@ mod tests {
     fn the_engine_says_what_it_runs_on() {
         let e = Onnx::new(PathBuf::from("/nowhere"), 4);
         assert_eq!(e.check().unwrap(), format!("ONNX Runtime {}: the processor, 4 threads", fetch::ORT));
-        assert_eq!(e.models_id(), format!("onnx ort-{} cpu htdemucs_fp16weights mms_fa_fp16w", fetch::ORT));
+        assert_eq!(e.models_id(), format!("onnx2 ort-{} cpu htdemucs_fp16weights mms_fa_fp16w", fetch::ORT));
         // nothing fetched: it says so, and can still be asked again later
         let stop = AtomicBool::new(false);
         let e2 = e.split(Path::new("/nowhere/a.flac"), Path::new("/nowhere/out"), &|_| {}, &stop).unwrap_err();
@@ -453,8 +554,8 @@ mod tests {
             }
         })
         .unwrap();
-        for f in [RUNTIME, DEMUCS, MMS] {
-            assert!(models.join(f).is_file(), "{f}");
+        for f in [e.runtime_dir().join(RUNTIME), models.join(DEMUCS), models.join(MMS)] {
+            assert!(f.is_file(), "{}", f.display());
         }
     }
 

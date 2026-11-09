@@ -38,7 +38,8 @@ fn command(program: &Path) -> Command {
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
-        c.creation_flags(0x0800_0000); // CREATE_NO_WINDOW: never a console window over the owner's desktop
+        // CREATE_NO_WINDOW (never a console window over the owner's desktop) | IDLE_PRIORITY_CLASS
+        c.creation_flags(0x0800_0000 | 0x0000_0040);
     }
     c.stdin(Stdio::null());
     c

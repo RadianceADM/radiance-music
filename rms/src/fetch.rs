@@ -37,10 +37,19 @@ pub struct Item {
     pub size: u64,
     pub sha256: String,
     pub unpack: Unpack,
+    /// Its folder in models/ ("" for models/ itself): ONNX Runtime's two builds each have their own
+    /// (cpu/, gpu/), so neither ever overwrites the other's files (#72 review).
+    pub dir: &'static str,
 }
 
 fn item(name: &str, what: &str, urls: Vec<String>, size: u64, sha256: &str, unpack: Unpack) -> Item {
-    Item { name: name.into(), what: what.into(), urls, size, sha256: sha256.into(), unpack }
+    Item { name: name.into(), what: what.into(), urls, size, sha256: sha256.into(), unpack, dir: "" }
+}
+
+#[cfg(test)]
+fn into(dir: &'static str, mut i: Item) -> Item {
+    i.dir = dir;
+    i
 }
 
 /// What this server needs, here: `windows`, whether it has an NVIDIA card,
@@ -49,6 +58,7 @@ pub fn wanted(windows: bool, nvidia: bool, has_ffmpeg: bool) -> Vec<Item> {
     let ort = |file: &str| format!("https://github.com/microsoft/onnxruntime/releases/download/v{ORT}/{file}");
     let nv = |path: &str| format!("https://developer.download.nvidia.com/compute/{path}");
     let mut v = Vec::new();
+    let runtime = if windows && nvidia { "gpu" } else { "cpu" };
     if windows && nvidia {
         v.push(item(
             "onnxruntime-gpu",
@@ -130,6 +140,16 @@ pub fn wanted(windows: bool, nvidia: bool, has_ffmpeg: bool) -> Vec<Item> {
             Unpack::Zip(&[("ffmpeg.exe", ""), ("ffprobe.exe", "")]),
         ));
     }
+    for i in v.iter_mut() {
+        if matches!(i.name.as_str(), "onnxruntime-gpu" | "cuda-runtime" | "cublas" | "cufft" | "cudnn" | "onnxruntime") {
+            i.dir = runtime;
+        }
+        if i.name == "vc-runtime" {
+            // beside the runtime it's for, under a name of its own (each folder's record)
+            i.dir = runtime;
+            i.name = format!("vc-runtime-{runtime}");
+        }
+    }
     // Demucs (htdemucs, MIT), as the phone's and the app's
     v.push(item(
         "htdemucs_fp16weights.onnx",
@@ -156,8 +176,10 @@ pub fn missing_bytes(dir: &Path, items: &[Item]) -> u64 {
     items.iter().filter(|i| !got(dir, i)).map(|i| i.size).sum()
 }
 
+/// Its record of being there, under its folder's name too (a record from the flat layout of
+/// before doesn't count for gpu/ or cpu/).
 fn stamp(dir: &Path, item: &Item) -> PathBuf {
-    dir.join(".got").join(&item.name)
+    dir.join(".got").join(item.dir).join(&item.name)
 }
 
 /// Fetched already (its record names the same file).
@@ -183,15 +205,21 @@ pub fn fetch_all(dir: &Path, items: &[Item], progress: &dyn Fn(f64, &str)) -> Re
     Ok(())
 }
 
-fn fetch_one(dir: &Path, item: &Item, say: &dyn Fn(u64)) -> Result<(), String> {
-    let dl = dir.join(".download");
+fn fetch_one(models: &Path, item: &Item, say: &dyn Fn(u64)) -> Result<(), String> {
+    let dir = &models.join(item.dir);
+    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    let dl = models.join(".download");
     std::fs::create_dir_all(&dl).map_err(|e| e.to_string())?;
     let part = |i: usize| dl.join(format!("{}.part{i}", item.name));
     let done = |i: usize| dl.join(format!("{}.part{i}.done", item.name));
     let have = |upto: usize| (0..upto).map(|i| std::fs::metadata(part(i)).map(|m| m.len()).unwrap_or(0)).sum::<u64>();
     for (i, url) in item.urls.iter().enumerate() {
         if done(i).exists() {
-            continue;
+            if part(i).exists() {
+                continue;
+            }
+            // its record without its piece (stopped between the two): fetched again
+            let _ = std::fs::remove_file(done(i));
         }
         let before = have(i);
         download(url, &part(i), &|n| say(before + n)).map_err(|e| format!("{}: {e}", item.what))?;
@@ -238,8 +266,8 @@ fn fetch_one(dir: &Path, item: &Item, say: &dyn Fn(u64)) -> Result<(), String> {
     };
     let _ = std::fs::remove_file(&joined);
     unpacked.map_err(|e| format!("{}: {e}", item.what))?;
-    std::fs::create_dir_all(dir.join(".got")).map_err(|e| e.to_string())?;
-    std::fs::write(stamp(dir, item), &item.sha256).map_err(|e| e.to_string())
+    std::fs::create_dir_all(models.join(".got").join(item.dir)).map_err(|e| e.to_string())?;
+    std::fs::write(stamp(models, item), &item.sha256).map_err(|e| e.to_string())
 }
 
 /// `url` into `file`, carrying on from what's there; `moved`: its bytes so far.
@@ -359,11 +387,14 @@ mod tests {
     struct Files {
         files: Arc<Mutex<HashMap<String, Vec<u8>>>>,
         asked: Arc<Mutex<Vec<(String, u64)>>>,
+        /// answers 200 with the whole file whatever Range asks (some servers do)
+        no_ranges: Arc<std::sync::atomic::AtomicBool>,
     }
 
     async fn serve(State(f): State<Files>, UrlPath(name): UrlPath<String>, headers: HeaderMap) -> axum::response::Response {
         let Some(bytes) = f.files.lock().unwrap().get(&name).cloned() else { return StatusCode::NOT_FOUND.into_response() };
-        let from = headers.get("range").and_then(|v| v.to_str().ok()).and_then(|r| r.strip_prefix("bytes=")).and_then(|r| r.trim_end_matches('-').parse::<u64>().ok());
+        let ranges = !f.no_ranges.load(std::sync::atomic::Ordering::Relaxed);
+        let from = headers.get("range").filter(|_| ranges).and_then(|v| v.to_str().ok()).and_then(|r| r.strip_prefix("bytes=")).and_then(|r| r.trim_end_matches('-').parse::<u64>().ok());
         f.asked.lock().unwrap().push((name, from.unwrap_or(0)));
         match from {
             Some(a) if a as usize >= bytes.len() => StatusCode::RANGE_NOT_SATISFIABLE.into_response(),
@@ -456,6 +487,48 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_server_that_ignores_ranges_starts_it_over() {
+        let whole = bytes(150_000, 6);
+        let (base, f) = stand_in(&[("w", whole.clone())]).await;
+        f.no_ranges.store(true, std::sync::atomic::Ordering::Relaxed);
+        let d = dir("noranges");
+        std::fs::create_dir_all(d.join(".download")).unwrap();
+        std::fs::write(d.join(".download/w.onnx.part0"), &whole[..40_000]).unwrap();
+        let it = item("w.onnx", "a model", vec![format!("{base}/w")], whole.len() as u64, &sha(&whole), Unpack::Keep);
+        run(&d, vec![it]).await.0.unwrap();
+        assert_eq!(std::fs::read(d.join("w.onnx")).unwrap(), whole);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_pieces_record_without_the_piece_is_fetched_again() {
+        let (a, b) = (bytes(10_000, 7), bytes(5_000, 8));
+        let whole = [a.clone(), b.clone()].concat();
+        let (base, _) = stand_in(&[("v0", a), ("v1", b)]).await;
+        let d = dir("stray");
+        // stopped between deleting the first piece and its record, last time
+        std::fs::create_dir_all(d.join(".download")).unwrap();
+        std::fs::write(d.join(".download/v.onnx.part0.done"), "").unwrap();
+        let it = item("v.onnx", "a model", vec![format!("{base}/v0"), format!("{base}/v1")], whole.len() as u64, &sha(&whole), Unpack::Keep);
+        run(&d, vec![it]).await.0.unwrap();
+        assert_eq!(std::fs::read(d.join("v.onnx")).unwrap(), whole);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn an_items_files_go_to_its_folder() {
+        let whole = bytes(2_000, 9);
+        let (base, _) = stand_in(&[("u", whole.clone())]).await;
+        let d = dir("folder");
+        let it = into("gpu", item("u.dll", "a runtime", vec![format!("{base}/u")], 2_000, &sha(&whole), Unpack::Keep));
+        run(&d, vec![it.clone()]).await.0.unwrap();
+        assert_eq!(std::fs::read(d.join("gpu/u.dll")).unwrap(), whole);
+        assert!(!d.join("u.dll").exists());
+        assert!(got(&d, &it));
+        // a record of the same name from the flat layout of before doesn't count
+        let flat = item("u.dll", "a runtime", vec![format!("{base}/u")], 2_000, &sha(&whole), Unpack::Keep);
+        assert!(!got(&d, &flat));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_zips_chosen_files_land_flat() {
         let mut z = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
         let opts = zip::write::SimpleFileOptions::default();
@@ -509,8 +582,14 @@ mod tests {
         let names = |v: Vec<Item>| v.into_iter().map(|i| i.name).collect::<Vec<_>>();
         assert_eq!(names(wanted(false, false, true)), ["onnxruntime", "htdemucs_fp16weights.onnx", "mms_fa_fp16w.onnx"]);
         assert_eq!(names(wanted(false, true, true)), ["onnxruntime", "htdemucs_fp16weights.onnx", "mms_fa_fp16w.onnx"], "Linux: the processor");
-        assert_eq!(names(wanted(true, false, false)), ["onnxruntime", "vc-runtime", "ffmpeg", "htdemucs_fp16weights.onnx", "mms_fa_fp16w.onnx"]);
-        assert_eq!(names(wanted(true, true, true)), ["onnxruntime-gpu", "cuda-runtime", "cublas", "cufft", "cudnn", "vc-runtime", "htdemucs_fp16weights.onnx", "mms_fa_fp16w.onnx"]);
+        assert_eq!(names(wanted(true, false, false)), ["onnxruntime", "vc-runtime-cpu", "ffmpeg", "htdemucs_fp16weights.onnx", "mms_fa_fp16w.onnx"]);
+        assert_eq!(names(wanted(true, true, true)), ["onnxruntime-gpu", "cuda-runtime", "cublas", "cufft", "cudnn", "vc-runtime-gpu", "htdemucs_fp16weights.onnx", "mms_fa_fp16w.onnx"]);
+        // the two builds of ONNX Runtime never share a folder (nor a record)
+        let dirs = |v: Vec<Item>| v.into_iter().map(|i| (i.name, i.dir)).collect::<Vec<_>>();
+        assert!(dirs(wanted(true, true, true)).iter().filter(|(n, _)| !n.ends_with(".onnx")).all(|(_, d)| *d == "gpu"));
+        assert!(dirs(wanted(true, false, true)).iter().filter(|(n, _)| !n.ends_with(".onnx")).all(|(_, d)| *d == "cpu"));
+        assert_eq!(dirs(wanted(false, false, true))[0], ("onnxruntime".to_string(), "cpu"));
+        assert!(dirs(wanted(true, false, false)).iter().any(|(n, d)| n == "ffmpeg" && d.is_empty()), "ffmpeg beside the models");
         for i in wanted(true, true, false).into_iter().chain(wanted(false, false, false)) {
             assert!(i.sha256.len() == 64 && i.sha256.chars().all(|c| c.is_ascii_hexdigit()), "{}", i.name);
             assert!(i.size > 0 && !i.urls.is_empty() && i.urls.iter().all(|u| u.starts_with("https://")), "{}", i.name);

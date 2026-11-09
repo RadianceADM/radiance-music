@@ -159,12 +159,22 @@ pub fn forced_align(em: &[f32], frames: usize, classes: usize, targets: &[usize]
         }
     }
     let last = (t_len - 1) % 2;
+    // scores that aren't numbers (the model's output gone wrong): no path, not a crash
+    if !alphas[last][s_len - 1].is_finite() && !alphas[last][s_len - 2].is_finite() {
+        return None;
+    }
     let mut idx = if alphas[last][s_len - 1] > alphas[last][s_len - 2] { s_len - 1 } else { s_len - 2 };
     let mut path = vec![0usize; t_len];
     for t in (0..t_len).rev() {
         path[t] = label(idx);
+        if t == 0 {
+            break;
+        }
         let b = back[t * s_len + idx];
-        idx = (idx as isize - b as isize) as usize;
+        if b < 0 || (b as usize) > idx {
+            return None;
+        }
+        idx -= b as usize;
     }
     Some(path)
 }
@@ -387,6 +397,19 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn scores_that_arent_numbers_time_nothing_and_never_crash() {
+        let em = vec![f32::NAN; 40 * CLASSES];
+        assert!(forced_align(&em, 40, CLASSES, &[15, 3, 12, 12, 5]).is_none());
+        let mut inf = vec![0.0f32; 40 * CLASSES];
+        inf.iter_mut().skip(3).step_by(7).for_each(|x| *x = f32::NEG_INFINITY);
+        let _ = forced_align(&inf, 40, CLASSES, &[15, 3, 12, 12, 5]);
+        let wav = vec![0.0f32; 2 * RATE as usize];
+        let given = serde_json::json!({ "lines": [{ "start": 0.0, "end": 2.0, "text": "hello" }] });
+        let yaml = align(&mut |_| Ok((vec![f32::NAN; 100 * CLASSES], 100)), &wav, &given, &|_| {}, &AtomicBool::new(false)).unwrap();
+        assert!(!yaml.contains("hello"), "{yaml}");
     }
 
     #[test]
