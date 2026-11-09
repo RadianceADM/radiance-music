@@ -10,7 +10,11 @@ async fn main() {
     }
     rms::log(&format!("Radiance Music Server {} (data in {}, listening on {})", rms::VERSION, cfg.data.display(), cfg.bind));
     let bind = cfg.bind.clone();
-    let app = match rms::open(cfg) {
+    if std::env::var_os("RMS_PYTHON").is_some() || std::env::var_os("RMS_SCRIPTS").is_some() {
+        rms::log("RMS_PYTHON and RMS_SCRIPTS aren't used any more: the server splits and times words by itself (no Python)");
+    }
+    let engine = std::sync::Arc::new(rms::engine::Onnx::new(cfg.models(), cfg.threads));
+    let app = match rms::open_with(cfg, engine) {
         Ok(app) => app,
         Err(e) => {
             rms::log(&format!("couldn't start: {e}"));

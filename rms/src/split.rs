@@ -230,7 +230,11 @@ pub async fn worker(app: Shared) {
         };
         match next {
             Some((job, song)) => run(&app, job, song).await,
-            None => rest(&app, 300).await,
+            None => {
+                let engine = app.engine.clone();
+                let _ = tokio::task::spawn_blocking(move || engine.rest()).await;
+                rest(&app, 300).await
+            }
         }
     }
 }

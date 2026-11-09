@@ -476,6 +476,12 @@ async fn split_queue_runs_the_splitter() {
     // finished songs can't be taken out of the queue
     let (st, _) = s.delete(&format!("/api/queue/{}", job["id"]), &owner).await;
     assert_eq!(st, StatusCode::CONFLICT);
+    // the queue empty, the engine lets go of what it holds (the graphics card's memory)
+    let until = std::time::Instant::now() + Duration::from_secs(10);
+    while !s.dir.join("rests.txt").exists() && std::time::Instant::now() < until {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(s.dir.join("rests.txt").exists());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

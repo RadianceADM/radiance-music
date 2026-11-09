@@ -109,6 +109,17 @@ pub fn wanted(windows: bool, nvidia: bool, has_ffmpeg: bool) -> Vec<Item> {
             Unpack::Tgz(&[("libonnxruntime.so.1.31.1", "libonnxruntime.so")]),
         ));
     }
+    if windows {
+        // ONNX Runtime needs the Visual C++ runtime, which a PC may not have (the app's same pin)
+        v.push(item(
+            "vc-runtime",
+            "the Visual C++ runtime",
+            vec!["https://files.pythonhosted.org/packages/98/33/be9ef68901200813fc174a06758b4ae48ca4eb58fa783280dd879d5fd048/msvc_runtime-14.51.36231-cp312-cp312-win_amd64.whl".into()],
+            2_052_033,
+            "89f70d1a37bb64164cdb09d02dd82d6b1400e1310be2995b4ed5a9f23efe2222",
+            Unpack::Zip(&[("vcruntime140.dll", ""), ("vcruntime140_1.dll", ""), ("msvcp140.dll", ""), ("msvcp140_1.dll", "")]),
+        ));
+    }
     if windows && !has_ffmpeg {
         v.push(item(
             "ffmpeg",
@@ -498,8 +509,8 @@ mod tests {
         let names = |v: Vec<Item>| v.into_iter().map(|i| i.name).collect::<Vec<_>>();
         assert_eq!(names(wanted(false, false, true)), ["onnxruntime", "htdemucs_fp16weights.onnx", "mms_fa_fp16w.onnx"]);
         assert_eq!(names(wanted(false, true, true)), ["onnxruntime", "htdemucs_fp16weights.onnx", "mms_fa_fp16w.onnx"], "Linux: the processor");
-        assert_eq!(names(wanted(true, false, false)), ["onnxruntime", "ffmpeg", "htdemucs_fp16weights.onnx", "mms_fa_fp16w.onnx"]);
-        assert_eq!(names(wanted(true, true, true)), ["onnxruntime-gpu", "cuda-runtime", "cublas", "cufft", "cudnn", "htdemucs_fp16weights.onnx", "mms_fa_fp16w.onnx"]);
+        assert_eq!(names(wanted(true, false, false)), ["onnxruntime", "vc-runtime", "ffmpeg", "htdemucs_fp16weights.onnx", "mms_fa_fp16w.onnx"]);
+        assert_eq!(names(wanted(true, true, true)), ["onnxruntime-gpu", "cuda-runtime", "cublas", "cufft", "cudnn", "vc-runtime", "htdemucs_fp16weights.onnx", "mms_fa_fp16w.onnx"]);
         for i in wanted(true, true, false).into_iter().chain(wanted(false, false, false)) {
             assert!(i.sha256.len() == 64 && i.sha256.chars().all(|c| c.is_ascii_hexdigit()), "{}", i.name);
             assert!(i.size > 0 && !i.urls.is_empty() && i.urls.iter().all(|u| u.starts_with("https://")), "{}", i.name);
