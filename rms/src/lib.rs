@@ -22,6 +22,7 @@ pub mod fetch;
 pub mod library;
 pub mod lyrics;
 pub mod media;
+pub mod mms;
 pub mod party;
 pub mod people;
 pub mod split;
