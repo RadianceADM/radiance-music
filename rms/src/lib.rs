@@ -12,6 +12,7 @@
 //! people, invites, devices, songs, the split queue) and `models/` (the
 //! splitter's models, downloaded at the first start: never in the image).
 
+pub mod audio;
 pub mod auth;
 pub mod db;
 pub mod engine;
