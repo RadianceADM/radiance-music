@@ -32,8 +32,8 @@ parties from.
   - **KVM 2** (2 vCPU, 8 GB of memory) works. A song takes about twice its own length to split.
   - **KVM 4** (4 vCPU, 16 GB) splits a song in about its own length.
   - Splitting uses about **2.7 GB of memory** while it works, so 4 GB is the least that will work and 8 GB is better.
-- Disk space: about 2 GB for the program, 1.3 GB for the splitting models (downloaded once, the first
-  time it starts), and about 30 MB for each split song.
+- Disk space: about 200 MB for the program, about 800 MB for the splitter (ONNX Runtime and its two models,
+  downloaded once, the first time it starts), and about 30 MB for each split song.
 - A domain is optional (for example `music.example.com`). With one, the server uses https.
 
 ## Way 1: Deploy on Hostinger
@@ -48,8 +48,8 @@ parties from.
 4. Open `http://YOUR-VPS-ADDRESS` in a browser (the address is in hPanel → VPS).
 5. **Type your name and the setup key.** Your friends will see the server as "*your name*'s server". You
    get your own join link and its QR code for the app. After that, the key isn't needed any more.
-6. Leave the page open for a few minutes the first time: it downloads the splitting models (about 1.3 GB,
-   only once) and shows how far along it is.
+6. Leave the page open for a few minutes the first time: it downloads the splitter (about 800 MB, only
+   once) and shows how far along it is.
 
 To add a domain later, see [Add a domain (https)](#add-a-domain-https).
 
@@ -85,8 +85,8 @@ With a domain (Caddy gets the https certificate by itself):
 sudo RMS_DOMAIN=music.example.com bash radiance-music/rms/install.sh
 ```
 
-The script asks you for a setup key (press Enter and the server makes one). It installs Python, ffmpeg and
-the splitter (PyTorch for the processor, plus Demucs), builds the server, and starts it as a service called
+The script asks you for a setup key (press Enter and the server makes one). It installs ffmpeg, builds the
+server (it splits songs and times their words itself: no Python), and starts it as a service called
 `radiance-music-server`. It ends by printing the address to open and the setup key. Without a domain, the
 address is `http://YOUR-SERVER-ADDRESS:8080`.
 
@@ -169,16 +169,13 @@ No domain? If the server has a public IPv4 address such as `203.0.113.5`, you ca
 | `RMS_SETUP_KEY` | The key the setup page asks for, so nobody else can claim your new server. Not needed after setup | made at the first start (log and `setup-key.txt`) |
 | `RMS_DATA` | The folder with the library, `server.db` and the models | `/data` (Docker), `/var/lib/radiance-music-server` (install.sh) |
 | `RMS_BIND` | Where the server listens | `0.0.0.0:8080` |
-| `RMS_PYTHON` | The Python that has the splitter | `/opt/rms/venv/bin/python` |
-| `RMS_SCRIPTS` | The folder with `split.py` and `align.py` (the app's own) | `/opt/rms/scripts` |
 | `RMS_THREADS` | How many processor cores splitting may use (always at the lowest priority) | all of them |
 | `RMS_PUBLIC_URL` | The address links start with, if it's neither the domain nor what the browser used | none |
 
 ## If something's wrong
 
-- **"The splitter isn't installed on this server yet":** the server can't find Python with Demucs. The
-  Docker image includes it. With install.sh, run the script again. Songs wait in the queue until the
-  splitter is installed.
+- **"The splitter isn't installed on this server yet":** the page says why. Usually ffmpeg is missing (the
+  Docker image has it; with install.sh, run the script again). Songs wait in the queue until it's fixed.
 - **"The models' download stopped":** usually the connection. The server tries again a minute later by itself.
 - **The page doesn't open:** check that the server is running (Hostinger: Docker Manager), and that the
   firewall lets in ports 80 and 443 (Docker) or 8080 (install.sh without a domain).
@@ -227,6 +224,9 @@ so everyone receives it in time. A listener keeps its clock offset to the server
 `position = (now + offset) - started_at_server_ms`. A late joiner uses the same formula. When a song
 ends, the server starts the next one by itself.
 
-The image pins PyTorch 2.15.0+cpu, torchaudio 2.11.1+cpu and Demucs 4.1.0: the set that split songs and
-timed words in it. It's built from the repository's root:
+The server splits songs and times their words itself, in Rust (#72): Demucs (htdemucs) and Meta's MMS
+aligner as ONNX, through ONNX Runtime 1.31.1, each download pinned by its size and SHA-256. On Windows
+with an NVIDIA card it uses the card (ONNX Runtime's CUDA 12 build with NVIDIA's CUDA 12.8 and cuDNN 9.10
+files, about 1.8 GB more) whenever the card has 2.5 GB free; otherwise the processor. `RMS_PYTHON` and
+`RMS_SCRIPTS` from older versions aren't used any more. The image is built from the repository's root:
 `docker build -f rms/Dockerfile -t ghcr.io/radianceadm/radiance-music-server:latest .`

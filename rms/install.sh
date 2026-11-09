@@ -22,9 +22,7 @@ die() { printf '\n\033[1;31mStopped:\033[0m %s\n' "$*" >&2; exit 1; }
 
 [ "$(id -u)" = 0 ] || die "Run it as root: sudo bash $0"
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-repo="$(dirname "$here")"
-[ -f "$here/Cargo.toml" ] && [ -f "$repo/server/split.py" ] && [ -f "$repo/server/align.py" ] \
-  || die "Run it from a copy of the repository (rms/install.sh, with server/split.py beside rms/)."
+[ -f "$here/Cargo.toml" ] || die "Run it from a copy of the repository (rms/install.sh, beside the server's Cargo.toml)."
 
 DOMAIN="${RMS_DOMAIN:-}"
 DOMAIN="${DOMAIN#https://}"; DOMAIN="${DOMAIN#http://}"; DOMAIN="${DOMAIN%/}"
@@ -61,14 +59,14 @@ if [ "$mem_gb" -lt 4 ]; then
   echo "Note: this server has about ${mem_gb} GB of memory. Splitting needs about 2.7 GB while it works; 4 GB or more is best."
 fi
 
-say "Installing what it needs (Python, ffmpeg, and a C compiler to build the server)"
+say "Installing what it needs (ffmpeg, and a C compiler to build the server)"
 if [ "$family" = debian ]; then
   export DEBIAN_FRONTEND=noninteractive
   apt-get update -q
-  apt-get install -y -q python3 python3-venv ffmpeg ca-certificates curl gcc libc6-dev
+  apt-get install -y -q ffmpeg ca-certificates curl gcc libc6-dev
 else
   # Fedora's own ffmpeg is "ffmpeg-free"
-  dnf install -y -q python3 ffmpeg-free ca-certificates curl gcc glibc-devel
+  dnf install -y -q ffmpeg-free ca-certificates curl gcc glibc-devel
 fi
 
 # the server program: built here with Rust, kept in /opt/rms (not in root's home)
@@ -86,25 +84,8 @@ else
   install -m 755 "$OPT/build/release/rms" /usr/local/bin/rms
 fi
 
-# the splitter: the app's own pip list (setup.rs install()), in its own place
-say "Setting up the splitter (PyTorch for the CPU and Demucs: about 1 GB to download)"
-[ -x "$OPT/venv/bin/python" ] || python3 -m venv "$OPT/venv"
-"$OPT/venv/bin/pip" install -q --upgrade pip
-# the set the Docker image is tested with, where this Python can have it (3.11 or newer)
-if python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)'; then
-  torch_set="torch==2.15.0+cpu torchaudio==2.11.1+cpu"; demucs_set="demucs==4.1.0"
-else
-  torch_set="torch torchaudio"; demucs_set="demucs"
-  echo "Note: $(python3 -V) is older than 3.11, so it gets the newest PyTorch that suits it (the tested set needs 3.11)."
-fi
-# shellcheck disable=SC2086
-"$OPT/venv/bin/pip" install -q --progress-bar off --only-binary=:all: \
-  --index-url https://download.pytorch.org/whl/cpu --extra-index-url https://pypi.org/simple \
-  $torch_set soundfile av numpy pyyaml
-"$OPT/venv/bin/pip" install -q --only-binary=:all: "$demucs_set"
-"$OPT/venv/bin/python" -c "import torch, torchaudio, demucs, soundfile, av; print('The splitter is in: PyTorch', torch.__version__)"
-install -d "$OPT/scripts"
-install -m 644 "$repo/server/split.py" "$repo/server/align.py" "$OPT/scripts/"
+# the splitter is the server itself (Rust, no Python): ONNX Runtime and its two models download
+# into the data folder at its first start (about 800 MB, once), with the progress on its web page
 
 say "Making its user and its data folder ($DATA)"
 id rms >/dev/null 2>&1 || useradd --system --home-dir "$DATA" --shell /usr/sbin/nologin rms
@@ -116,8 +97,6 @@ if [ -n "$DOMAIN" ]; then bind="127.0.0.1:8080"; else bind="0.0.0.0:$PORT"; fi
   echo "# Radiance Music Server's settings (install.sh writes them; see the README)"
   echo "RMS_DATA=$DATA"
   echo "RMS_BIND=$bind"
-  echo "RMS_PYTHON=$OPT/venv/bin/python"
-  echo "RMS_SCRIPTS=$OPT/scripts"
   [ -n "$DOMAIN" ] && echo "RMS_DOMAIN=$DOMAIN"
   [ -n "$KEY" ] && echo "RMS_SETUP_KEY=$KEY"
   [ -n "${RMS_THREADS:-}" ] && echo "RMS_THREADS=$RMS_THREADS"

@@ -63,7 +63,7 @@ marked 🔜.
 | Split queue, pause / stop splitting | ✅ | ✅ | ✅ | ✅ | |
 | Cores it may use | ✅ | ✅ | ✅ | ✅ | |
 | Pauses for low battery or heat | ➖ | ➖ | ➖ | ✅ | |
-| Split on a Radiance Music Server | ✅ | ✅ | 🔜 4 | ✅ | |
+| Split on a Radiance Music Server | ✅ | ✅ | 🔜 4 | ✅ | the server splits and times words itself, in Rust (no Python, server 0.2.0, #72); on Windows with an NVIDIA card, on the card |
 | Six parts (piano, guitar) | off | off | off | off | songs already split in six play, piano and guitar follow Other |
 
 ## Lyrics
