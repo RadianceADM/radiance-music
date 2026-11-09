@@ -17,6 +17,7 @@
   <url type="bugtracker">https://github.com/RadianceADM/radiance-music/issues</url>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.7.22" date="2026-11-09"/>
     <release version="0.7.21" date="2026-11-08"/>
     <release version="0.7.20" date="2026-11-06"/>
     <release version="0.7.19" date="2026-11-05"/>

@@ -1,9 +1,9 @@
 # Changelog
 
-## Windows: the switch to the native app — built and simulated, not released (#45, stage 5)
+## v0.7.22 — 2026-11-09
 
-- **Today's Radiance Music for Windows updates itself into the native one:** the release that switches carries the native app's installer as its `RadianceMusic-Setup.exe`. Today's app offers it as any update (Update Now, then Restart to Update), the installer takes today's app's program files away and puts the native app in the same folder, and the native Radiance Music opens by itself. Your songs, playlists, settings and the splitter stay (they're in your data folders); the Start menu entry and `radiancemusic://` links open the native app.
-- Simulated as a user would get it, in a test Windows: 0.7.21 offered a test 0.8.0, Update Now, Restart to Update, the native app open, nothing of the user's data missing. Which release switches is the owner's call (after the features still missing in the native app).
+- **Radiance Music for Windows is now built for Windows itself (WinUI 3):** faster and lighter, in Windows' own look. Today's Windows app offers it as any update (Update Now, then Restart to Update), and the new app opens by itself afterwards, with your songs, playlists, settings and the splitter (they're in your data folders; the update takes only the old app's program files away). The Start menu entry and `radiancemusic://` links open the new app. It has everything today's app has, servers and listening parties included.
+- **Linux: joining another server's listening party while in one keeps your own music** as it was before the first party (it came back as the first party's song before, and the saved session could be overwritten by it).
 
 ## v0.7.21 — 2026-11-08
 
