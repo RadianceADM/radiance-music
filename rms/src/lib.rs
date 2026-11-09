@@ -15,6 +15,7 @@
 pub mod audio;
 pub mod auth;
 pub mod db;
+pub mod demucs;
 pub mod engine;
 pub mod events;
 pub mod fetch;
