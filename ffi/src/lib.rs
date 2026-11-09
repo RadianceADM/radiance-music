@@ -560,6 +560,8 @@ pub enum MenuAction {
     EditLyrics,
     FindLyricsAgain,
     CopyLink,
+    /// Beta.11: one of your saved songs sent to a joined server (its address).
+    AddToServer { address: String },
 }
 
 impl From<MenuAction> for menu::Action {
@@ -585,6 +587,7 @@ impl From<MenuAction> for menu::Action {
             MenuAction::EditLyrics => A::EditLyrics,
             MenuAction::FindLyricsAgain => A::FindLyricsAgain,
             MenuAction::CopyLink => A::CopyLink,
+            MenuAction::AddToServer { address } => A::AddToServer(address),
         }
     }
 }
@@ -612,6 +615,7 @@ impl From<menu::Action> for MenuAction {
             A::EditLyrics => MenuAction::EditLyrics,
             A::FindLyricsAgain => MenuAction::FindLyricsAgain,
             A::CopyLink => MenuAction::CopyLink,
+            A::AddToServer(address) => MenuAction::AddToServer { address },
         }
     }
 }

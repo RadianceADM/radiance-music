@@ -46,6 +46,8 @@ pub enum Action {
     FindLyricsAgain,
     /// The song's page on the web to the clipboard (the app does it: stage 4b, the Linux menu's Copy Link).
     CopyLink,
+    /// One of your saved songs sent to a joined server (its address): the Linux menu's "Add to NAME" (beta.11).
+    AddToServer(String),
 }
 
 /// What splitting can do for a song now, for its menu (stage 3): online, how many parts it has

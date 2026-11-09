@@ -2465,6 +2465,9 @@ fn a_playing_song_gets_its_pulse() {
 /// A Radiance Music Server standing in, for the rest of the process: /api/status, /api/join (code ABCDEFGHJKMN),
 /// /api/me, /api/library, /api/party, the revoke; `mode` 0: as it should, 1: not answering (the line closes with no
 /// reply), 2: the key revoked (401 for every keyed call). Anything else: 404 (the events line too: it tries again).
+/// Songs the 4c-1 stand-in was sent (POST /api/songs), by title.
+static RMS_UPLOADS: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
 fn rms_stand_in(mode: Arc<std::sync::atomic::AtomicU8>) -> String {
     use std::io::{BufRead, BufReader, Read, Write};
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -2511,6 +2514,13 @@ fn rms_stand_in(mode: Arc<std::sync::atomic::AtomicU8>) -> String {
                 ("GET", "/api/library", true, _) => (200, library.into()),
                 ("GET", "/api/party", true, _) => (200, r#"{"party":null}"#.into()),
                 ("POST", p, true, _) if p.starts_with("/api/devices/") => (200, r#"{"ok":true}"#.into()),
+                ("POST", "/api/songs", true, _) => {
+                    // the title field of the form (name="title"\r\n\r\nTITLE\r\n)
+                    let form = String::from_utf8_lossy(&body);
+                    let title = form.split("name=\"title\"\r\n\r\n").nth(1).and_then(|r| r.split("\r\n").next()).unwrap_or("").to_string();
+                    RMS_UPLOADS.lock().unwrap().push(title.clone());
+                    (201, serde_json::json!({"skipped": false, "extras": [], "song": {"id": 6, "artist": "Test Artist", "title": title, "file": "x.wav", "url": "/files/x.wav", "duration_ms": 3000, "split": true, "parts": [], "files": {}, "added_by": {"id": 3, "name": "Ana"}}}).to_string())
+                }
                 _ => (404, r#"{"error":"no such page"}"#.into()),
             };
             let reply = format!("HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{json}", json.len());
@@ -3229,5 +3239,35 @@ fn a_moved_server_leaves_its_party() {
     assert!(until(5.0, || c.servers().rows.iter().any(|r| r.address == new)), "{:?}", c.servers());
     assert!(until(5.0, || c.party().server.is_empty()), "still in the old address's party: {:?}", c.party().server);
     off_party_server(&c, &new);
+    c.quit();
+}
+
+/// Beta.11 (today's Windows app's server items, before the switch): a server song's menu has its items (it had none:
+/// the menu didn't look on a server's page) and says Save to Your Library; one of your saved songs says Add to NAME for
+/// each server that lets you add songs, never its own; adding sends it there and says so.
+#[test]
+fn a_songs_menu_has_its_server_items() {
+    use radiance_core::menu::{Action, Place};
+    let _l = setup();
+    let mine = wav("server-menu-mine", 3.0);
+    let (c, _f, _rx) = with_songs("server menu", vec![mine.clone()]);
+    let address = rms_stand_in(Arc::new(std::sync::atomic::AtomicU8::new(0)));
+    c.server_join(&format!("{address}/join/ABCD-EFGH-JKMN"));
+    assert!(until(5.0, || c.servers().rows.iter().any(|r| r.address == address && r.songs == Some(2))), "{:?}", c.servers());
+    let labels = |key: &str| c.song_menu(key, Place::Row).concat().into_iter().map(|i| i.label).collect::<Vec<_>>();
+    let theirs = c.server_page(&address, "").songs[0].0.clone();
+    let l = labels(&theirs.key());
+    assert!(l.contains(&"Save to Your Library".to_string()), "{l:?}");
+    assert!(!l.iter().any(|x| x.starts_with("Add to Bassi")), "a server's own song isn't offered back to it: {l:?}");
+    let l = labels(&mine.key());
+    assert!(l.contains(&"Add to Bassi's server".to_string()), "{l:?}");
+    assert!(!l.contains(&"Save to Your Library".to_string()), "{l:?}");
+    let add = c.song_menu(&mine.key(), Place::Row).concat().into_iter().find(|i| i.label == "Add to Bassi's server").unwrap();
+    assert_eq!(add.action, Action::AddToServer(address.clone()));
+    c.do_menu(&mine.key(), 0, add.action);
+    assert_eq!(toast_with(&c, "is on Bassi's server now", 10.0), Ok("“Song server-menu-mine” is on Bassi's server now, for everyone there".to_string()));
+    assert!(RMS_UPLOADS.lock().unwrap().contains(&"Song server-menu-mine".to_string()));
+    c.server_leave(&address);
+    assert!(until(5.0, || c.servers().rows.is_empty()));
     c.quit();
 }

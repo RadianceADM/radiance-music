@@ -25,6 +25,8 @@ pub struct ServerRow {
     pub problem: Option<String>,
     /// This computer's key doesn't work there anymore.
     pub signed_out: bool,
+    /// It said who you are there (`can` is its answer, not a guess).
+    pub known: bool,
     /// How many songs it has (None: not fetched yet).
     pub songs: Option<usize>,
 }
@@ -341,6 +343,32 @@ impl Engine {
         self.toast(rw::moved_toast(&now.name, &now.address));
     }
 
+    /// Add to NAME (a saved song's menu, beta.11, the Linux app's add_to_server): the song, its cover, lyrics and parts
+    /// sent to the server; a toast says what went (or that it was there already).
+    pub(super) fn rms_add_to(self: &Rc<Self>, key: &str, address: &str) {
+        let Some(server) = self.rms_joined(address) else { return };
+        let Some(t) = self.find_track(key) else { return };
+        let t = playing::saved_copy(&self.liked.borrow(), &t);
+        self.toast(rw::adding(&t.title, &server.name));
+        let (s, title) = (server.clone(), t.title.clone());
+        self.bg(move || servers::upload(&s, &t), move |e, added| {
+            match added {
+                Ok(a) if a.skipped && a.extras.is_empty() && a.parts.is_empty() => e.toast(rw::has_already(&server.name, &title)),
+                // what went: its extras, its parts (when this computer had split it)
+                Ok(a) if a.skipped => e.toast(rw::had_already(&server.name, &title, &rw::what_went(&a.extras, !a.parts.is_empty()))),
+                Ok(a) => {
+                    crate::log::note(&format!("added “{title}” to {}{}", server.name, if a.parts.is_empty() { "" } else { " with its parts" }));
+                    e.toast(rw::on_it_now(&title, &server.name, !a.parts.is_empty()));
+                }
+                Err(err) => e.toast(err),
+            }
+            // (with its events line open, the server says so itself)
+            if !e.rms_live(&server.address) {
+                e.rms_fetch(&server);
+            }
+        });
+    }
+
     /// Refresh (a server's page): asked again now.
     pub(super) fn rms_refresh(self: &Rc<Self>, address: String) {
         if let Some(s) = self.rms_joined(&address) {
@@ -373,6 +401,7 @@ impl Engine {
                 owner: me.is_some_and(|m| m.owner),
                 problem: problem.map(|f| f.words(&s.name)),
                 signed_out: problem.is_some_and(|f| f.signed_out()),
+                known: me.is_some(),
                 songs: songs.map(|l| l.len()),
             });
             let tracks: Vec<(Track, String)> = songs
@@ -446,4 +475,21 @@ pub(super) fn page_for(mut page: ServerPage, q: &str) -> ServerPage {
         rw::SONGS_HINT.to_string()
     };
     page
+}
+
+/// A song's menu's server section (the Linux menu's): Save to Your Library for a server's song not saved here; Add to
+/// NAME, for one of your saved songs, on each joined server that lets you add songs (or hasn't said yet), never its own.
+pub(super) fn server_items(t: &Track, liked: bool, saved: bool, rows: &[ServerRow]) -> Vec<radiance_core::menu::Item> {
+    use radiance_core::menu::{Action, Item};
+    let mut v = vec![];
+    if t.source == Source::Server && t.file.is_none() && !liked {
+        v.push(Item { label: rw::SAVE_TO_LIBRARY.to_string(), action: Action::Like });
+    }
+    if saved {
+        let own = servers::of_track(t).map(|s| s.address);
+        for r in rows.iter().filter(|r| (!r.known || r.can[1]) && own.as_deref() != Some(r.address.as_str()) && !t.id.starts_with(&format!("{}/", r.address))) {
+            v.push(Item { label: rw::add_to(&r.name), action: Action::AddToServer(r.address.clone()) });
+        }
+    }
+    v
 }

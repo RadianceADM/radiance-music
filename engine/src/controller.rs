@@ -897,7 +897,9 @@ impl Controller {
                 .or_else(|| hit(&v.home.mix))
                 .or_else(|| hit(&v.home.recent))
                 .or_else(|| v.history.iter().map(|(t, _)| t).find(|t| t.key() == key).cloned())
-                .or_else(|| v.now.song.clone().filter(|t| t.key() == key));
+                .or_else(|| v.now.song.clone().filter(|t| t.key() == key))
+                // a server's song, on its page (beta.11: its menu was empty)
+                .or_else(|| v.server_pages.values().flat_map(|p| p.songs.iter().map(|(t, _)| t)).find(|t| t.key() == key).cloned());
             (t, liked)
         });
         // a playlist's song found nowhere else: the playlist's own copy (read outside the view's lock)
@@ -913,7 +915,14 @@ impl Controller {
         let saved = t.file.as_ref().is_some_and(|f| std::path::Path::new(f).exists());
         let lists: Vec<(i64, String)> = crate::db::playlists().into_iter().map(|(id, name, _)| (id, name)).collect();
         let split = self.shared.view(|v| split_ability(v, &t));
-        menu::song_menu(&t, place, liked, saved, &lists, &split)
+        let mut sections = menu::song_menu(&t, place, liked, saved, &lists, &split);
+        // a Radiance Music Server's (the Linux menu's, after liking and the radio): saving its song, adding yours
+        let server = self.shared.view(|v| rms::server_items(&t, liked, saved, &v.servers.rows));
+        if !server.is_empty() {
+            let at = sections.iter().position(|s| s.iter().any(|i| i.action == Action::Radio)).map(|p| p + 1).unwrap_or(sections.len());
+            sections.insert(at, server);
+        }
+        sections
     }
 
     /// A menu item for the song `key` (`index`: its place in the queue, for Remove from Queue).
@@ -921,6 +930,10 @@ impl Controller {
     pub fn do_menu(&self, key: &str, index: usize, action: Action) {
         match action {
             Action::Play | Action::NewPlaylistWith | Action::ShowLyrics | Action::EditLyrics | Action::CopyLink => {}
+            Action::AddToServer(address) => {
+                let key = key.to_string();
+                self.post(move |e| e.rms_add_to(&key, &address));
+            }
             Action::SplitTwo => self.split(key, true),
             Action::SplitFour => self.split(key, false),
             Action::FindLyricsAgain => self.find_lyrics_again(key),
