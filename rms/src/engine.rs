@@ -147,13 +147,41 @@ const RUNTIME: &str = "onnxruntime.dll";
 const RUNTIME: &str = "libonnxruntime.so";
 const DEMUCS: &str = "htdemucs_fp16weights.onnx";
 const MMS: &str = "mms_fa_fp16w.onnx";
-/// The graphics card's free memory a song needs (Demucs and MMS, with room to spare), in MB.
-const CARD_ROOM_MB: u64 = 2_500;
+/// The most of the graphics card's memory each model's ONNX Runtime may take (MB): left to
+/// itself, Demucs took 5.4 GB of ribs03's 6 GB (2026-11-09), starving the next song and any game.
+const DEMUCS_CARD_MB: u64 = 3_000;
+const MMS_CARD_MB: u64 = 2_000;
+/// What a model newly put on the card needs free besides (CUDA's, cuDNN's and cuBLAS's own).
+const CARD_EXTRA_MB: u64 = 500;
 
-/// Whether a song goes on the graphics card: the card's runtime is here and the
-/// card has room now (a game using it keeps it; a desktop's own use doesn't).
-pub fn use_card(card_runtime: bool, free_mb: Option<u64>) -> bool {
-    card_runtime && free_mb.is_some_and(|mb| mb >= CARD_ROOM_MB)
+/// Where a model runs this song.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Place {
+    Card,
+    /// the card, once the other model has let go of its part of it
+    CardWithoutOther,
+    Processor,
+}
+
+/// `card_runtime`: the card's ONNX Runtime is here; `free_mb`: the card's free memory now;
+/// `here`: this model is on the card already (it keeps its place); `need_mb`: its share;
+/// `other_mb`: the other model's share, if it's on the card. A desktop's own use doesn't keep a
+/// song off the card; a game using it does.
+pub fn place(card_runtime: bool, free_mb: Option<u64>, here: bool, need_mb: u64, other_mb: u64) -> Place {
+    if !card_runtime {
+        return Place::Processor;
+    }
+    if here {
+        return Place::Card;
+    }
+    let Some(free) = free_mb else { return Place::Processor };
+    if free >= need_mb + CARD_EXTRA_MB {
+        Place::Card
+    } else if other_mb > 0 && free + other_mb >= need_mb + CARD_EXTRA_MB {
+        Place::CardWithoutOther
+    } else {
+        Place::Processor
+    }
 }
 
 /// The NVIDIA card's free memory (MB), when there is one.
@@ -212,14 +240,6 @@ impl Onnx {
         self.models.join(if cfg!(windows) { "onnxruntime_providers_cuda.dll" } else { "libonnxruntime_providers_cuda.so" }).is_file()
     }
 
-    fn on(&self) -> On {
-        if use_card(self.card_runtime(), card_free_mb()) {
-            On::Card
-        } else {
-            On::Processor
-        }
-    }
-
     /// ONNX Runtime, loaded once (only after it's been fetched: a failed load can't be tried again).
     fn env<'a>(&self, held: &'a mut Held) -> Result<&'a Environment, String> {
         if held.env.is_none() {
@@ -250,24 +270,28 @@ impl Onnx {
             .with_inter_threads(1)
             .map_err(|e| e.to_string())?;
         if on == On::Card {
-            b = b.with_execution_providers([ort::ep::CUDA::default().build().error_on_failure()]).map_err(|e| format!("the graphics card: {e}"))?;
+            let limit = if model == DEMUCS { DEMUCS_CARD_MB } else { MMS_CARD_MB } as usize * 1024 * 1024;
+            let cuda = ort::ep::CUDA::default()
+                .with_memory_limit(limit)
+                .with_arena_extend_strategy(ort::ep::ArenaExtendStrategy::SameAsRequested)
+                .with_conv_max_workspace(false)
+                .with_conv_algorithm_search(ort::ep::cuda::ConvAlgorithmSearch::Heuristic);
+            b = b.with_execution_providers([cuda.build().error_on_failure()]).map_err(|e| format!("the graphics card: {e}"))?;
         }
         b.commit_from_file(self.models.join(model)).map_err(|e| format!("{model}: {e}"))
     }
 
-    /// `work` with `model`'s session on `on` (made, or kept from the last song).
-    fn with<T>(&self, model: &str, on: On, work: impl FnOnce(&mut Session) -> Result<T, String>) -> Result<T, String> {
-        let mut held = self.held.lock().unwrap_or_else(|e| e.into_inner());
+    /// `work` with `model`'s session on `on`, made unless it's kept from the last song.
+    fn run_held<T>(&self, held: &mut Held, model: &str, on: On, work: &mut dyn FnMut(&mut Session) -> Result<T, String>) -> Result<T, String> {
         let kept_on = if model == DEMUCS { held.demucs.as_ref().map(|(_, o)| *o) } else { held.mms.as_ref().map(|(_, o)| *o) };
         if kept_on != Some(on) {
-            // the other one first (the card's memory), then this one again
             if model == DEMUCS {
                 held.demucs = None;
             } else {
                 held.mms = None;
             }
             let session = {
-                let env = self.env(&mut held)?;
+                let env = self.env(held)?;
                 self.session(env, model, on)?
             };
             if model == DEMUCS {
@@ -280,17 +304,34 @@ impl Onnx {
         work(&mut slot.as_mut().expect("just made").0)
     }
 
-    /// `work` on the card when it has room; if the card fails, again on the processor.
-    fn either<T>(&self, what: &str, mut work: impl FnMut(On) -> Result<T, String>) -> Result<T, String> {
-        let on = self.on();
-        match work(on) {
+    /// `work` with `model` on the card when there's room (see `place`), else the processor; if the
+    /// card fails, again on the processor.
+    fn run_on<T>(&self, what: &str, model: &str, mut work: impl FnMut(&mut Session) -> Result<T, String>) -> Result<T, String> {
+        let mut held = self.held.lock().unwrap_or_else(|e| e.into_inner());
+        let on_card = |slot: &Option<(Session, On)>| slot.as_ref().is_some_and(|(_, o)| *o == On::Card);
+        let (here, need, other) = if model == DEMUCS {
+            (on_card(&held.demucs), DEMUCS_CARD_MB, if on_card(&held.mms) { MMS_CARD_MB } else { 0 })
+        } else {
+            (on_card(&held.mms), MMS_CARD_MB, if on_card(&held.demucs) { DEMUCS_CARD_MB } else { 0 })
+        };
+        let at = place(self.card_runtime(), card_free_mb(), here, need, other);
+        if at == Place::CardWithoutOther {
+            if model == DEMUCS {
+                held.mms = None;
+            } else {
+                held.demucs = None;
+            }
+        }
+        let on = if at == Place::Processor { On::Processor } else { On::Card };
+        if on == On::Card && !here {
+            crate::log(&format!("{what} on the graphics card"));
+        }
+        match self.run_held(&mut held, model, on, &mut work) {
             Err(e) if on == On::Card && e != REMOVED => {
                 crate::log(&format!("{what} on the graphics card didn't work ({e}); on the processor instead"));
-                let mut held = self.held.lock().unwrap_or_else(|e| e.into_inner());
                 held.demucs = None;
                 held.mms = None;
-                drop(held);
-                work(On::Processor)
+                self.run_held(&mut held, model, On::Processor, &mut work)
             }
             r => r,
         }
@@ -343,12 +384,7 @@ impl SplitEngine for Onnx {
 
     fn split(&self, song: &Path, out: &Path, progress: Progress, stop: &AtomicBool) -> Result<Vec<String>, String> {
         let t = self.tools()?;
-        self.either("splitting", |on| {
-            if on == On::Card {
-                crate::log("splitting on the graphics card");
-            }
-            self.with(DEMUCS, on, |s| demucs::split(&t, &mut |piece| run_demucs(s, piece), song, out, progress, stop))
-        })
+        self.run_on("splitting", DEMUCS, |s| demucs::split(&t, &mut |piece| run_demucs(s, piece), song, out, progress, stop))
     }
 
     fn align(&self, vocals: &Path, given: &Value, progress: Progress, stop: &AtomicBool) -> Result<String, String> {
@@ -357,7 +393,7 @@ impl SplitEngine for Onnx {
         let x = audio::decode(&t, vocals, demucs::RATE, 2)?;
         let mono: Vec<f32> = x.chunks_exact(2).map(|c| (c[0] + c[1]) / 2.0).collect();
         let wav = mms::resample(&mono, demucs::RATE, mms::RATE);
-        self.either("word timing", |on| self.with(MMS, on, |s| mms::align(&mut |w| run_mms(s, w), &wav, given, progress, stop)))
+        self.run_on("word timing", MMS, |s| mms::align(&mut |w| run_mms(s, w), &wav, given, progress, stop))
     }
 
     fn rest(&self) {
@@ -373,11 +409,21 @@ mod tests {
 
     #[test]
     fn the_card_only_with_room() {
-        assert!(use_card(true, Some(4_800)));
-        assert!(use_card(true, Some(2_500)));
-        assert!(!use_card(true, Some(1_900)), "a game has it");
-        assert!(!use_card(true, None), "no card");
-        assert!(!use_card(false, Some(6_000)), "no card runtime fetched");
+        // ribs03's 6 GB card with the desktop on it: room for Demucs
+        assert_eq!(place(true, Some(5_600), false, DEMUCS_CARD_MB, 0), Place::Card);
+        // Demucs on it, then the words: not both on 6 GB, so Demucs lets go first
+        assert_eq!(place(true, Some(2_200), false, MMS_CARD_MB, DEMUCS_CARD_MB), Place::CardWithoutOther);
+        // a bigger card keeps both
+        assert_eq!(place(true, Some(4_500), false, MMS_CARD_MB, DEMUCS_CARD_MB), Place::Card);
+        // a model on the card already keeps its place (its memory is what the card shows as used)
+        assert_eq!(place(true, Some(200), true, DEMUCS_CARD_MB, 0), Place::Card);
+        assert_eq!(place(true, None, true, DEMUCS_CARD_MB, 0), Place::Card);
+        // a game has the card
+        assert_eq!(place(true, Some(1_000), false, DEMUCS_CARD_MB, 0), Place::Processor);
+        // no card, or no card runtime fetched
+        assert_eq!(place(true, None, false, MMS_CARD_MB, 0), Place::Processor);
+        assert_eq!(place(false, Some(6_000), false, MMS_CARD_MB, 0), Place::Processor);
+        assert_eq!(place(false, Some(6_000), true, MMS_CARD_MB, 0), Place::Processor);
     }
 
     #[test]
