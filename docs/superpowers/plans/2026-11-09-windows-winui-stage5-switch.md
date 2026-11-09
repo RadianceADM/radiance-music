@@ -59,7 +59,7 @@ Crash.cs, VideoProbeWindow.cs, windows/build.ps1 (-Flavor), windows/msys.sh (ins
 
 ### Task 4: the simulation in the VM
 **Files:** scripts on ribs02 (/srv/data/winvm: sim5.sh, sim5.ps1), qmp.py gains send-key.
-- [ ] A Windows user with no Radiance Music; 0.7.21 installed from downloads.radianceph.com; opened once (its data made);
+- [x] A Windows user with no Radiance Music; 0.7.21 installed from downloads.radianceph.com; opened once (its data made);
   a test feed on ribs02 offering 0.8.0 (the native installer); the GTK app started with it; its pop-up shot, Update
   pressed, Restart pressed; afterwards: the native app open, the uninstall entry 0.8.0, bin\ gone, the Start-menu entry
   → RadianceMusic.exe, the data folder's files unchanged, `radiancemusic://` → RadianceMusic.exe. Screenshots for the owner.

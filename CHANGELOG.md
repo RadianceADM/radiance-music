@@ -1,5 +1,10 @@
 # Changelog
 
+## Windows: the switch to the native app — built and simulated, not released (#45, stage 5)
+
+- **Today's Radiance Music for Windows updates itself into the native one:** the release that switches carries the native app's installer as its `RadianceMusic-Setup.exe`. Today's app offers it as any update (Update Now, then Restart to Update), the installer takes today's app's program files away and puts the native app in the same folder, and the native Radiance Music opens by itself. Your songs, playlists, settings and the splitter stay (they're in your data folders); the Start menu entry and `radiancemusic://` links open the native app.
+- Simulated as a user would get it, in a test Windows: 0.7.21 offered a test 0.8.0, Update Now, Restart to Update, the native app open, nothing of the user's data missing. Which release switches is the owner's call (after the features still missing in the native app).
+
 ## v0.7.21 — 2026-11-08
 
 - **Downloading in the sidebar:** always there, it says how many liked songs aren't saved on this computer yet, e.g. "Downloading (3)". Its page lists them, the ones saving now first, says they play from the internet until they're saved, and has Fix missing to save them now. A click plays the song. Songs that only stream aren't listed: they're never saved. A liked song whose saved file was deleted is listed again, as Fix missing counts it (#66).
