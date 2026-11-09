@@ -35,6 +35,23 @@ Section "Radiance Music"
   ; (test builds held the splitter here; it's downloaded into the data folder at the first start now)
   RMDir /r "$INSTDIR\python"
   RMDir /r "$INSTDIR\models"
+  ; the native app's own files at the top (after a test of the switch, or going back from it): its list says which;
+  ; its RadianceMusic.exe goes too, or today's app's update would open it again instead of this one
+  IfFileExists "$INSTDIR\installed-files.txt" 0 nonative
+    FileOpen $0 "$INSTDIR\installed-files.txt" r
+    native:
+      FileRead $0 $1
+      StrCmp $1 "" nativedone
+      Push $1
+      Call TrimNewline
+      Pop $1
+      Delete "$INSTDIR\$1"
+      Goto native
+    nativedone:
+    FileClose $0
+    Delete "$INSTDIR\installed-files.txt"
+  nonative:
+  Delete "$INSTDIR\RadianceMusic.exe"
   SetOutPath "$INSTDIR"
   File /r "${DIST}\*"
   File "radiance-music.ico"
@@ -55,6 +72,22 @@ Section "Radiance Music"
   WriteRegStr HKCU "Software\Classes\radiancemusic\DefaultIcon" "" "$INSTDIR\radiance-music.ico"
   WriteRegStr HKCU "Software\Classes\radiancemusic\shell\open\command" "" '"$INSTDIR\bin\radiance-music.exe" "%1"'
 SectionEnd
+
+Function TrimNewline
+  Exch $R0
+  Push $R1
+  loop:
+    StrCpy $R1 $R0 1 -1
+    StrCmp $R1 "$\r" trim
+    StrCmp $R1 "$\n" trim
+    Goto end
+  trim:
+    StrCpy $R0 $R0 -1
+    Goto loop
+  end:
+  Pop $R1
+  Exch $R0
+FunctionEnd
 
 Section "Uninstall"
   ; the app only: your liked songs, their parts and videos stay where they are
