@@ -576,6 +576,80 @@ async fn a_splitter_that_wont_load_keeps_songs_waiting() {
     assert_eq!(q["jobs"][0]["state"], "waiting", "{q}");
 }
 
+/// A song sent as the apps send it (POST /api/songs, `query`: e.g. "?parts=coming").
+async fn upload_song(s: &Server, token: &str, name: &str, query: &str) -> Value {
+    let form = reqwest::multipart::Form::new().part("song", reqwest::multipart::Part::bytes(flac(4_000)).file_name(name.to_string()));
+    let res = s.http.post(format!("{}/api/songs{query}", s.base)).bearer_auth(token).multipart(form).send().await.unwrap();
+    assert!(res.status().is_success(), "{}", res.status());
+    res.json().await.unwrap()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn every_uploaded_song_is_split() {
+    // owner 2026-11-09: "never mag kakaroon ng kanta sa server na hindi na iisplit"
+    let s = server(true).await;
+    let owner = s.setup("Bassi").await;
+    let (mika, _) = s.friend(&owner, "Mika").await;
+    wait_for(&s, "/api/status", None, |v| v["models"]["state"] == "ready", 20).await;
+    let v = upload_song(&s, &mika, "Lia - Twelve.flac", "").await;
+    assert_eq!(v["split_job"]["asked_by"]["name"], "Mika", "{v}");
+    wait_for(&s, "/api/queue", Some(&owner), |q| q["jobs"].as_array().is_some_and(|j| j.iter().any(|j| j["song"]["title"] == "Twelve" && j["state"] == "done")), 20).await;
+    assert!(s.library().join("Lia - Twelve.vocals.ogg").exists());
+    // the same song again: split already, nothing queued
+    let v = upload_song(&s, &mika, "Lia - Twelve.flac", "").await;
+    assert_eq!(v["split_job"], Value::Null, "{v}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_song_whose_parts_follow_isnt_split_by_the_server() {
+    let s = server(true).await;
+    let owner = s.setup("Bassi").await;
+    wait_for(&s, "/api/status", None, |v| v["models"]["state"] == "ready", 20).await;
+    // its parts follow (a computer split it): nothing queued
+    let v = upload_song(&s, &owner, "Max - Thirteen.flac", "?parts=coming").await;
+    assert_eq!(v["split_job"], Value::Null, "{v}");
+    let (_, q) = s.get("/api/queue", Some(&owner)).await;
+    assert!(q["jobs"].as_array().unwrap().is_empty(), "{q}");
+    // a plain upload whose parts arrive before its turn: done, not split again
+    put(&s.library(), "Gus - Slow.flac", &flac(5_000));
+    let (_, v) = s.post("/api/split", Some(&owner), json!({ "song": "Gus - Slow.flac" })).await;
+    let slow = v["job"]["id"].clone();
+    wait_for(&s, "/api/queue", Some(&owner), |q| q["jobs"].as_array().is_some_and(|j| j.iter().any(|j| j["id"] == slow && j["state"] == "splitting")), 10).await;
+    let v = upload_song(&s, &owner, "Ned - Fourteen.flac", "").await;
+    assert_eq!(v["split_job"]["state"], "waiting", "{v}");
+    let id = v["song"]["id"].as_i64().unwrap();
+    let parts: Vec<(&str, String, Vec<u8>)> = FOUR_AND_MUSIC.iter().map(|p| (*p, format!("{p}.ogg"), format!("{p} from a computer").into_bytes())).collect();
+    let form = parts_form(&parts.iter().map(|(n, f, b)| (*n, f.as_str(), b.as_slice())).collect::<Vec<_>>());
+    let res = s.http.post(format!("{}/api/songs/{id}/parts", s.base)).bearer_auth(&owner).multipart(form).send().await.unwrap();
+    assert_eq!(res.status(), StatusCode::CREATED);
+    s.delete(&format!("/api/queue/{slow}"), &owner).await;
+    let q = wait_for(&s, "/api/queue", Some(&owner), |q| q["jobs"].as_array().is_some_and(|j| j.iter().any(|j| j["song"]["title"] == "Fourteen" && j["state"] == "done")), 20).await;
+    let job = q["jobs"].as_array().unwrap().iter().find(|j| j["song"]["title"] == "Fourteen").unwrap().clone();
+    assert!(job["note"].as_str().unwrap().contains("parts came"), "{job}");
+    let splits = std::fs::read_to_string(s.dir.join("split-args.txt")).unwrap_or_default();
+    assert!(!splits.contains("Fourteen"), "{splits}");
+    assert_eq!(std::fs::read(s.library().join("Ned - Fourteen.vocals.ogg")).unwrap(), b"vocals from a computer");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn songs_put_in_the_library_folder_are_split_when_the_server_starts() {
+    let dir = test_dir();
+    let lib = dir.join("data/library");
+    put(&lib, "Ola - Fifteen.flac", &flac(4_000));
+    // one split already: left alone
+    put(&lib, "Pia - Sixteen.flac", &flac(4_000));
+    for p in FOUR_AND_MUSIC {
+        put(&lib, &format!("Pia - Sixteen.{p}.ogg"), b"part");
+    }
+    let s = server_in(dir, true, Some(TEST_KEY)).await;
+    let owner = s.setup("Bassi").await;
+    let q = wait_for(&s, "/api/queue", Some(&owner), |q| q["jobs"].as_array().is_some_and(|j| j.iter().any(|j| j["song"]["title"] == "Fifteen" && j["state"] == "done")), 20).await;
+    let jobs = q["jobs"].as_array().unwrap();
+    assert!(jobs.iter().all(|j| j["song"]["title"] != "Sixteen"), "{q}");
+    let fifteen = jobs.iter().find(|j| j["song"]["title"] == "Fifteen").unwrap();
+    assert_eq!(fifteen["asked_by"], Value::Null, "asked by the server itself");
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn queue_says_when_the_splitter_is_missing() {
     let s = server(false).await;
@@ -1145,9 +1219,10 @@ async fn change_events_instead_of_polling() {
     assert_eq!(res.status(), StatusCode::CREATED);
     let song = res.json::<Value>().await.unwrap()["song"]["id"].clone();
     next_event(&mut ws, |v| v["type"] == "library").await;
-    // a song split: the queue as it goes, up to done, and the library (its parts)
-    let (st, _) = s.post("/api/split", Some(&mika), json!({ "song": song })).await;
-    assert_eq!(st, StatusCode::CREATED);
+    // the song is split by itself (every song on the server is): the queue as it goes, up to done,
+    // and the library (its parts); asking for it too gives its place, not a second job
+    let (st, v) = s.post("/api/split", Some(&mika), json!({ "song": song })).await;
+    assert!(st == StatusCode::OK && (v["queued"] == false), "{v}");
     let first = next_event(&mut ws, |v| v["type"] == "queue").await;
     assert_eq!(first["jobs"][0]["song"]["title"], "Eleven");
     assert!(first["splitter"]["ready"].as_bool().unwrap());

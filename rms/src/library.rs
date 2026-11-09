@@ -349,7 +349,14 @@ pub fn put(from: &Path, to: &Path) -> std::io::Result<()> {
 /// `title` (else from the file's name, "Artist - Title.opus"). A song the
 /// library has already (same artist and title) is skipped; only the extras it
 /// lacks are kept.
-pub async fn upload(State(app): State<Shared>, who: Who, mut form: Multipart) -> ApiResult<(StatusCode, Json<Value>)> {
+/// POST /api/songs?parts=coming: the song's parts follow (POST /api/songs/ID/parts), so the server doesn't split it.
+#[derive(Deserialize, Default)]
+pub struct UploadQuery {
+    #[serde(default)]
+    parts: Option<String>,
+}
+
+pub async fn upload(State(app): State<Shared>, who: Who, Query(uq): Query<UploadQuery>, mut form: Multipart) -> ApiResult<(StatusCode, Json<Value>)> {
     // friends add songs unless the owner turned it off for them (owner, 2026-11-01)
     if !who.can_add {
         return Err(crate::auth::switched_off(&app, "adding songs"));
@@ -376,7 +383,7 @@ pub async fn upload(State(app): State<Shared>, who: Who, mut form: Multipart) ->
                     files.insert(name, (original, to));
                 }
             }
-            "artist" | "title" | "seconds" => {
+            "artist" | "title" | "seconds" | "parts" => {
                 let text = field.text().await.map_err(|e| bad(e.to_string()))?;
                 texts.insert(name, text.chars().take(300).collect());
             }
@@ -444,7 +451,14 @@ pub async fn upload(State(app): State<Shared>, who: Who, mut form: Multipart) ->
     added.sort();
     let a = app.clone();
     let songs = tokio::task::spawn_blocking(move || sync(&a)).await.map_err(|e| broken(e.to_string()))??;
-    let song = songs.iter().find(|(_, f)| f.stem() == stem).map(|(s, f)| song_json(&dir, s, f));
+    let here = songs.iter().find(|(_, f)| f.stem() == stem);
+    let song = here.map(|(s, f)| song_json(&dir, s, f));
+    // every song on the server is split (owner, 2026-11-09), unless its parts follow from the device that split it
+    let parts_follow = [uq.parts.clone(), text("parts")].into_iter().flatten().any(|v| v.trim() == "coming");
+    let split_job = match here {
+        Some((s, f)) if !parts_follow && !f.split() => Some(crate::split::queue_song(&app, s.id, Some(who.person), &who.name, &s.file)?.0),
+        _ => None,
+    };
     if !skipped {
         crate::log(&format!("{} added {stem}", who.name));
     }
@@ -452,7 +466,7 @@ pub async fn upload(State(app): State<Shared>, who: Who, mut form: Multipart) ->
         app.events.library();
     }
     let status = if skipped { StatusCode::OK } else { StatusCode::CREATED };
-    Ok((status, Json(json!({ "added": !skipped, "skipped": skipped, "extras": added, "song": song }))))
+    Ok((status, Json(json!({ "added": !skipped, "skipped": skipped, "extras": added, "song": song, "split_job": split_job }))))
 }
 
 #[derive(Deserialize, Default)]
