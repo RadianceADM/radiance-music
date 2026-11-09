@@ -32,6 +32,11 @@ sha2 = "0.10"
 getrandom = "0.3"
 percent-encoding = "2"
 qrcode = { version = "0.14", default-features = false, features = ["svg"] }
+# the splitter's first-start downloads (fetch.rs): ureq as the app's (rustls), its archives
+ureq = "3"
+zip = { version = "9.3", default-features = false, features = ["deflate"] }
+flate2 = "1"
+tar = "0.4"
 
 [dev-dependencies]
 reqwest = { version = "0.12", default-features = false, features = ["json", "multipart"] }

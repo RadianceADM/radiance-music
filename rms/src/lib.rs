@@ -16,6 +16,7 @@ pub mod auth;
 pub mod db;
 pub mod engine;
 pub mod events;
+pub mod fetch;
 pub mod library;
 pub mod lyrics;
 pub mod media;
