@@ -96,6 +96,9 @@ pub fn set_joined(list: &[Joined]) {
     if let Ok(mut j) = JOINED.write() {
         *j = list.to_vec();
     }
+    if let Ok(mut a) = ANSWERS.lock() {
+        *a = None; // rule 1's answers were the old list's
+    }
 }
 
 /// The servers joined, in the order joined.
@@ -661,10 +664,41 @@ fn multipart(fields: &[Field], boundary: &str) -> std::io::Result<(Box<dyn Read 
     Ok((body, length))
 }
 
-/// POSTs a multipart form to `path` (a big upload: ten minutes at most).
-fn send_form(server: &Joined, path: &str, fields: &[Field]) -> Result<Value, Failure> {
+/// A reader that gives at most `rate` bytes a second.
+pub struct Paced<R> {
+    inner: R,
+    rate: u64,
+    started: std::time::Instant,
+    sent: u64,
+}
+
+impl<R: Read> Paced<R> {
+    pub fn new(inner: R, rate: u64) -> Paced<R> {
+        Paced { inner, rate: rate.max(1), started: std::time::Instant::now(), sent: 0 }
+    }
+}
+
+impl<R: Read> Read for Paced<R> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let most = buf.len().min(16 * 1024);
+        let n = self.inner.read(&mut buf[..most])?;
+        self.sent += n as u64;
+        let due = Duration::from_secs_f64(self.sent as f64 / self.rate as f64);
+        if let Some(wait) = due.checked_sub(self.started.elapsed()) {
+            std::thread::sleep(wait);
+        }
+        Ok(n)
+    }
+}
+
+/// POSTs a multipart form to `path` (a big upload: ten minutes at most, or as long as `limit` needs, twice over).
+fn send_form(server: &Joined, path: &str, fields: &[Field], limit: Option<u64>) -> Result<Value, Failure> {
     let boundary = format!("radiance-music-{:016x}", now_ms().to_bits() ^ 0x5eed_cafe);
     let (body, length) = multipart(fields, &boundary).map_err(|e| Failure { status: 0, said: e.to_string() })?;
+    let (body, most): (Box<dyn Read + Send>, u64) = match limit {
+        Some(rate) => (Box::new(Paced::new(body, rate)), 600.max(length / rate.max(1) * 2)),
+        None => (body, 600),
+    };
     answer(
         agent()
             .post(&format!("{}{path}", server.address))
@@ -672,7 +706,7 @@ fn send_form(server: &Joined, path: &str, fields: &[Field]) -> Result<Value, Fai
             .header("Content-Type", &format!("multipart/form-data; boundary={boundary}"))
             .header("Content-Length", &length.to_string())
             .config()
-            .timeout_global(Some(Duration::from_secs(600)))
+            .timeout_global(Some(Duration::from_secs(most)))
             .build()
             .send(ureq::SendBody::from_owned_reader(body)),
     )
@@ -682,12 +716,17 @@ fn send_form(server: &Joined, path: &str, fields: &[Field]) -> Result<Value, Fai
 /// its file, with its cover and lyrics when it has them; then its parts, when
 /// this computer has them and the server's copy hasn't (see upload_parts).
 pub fn upload(server: &Joined, t: &Track) -> Result<Added, String> {
-    let mut added = upload_with(server, t, !parts_here(t).is_empty()).map_err(|f| f.words(&server.name))?;
-    // its parts too, when they're here and not there
+    let mut added = upload_with(server, t, !parts_here(t).is_empty(), None).map_err(|f| f.words(&server.name))?;
+    // its parts too, when they're here and not there (said to follow: if they don't come, the server splits it)
     if let Some(s) = added.song.clone().filter(|s| !s.split) {
-        if let Ok((parts, now)) = upload_parts(server, s.id, t) {
-            added.parts = parts;
-            added.song = now.or(added.song);
+        match upload_parts(server, s.id, t) {
+            Ok((parts, now)) => {
+                added.parts = parts;
+                added.song = now.or(added.song);
+            }
+            Err(_) => {
+                let _ = split_by_id(server, s.id);
+            }
         }
     }
     Ok(added)
@@ -695,7 +734,8 @@ pub fn upload(server: &Joined, t: &Track) -> Result<Added, String> {
 
 /// The song itself sent (POST /api/songs: its file, artist, title, seconds, cover and lyrics), with
 /// `parts_coming` (its parts follow from here: the server doesn't split it, rms 0.2.2+). Not its parts.
-pub fn upload_with(server: &Joined, t: &Track, parts_coming: bool) -> Result<Added, Failure> {
+/// `limit`: bytes a second at most (rule 2's uploads go slowly: Wi-Fi beside Bluetooth speakers mustn't stutter).
+pub fn upload_with(server: &Joined, t: &Track, parts_coming: bool, limit: Option<u64>) -> Result<Added, Failure> {
     let file = t.file.as_deref().filter(|f| Path::new(f).exists()).ok_or(Failure { status: 400, said: "Only saved songs can go to a server: like it first, so it's saved.".into() })?;
     let name = Path::new(file).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "song".into());
     let mut fields = vec![Field::File("song", name, file.into()), Field::Text("artist", t.artist.clone()), Field::Text("title", t.title.clone())];
@@ -711,7 +751,7 @@ pub fn upload_with(server: &Joined, t: &Track, parts_coming: bool) -> Result<Add
             fields.push(Field::File(kind, p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(), p));
         }
     }
-    let said = send_form(server, if parts_coming { "/api/songs?parts=coming" } else { "/api/songs" }, &fields)?;
+    let said = send_form(server, if parts_coming { "/api/songs?parts=coming" } else { "/api/songs" }, &fields, limit)?;
     let song = parse_song(&said["song"]);
     if let Some(s) = &song {
         keep(server, s);
@@ -731,11 +771,11 @@ pub fn parts_here(t: &Track) -> Vec<(&'static str, std::path::PathBuf)> {
 /// timed (the server keeps them if its own aren't). The server skips parts it
 /// has. (the parts it took, the song as it is now)
 pub fn upload_parts(server: &Joined, id: i64, t: &Track) -> Result<(Vec<String>, Option<Song>), String> {
-    upload_parts_with(server, id, t).map_err(|f| f.words(&server.name))
+    upload_parts_with(server, id, t, None).map_err(|f| f.words(&server.name))
 }
 
 /// As [upload_parts], with the server's answer as it came (rule 2's queue tells "later" from "never").
-pub fn upload_parts_with(server: &Joined, id: i64, t: &Track) -> Result<(Vec<String>, Option<Song>), Failure> {
+pub fn upload_parts_with(server: &Joined, id: i64, t: &Track, limit: Option<u64>) -> Result<(Vec<String>, Option<Song>), Failure> {
     let parts = parts_here(t);
     if parts.is_empty() {
         return Err(Failure { status: 400, said: "This computer hasn't split it.".into() });
@@ -744,7 +784,7 @@ pub fn upload_parts_with(server: &Joined, id: i64, t: &Track) -> Result<(Vec<Str
     if let Some(y) = t.file.as_deref().map(|f| crate::library::beside(f, "lyrics.yaml")).filter(|y| std::fs::read_to_string(y).is_ok_and(|text| text.contains("\n    words:"))) {
         fields.push(Field::File("lyrics", "lyrics.lyrics.yaml".into(), y));
     }
-    let said = send_form(server, &format!("/api/songs/{id}/parts"), &fields)?;
+    let said = send_form(server, &format!("/api/songs/{id}/parts"), &fields, limit)?;
     let now = parse_song(&said["song"]);
     if let Some(s) = &now {
         keep(server, s);
@@ -819,7 +859,10 @@ pub fn copy_among(joined: &[Joined], t: &Track) -> Option<(Joined, Song)> {
     }
     let key = t.key();
     if let Some(kept) = ANSWERS.lock().ok().and_then(|a| a.as_ref()?.get(&key).filter(|(at, _)| at.elapsed() < KEEP_ANSWER).map(|(_, c)| c.clone())) {
-        return kept;
+        match &kept {
+            Some((s, _)) if is_away(&s.address) => {} // its server stopped answering: the others asked
+            _ => return kept,
+        }
     }
     let mut found = None;
     for server in joined {
@@ -875,6 +918,9 @@ pub fn bring_parts(t: &Track, server: &Joined, song: &Song) -> Result<usize, Str
         download(server, f, &base.with_file_name(format!("{stem}.{part}.{ext}")))?;
         got += 1;
     }
+    if let Ok(mut b) = BROUGHT.lock() {
+        b.get_or_insert_with(Default::default).insert(t.key());
+    }
     if let (Some(file), Some(f)) = (&t.file, song.files.get("lyrics").filter(|f| song.word_times && f.name.ends_with(".lyrics.yaml"))) {
         let here = crate::library::beside(file, "lyrics.yaml");
         if !std::fs::read_to_string(&here).is_ok_and(|text| text.contains("\n    words:")) {
@@ -896,6 +942,41 @@ pub fn note_stream(id: &str, address: &str) {
 /// The server a YouTube song's stream came from, if it did; forgotten as it's asked (a break is told once).
 pub fn stream_from(id: &str) -> Option<String> {
     STREAMED_FROM.lock().ok().and_then(|mut s| s.as_mut()?.remove(id))
+}
+
+/// The other songs whose stream was found on that server (forgotten here): a server that broke one
+/// song's stream isn't played from for the songs found ahead (the next one) either.
+pub fn streams_noted_from(address: &str) -> Vec<String> {
+    let mut ids = vec![];
+    if let Ok(mut s) = STREAMED_FROM.lock() {
+        if let Some(s) = s.as_mut() {
+            s.retain(|id, a| {
+                let theirs = a == address;
+                if theirs {
+                    ids.push(id.clone());
+                }
+                !theirs
+            });
+        }
+    }
+    ids.sort();
+    ids
+}
+
+/// A YouTube song's stream came from YouTube this time.
+pub fn stream_not_from_a_server(id: &str) {
+    if let Ok(mut s) = STREAMED_FROM.lock() {
+        if let Some(s) = s.as_mut() {
+            s.remove(id);
+        }
+    }
+}
+
+/// Songs whose parts came down from a server (not split here: rule 2 doesn't send them to another).
+static BROUGHT: Mutex<Option<std::collections::HashSet<String>>> = Mutex::new(None);
+
+pub fn brought_from_a_server(key: &str) -> bool {
+    BROUGHT.lock().ok().is_some_and(|b| b.as_ref().is_some_and(|b| b.contains(key)))
 }
 
 /// A song's answer forgotten (its server's copy broke while playing).
@@ -1602,6 +1683,61 @@ pub(crate) mod tests {
         assert_eq!(stream_from("yt-play-there"), None, "told once");
         assert_eq!(not.map(|(_, kbps)| kbps), Ok(130));
         assert_eq!(asked.load(Ordering::SeqCst), 1, "YouTube asked only for the song the server lacks");
+    }
+
+    /// A server that broke one song's stream isn't played from for the others found there (the next song).
+    #[test]
+    fn a_broken_servers_other_streams_are_forgotten() {
+        note_stream("yt-a", "http://one");
+        note_stream("yt-b", "http://one");
+        note_stream("yt-c", "http://two");
+        stream_not_from_a_server("yt-c");
+        assert_eq!(streams_noted_from("http://one"), ["yt-a", "yt-b"]);
+        assert_eq!((stream_from("yt-a"), stream_from("yt-c")), (None, None));
+    }
+
+    /// A copy kept from before, on a server that has since stopped answering, isn't used (a laptop that left home
+    /// would otherwise wait on it for every song played, saved or split in the 10 minutes after).
+    #[test]
+    fn a_kept_answer_on_a_server_now_away_is_passed_over() {
+        let (address, seen) = stand_in(1, |_, _, _, _| (200, json!({ "songs": [copy_json(3, true)] }).to_string()));
+        let s = Joined::new(&address, "t", "Bassi's server", None);
+        let t = yt("Maki", "Dilaw", "yt-kept-away");
+        assert!(copy_among(std::slice::from_ref(&s), &t).is_some());
+        seen.join().unwrap();
+        skip_for_now(&address);
+        assert_eq!(copy_among(&[s], &t), None);
+    }
+
+    /// The server took the split but stopped answering while it's waited on: split here soon, not 45 minutes on.
+    #[test]
+    fn a_server_that_stops_answering_isnt_waited_on() {
+        let _turn = JOINED_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+        let (address, _seen) = stand_in(5, |method, path, _, _| match (method, path) {
+            (_, p) if p.starts_with("/api/library?") => (200, json!({ "songs": [copy_json(3, false)] }).to_string()),
+            ("POST", "/api/split") => (200, r#"{"queued":true,"job":{"id":1,"song":{"id":3},"state":"waiting"}}"#.into()),
+            _ => (503, r#"{"error":"down"}"#.into()),
+        });
+        set_joined(&[Joined::new(&address, "t", "Bassi's server", None)]);
+        let dir = scratch("parts-gone-quiet");
+        let t = saved(&dir, "yt-dilaw-quiet");
+        let started = std::time::Instant::now();
+        let done = crate::splitting::four_parts_with(&t, "", None, None, no_report(), Duration::from_millis(10), Duration::from_secs(3));
+        set_joined(&[]);
+        assert!(done.is_err(), "split here (no splitter in a test)");
+        assert!(started.elapsed() < Duration::from_secs(1), "gave up on the server after a few unanswered checks: {:?}", started.elapsed());
+    }
+
+    /// A streamed song split here takes its sound from the server's copy, not YouTube (rule 1).
+    #[test]
+    fn a_split_of_a_streamed_song_takes_the_servers_copy() {
+        let _turn = JOINED_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+        let (address, _seen) = stand_in(1, |_, _, _, _| (200, json!({ "songs": [copy_json(3, false)] }).to_string()));
+        set_joined(&[Joined::new(&address, "tok-s", "Bassi's server", None)]);
+        let relay = crate::relay::Relay::start().unwrap();
+        let uri = crate::splitting::source_uri(&yt("Maki", "Dilaw", "yt-split-stream"), None, Some(relay));
+        set_joined(&[]);
+        assert_eq!(uri, Ok(format!("{address}/files/3.opus?t=tok-s")));
     }
 
     /// The first server joined that has it is the one; one that doesn't answer is passed over for a minute.

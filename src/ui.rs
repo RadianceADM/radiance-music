@@ -3130,6 +3130,7 @@ impl Ui {
             }
             return;
         }
+        radiance_engine::splitting::asked_by_hand(&t.key()); // (not waited on a server's own split)
         self.split_asked.borrow_mut().insert(t.key());
         self.queue_split(t, true);
     }
@@ -5472,6 +5473,9 @@ impl Ui {
         servers::skip_for_now(&address);
         servers::forget_answer(&t);
         self.streams.borrow_mut().forget(&t.id);
+        for other in servers::streams_noted_from(&address) {
+            self.streams.borrow_mut().forget(&other); // (the next song's, found there ahead)
+        }
         self.restore_at.set((at > 1.0).then_some(at));
         self.play_current();
         true
@@ -6175,13 +6179,14 @@ impl Ui {
             self.refresh_lyrics(); // its words get their times from the new Vocals part
         }
         self.refresh_split_marks(); // its scissors, in every list
-        if t.source == Source::Server {
-            self.share_parts(t); // a server's own song: its parts to it
-        } else {
-            // rule 2 (owner, 2026-11-09): up to the servers joined, with its parts, by itself
+        // a server's copy of it without parts gets these, and says so (as before); rule 2 (owner, 2026-11-09):
+        // the other servers joined get the song with its parts, by themselves
+        self.share_parts(t);
+        if t.source != Source::Server {
+            let others: Vec<_> = self.settings.borrow().servers.iter().filter(|s| servers::copy_on(s, t).is_none_or(|c| c.split)).cloned().collect();
             let saved = self.liked.borrow().iter().find(|x| x.key() == t.key() && x.file.is_some()).cloned();
             if let Some(saved) = saved.or_else(|| t.file.is_some().then(|| t.clone())) {
-                radiance_engine::uploads::enqueue(&saved);
+                radiance_engine::uploads::enqueue_to(&saved, &others);
                 radiance_engine::uploads::kick();
             }
         }

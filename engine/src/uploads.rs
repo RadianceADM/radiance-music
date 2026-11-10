@@ -26,6 +26,8 @@ pub struct Queue {
     pub done: Vec<String>,
     /// "<server>|<key>": never going (the server said no, the file is gone, a type servers don't take).
     pub aside: Vec<String>,
+    /// "<server>|<key>": how many times sending it failed (five: set aside).
+    pub tries: HashMap<String, u32>,
 }
 
 impl Queue {
@@ -34,6 +36,7 @@ impl Queue {
             "waiting": self.waiting.iter().map(|(k, s)| json!({ "key": k, "server": s })).collect::<Vec<_>>(),
             "done": self.done,
             "aside": self.aside,
+            "tries": self.tries,
         })
     }
 
@@ -43,6 +46,7 @@ impl Queue {
             waiting: v["waiting"].as_array().map(|a| a.iter().filter_map(|w| Some((w["key"].as_str()?.to_string(), w["server"].as_str()?.to_string()))).collect()).unwrap_or_default(),
             done: list("done"),
             aside: list("aside"),
+            tries: v["tries"].as_object().map(|o| o.iter().filter_map(|(k, n)| Some((k.clone(), n.as_u64()? as u32))).collect()).unwrap_or_default(),
         }
     }
 
@@ -57,6 +61,12 @@ static QUEUE: Mutex<Option<Queue>> = Mutex::new(None);
 static SONGS: Mutex<Option<HashMap<String, Track>>> = Mutex::new(None);
 static RUNNING: AtomicBool = AtomicBool::new(false);
 static AGAIN: AtomicBool = AtomicBool::new(false);
+
+/// How fast a song goes up: 128 KB a second (the owner's rule: nothing may make Bluetooth audio stutter, and
+/// his laptop's Wi-Fi and Bluetooth share one radio; a song with its parts takes some minutes).
+pub const RATE: u64 = 128 * 1024;
+/// Sending a song failed this many times: set aside.
+const MOST_TRIES: u32 = 5;
 
 fn file() -> PathBuf {
     FILE.read().ok().and_then(|f| f.clone()).unwrap_or_else(|| glib::user_config_dir().join("radiance-music/server-uploads.json"))
@@ -113,18 +123,23 @@ pub fn set_songs(liked: &[Track]) {
 
 /// A song split here goes up to every server joined (a saved song; a server's own song never).
 pub fn enqueue(t: &Track) {
-    if !saved(t) {
+    enqueue_to(t, &servers::joined());
+}
+
+/// A song split here goes up to these servers (a saved song; a server's own song, or one whose parts
+/// came down from a server, never).
+pub fn enqueue_to(t: &Track, servers: &[Joined]) {
+    if !saved(t) || servers::brought_from_a_server(&t.key()) {
         return;
     }
     set_songs(std::slice::from_ref(t));
     let key = t.key();
-    let servers = servers::joined();
     if servers.is_empty() {
         return;
     }
     with_queue(|q| {
         let mut changed = false;
-        for s in &servers {
+        for s in servers {
             if !q.settled(&mark(&s.first, &key)) && !q.waiting.iter().any(|(k, f)| *k == key && *f == s.first) {
                 q.waiting.push((key.clone(), s.first.clone()));
                 changed = true;
@@ -145,8 +160,8 @@ pub fn backfill(liked: &[Track]) {
 
 /// The queue drained on a worker thread of its own (one at a time; asked again while it runs: once more after).
 pub fn kick() {
+    AGAIN.store(true, Ordering::SeqCst); // (before: a worker just finishing sees it)
     if RUNNING.swap(true, Ordering::SeqCst) {
-        AGAIN.store(true, Ordering::SeqCst);
         return;
     }
     let started = std::thread::Builder::new().name("server-uploads".into()).spawn(|| loop {
@@ -169,9 +184,9 @@ pub fn start(liked: &[Track]) {
     if STARTED.swap(true, Ordering::SeqCst) {
         return;
     }
-    set_songs(liked);
     let liked = liked.to_vec();
     let _ = std::thread::Builder::new().name("server-uploads-clock".into()).spawn(move || {
+        set_songs(&liked); // (each file looked at here, not on the app's thread)
         std::thread::sleep(std::time::Duration::from_secs(20));
         kick();
         std::thread::sleep(std::time::Duration::from_secs(10));
@@ -200,15 +215,31 @@ pub fn joined_now(liked: &[Track]) {
 pub enum Sent {
     /// It went up, or the server had it split already.
     Done,
-    /// Not now (offline, away, busy): the next time.
+    /// The server isn't answering (offline, away from home): its songs wait for the next time.
     Later,
+    /// Sending it failed (busy, cut off): once more later, behind the others; five times: set aside.
+    Retry(String),
     /// Never (the server said no, the file is gone, a type servers don't take).
     Aside(String),
 }
 
+fn passing(f: &Failure) -> bool {
+    f.status == 0 || f.status == 408 || f.status == 429 || f.status >= 500
+}
+
+/// Asking the server (does it have it, what may you do) failed.
 fn later_or_aside(f: Failure) -> Sent {
-    if f.status == 0 || f.status == 408 || f.status == 429 || f.status >= 500 {
+    if passing(&f) {
         Sent::Later
+    } else {
+        Sent::Aside(f.said)
+    }
+}
+
+/// Sending to the server failed.
+fn retry_or_aside(f: Failure) -> Sent {
+    if passing(&f) {
+        Sent::Retry(if f.said.is_empty() { format!("status {}", f.status) } else { f.said })
     } else {
         Sent::Aside(f.said)
     }
@@ -228,10 +259,24 @@ pub fn send(server: &Joined, t: &Track) -> Sent {
         Ok(s) => s,
         Err(f) => return later_or_aside(f),
     };
+    if there.as_ref().is_some_and(|s| s.split) {
+        return Sent::Done;
+    }
+    // what you may do there, asked before anything big goes (a "no" comes before the body is read,
+    // and the connection is cut: that would look like "not answering")
+    let me = match servers::me(server) {
+        Ok(m) => m,
+        Err(f) => return later_or_aside(f),
+    };
+    if !me.can_add && (there.is_none() || four) {
+        return Sent::Aside("adding songs is turned off for you there".into());
+    }
+    if !me.can_split && there.is_some() && !four {
+        return Sent::Aside("splitting is turned off for you there".into());
+    }
     let song = match there {
-        Some(s) if s.split => return Sent::Done,
         Some(s) => s,
-        None => match servers::upload_with(server, t, four) {
+        None => match servers::upload_with(server, t, four, Some(RATE)) {
             Ok(added) => match added.song {
                 Some(s) if s.split => return Sent::Done,
                 // no parts from here: the server splits it (rms 0.2.2+ does by itself; an older one is asked)
@@ -240,15 +285,15 @@ pub fn send(server: &Joined, t: &Track) -> Sent {
                     return Sent::Done;
                 }
                 Some(s) => s,
-                None => return Sent::Later,
+                None => return Sent::Retry("the server's answer had no song".into()),
             },
-            Err(f) => return later_or_aside(f),
+            Err(f) => return retry_or_aside(f),
         },
     };
-    let done = if four { servers::upload_parts_with(server, song.id, t).map(|_| ()) } else { servers::split_by_id(server, song.id).map(|_| ()) };
+    let done = if four { servers::upload_parts_with(server, song.id, t, Some(RATE)).map(|_| ()) } else { servers::split_by_id(server, song.id).map(|_| ()) };
     match done {
         Ok(()) => Sent::Done,
-        Err(f) => later_or_aside(f),
+        Err(f) => retry_or_aside(f),
     }
 }
 
@@ -277,14 +322,31 @@ pub fn drain() {
                 not_now.push(first.clone());
                 continue;
             }
+            Sent::Retry(why) => crate::log::note(&format!("“{title}” didn't go up to {name} ({why}): once more later")),
             Sent::Aside(why) => crate::log::note(&format!("“{title}” won't go up to {name}: {why}")),
         }
         with_queue(|q| {
-            q.waiting.retain(|(k, f)| !(*k == key && *f == first));
             let m = mark(&first, &key);
+            q.waiting.retain(|(k, f)| !(*k == key && *f == first));
             match outcome {
-                Sent::Done => q.done.push(m),
-                Sent::Aside(_) => q.aside.push(m),
+                Sent::Done => {
+                    q.tries.remove(&m);
+                    q.done.push(m);
+                }
+                Sent::Aside(_) => {
+                    q.tries.remove(&m);
+                    q.aside.push(m);
+                }
+                Sent::Retry(_) => {
+                    let n = q.tries.entry(m.clone()).or_insert(0);
+                    *n += 1;
+                    if *n >= MOST_TRIES {
+                        q.tries.remove(&m);
+                        q.aside.push(m);
+                    } else {
+                        q.waiting.push((key.clone(), first.clone())); // behind the others
+                    }
+                }
                 Sent::Later => {}
             }
             store(q);
@@ -298,6 +360,19 @@ mod tests {
     use crate::servers::tests::{copy_json, saved as saved_in, scratch, stand_in, JOINED_TESTS};
     use crate::servers::set_joined;
 
+    const ME: &str = r#"{"person":{"id":3,"name":"Ana","role":"friend"},"device":{"id":7,"name":"laptop"},"server":{"name":"S"},"can":{"add":true,"split":true,"host":false}}"#;
+
+    /// Uploads go at RATE at most.
+    #[test]
+    fn uploads_go_slowly() {
+        use std::io::Read;
+        let started = std::time::Instant::now();
+        let mut got = vec![];
+        crate::servers::Paced::new(std::io::Cursor::new(vec![7u8; 30_000]), 100_000).read_to_end(&mut got).unwrap();
+        assert_eq!(got.len(), 30_000);
+        assert!(started.elapsed() >= std::time::Duration::from_millis(280), "{:?}", started.elapsed());
+    }
+
     fn with_parts(dir: &Path, id: &str, parts: &[&str]) -> Track {
         let t = saved_in(dir, id);
         for p in parts {
@@ -309,8 +384,9 @@ mod tests {
     /// Not on the server, split here in four: the song goes with parts=coming, then its parts.
     #[test]
     fn a_song_split_here_goes_up_with_its_parts() {
-        let (address, seen) = stand_in(3, |method, path, _, _| match (method, path) {
+        let (address, seen) = stand_in(4, |method, path, _, _| match (method, path) {
             (_, p) if p.starts_with("/api/library?") => (200, r#"{"songs":[]}"#.into()),
+            ("GET", "/api/me") => (200, ME.into()),
             ("POST", "/api/songs?parts=coming") => (201, json!({ "song": copy_json(8, false) }).to_string()),
             ("POST", "/api/songs/8/parts") => (200, json!({ "added": ["drums", "bass", "other", "vocals"], "song": copy_json(8, true) }).to_string()),
             _ => (404, "{}".into()),
@@ -319,16 +395,17 @@ mod tests {
         let t = with_parts(&dir, "yt-up-four", &crate::split::PARTS);
         assert_eq!(send(&Joined::new(&address, "t", "S", None), &t), Sent::Done);
         let seen = seen.join().unwrap();
-        assert_eq!(seen.iter().map(|s| s.0.split('?').next().unwrap()).collect::<Vec<_>>(), ["GET /api/library", "POST /api/songs", "POST /api/songs/8/parts"]);
-        assert!(seen[1].0.ends_with("?parts=coming"));
-        assert!(seen[1].2.contains("name=\"song\"") && seen[2].2.contains("name=\"vocals\""));
+        assert_eq!(seen.iter().map(|s| s.0.split('?').next().unwrap()).collect::<Vec<_>>(), ["GET /api/library", "GET /api/me", "POST /api/songs", "POST /api/songs/8/parts"]);
+        assert!(seen[2].0.ends_with("?parts=coming"));
+        assert!(seen[2].2.contains("name=\"song\"") && seen[3].2.contains("name=\"vocals\""));
     }
 
     /// Split here in two only: the song goes (the server splits it itself), its halves never do.
     #[test]
     fn the_two_halves_never_go() {
-        let (address, seen) = stand_in(3, |method, path, _, _| match (method, path) {
+        let (address, seen) = stand_in(4, |method, path, _, _| match (method, path) {
             (_, p) if p.starts_with("/api/library?") => (200, r#"{"songs":[]}"#.into()),
+            ("GET", "/api/me") => (200, ME.into()),
             ("POST", "/api/songs") => (201, json!({ "song": copy_json(9, false), "split_job": { "id": 1 } }).to_string()),
             ("POST", "/api/split") => (200, r#"{"queued":false,"job":{"id":1,"song":{"id":9},"state":"waiting"}}"#.into()),
             _ => (404, "{}".into()),
@@ -337,17 +414,18 @@ mod tests {
         let t = with_parts(&dir, "yt-up-two", &["music", "vocals"]);
         assert_eq!(send(&Joined::new(&address, "t", "S", None), &t), Sent::Done);
         let seen = seen.join().unwrap();
-        assert_eq!(seen[1].0, "POST /api/songs");
-        assert!(!seen[1].2.contains("name=\"music\""));
-        assert_eq!(seen[2].0, "POST /api/split");
+        assert_eq!(seen[2].0, "POST /api/songs");
+        assert!(!seen[2].2.contains("name=\"music\""));
+        assert_eq!(seen[3].0, "POST /api/split");
     }
 
     /// On the server, not split: its four parts go when they're here, else the server is asked to split it;
     /// on the server and split: nothing goes.
     #[test]
     fn a_copy_there_gets_its_parts_or_a_split() {
-        let (address, seen) = stand_in(4, |method, path, _, _| match (method, path) {
+        let (address, seen) = stand_in(6, |method, path, _, _| match (method, path) {
             (_, p) if p.starts_with("/api/library?q=Dilaw") => (200, json!({ "songs": [copy_json(5, false)] }).to_string()),
+            ("GET", "/api/me") => (200, ME.into()),
             ("POST", "/api/songs/5/parts") => (200, json!({ "added": ["drums"], "song": copy_json(5, true) }).to_string()),
             ("POST", "/api/split") => (200, r#"{"queued":true,"job":{"id":2,"song":{"id":5},"state":"waiting"}}"#.into()),
             _ => (404, "{}".into()),
@@ -357,7 +435,7 @@ mod tests {
         assert_eq!(send(&s, &with_parts(&four, "yt-there-four", &crate::split::PARTS)), Sent::Done);
         assert_eq!(send(&s, &with_parts(&none, "yt-there-none", &[])), Sent::Done);
         let seen = seen.join().unwrap();
-        assert_eq!(seen.iter().map(|s| s.0.split('?').next().unwrap()).collect::<Vec<_>>(), ["GET /api/library", "POST /api/songs/5/parts", "GET /api/library", "POST /api/split"]);
+        assert_eq!(seen.iter().map(|s| s.0.split('?').next().unwrap()).collect::<Vec<_>>(), ["GET /api/library", "GET /api/me", "POST /api/songs/5/parts", "GET /api/library", "GET /api/me", "POST /api/split"]);
         let (address, seen) = stand_in(1, |_, _, _, _| (200, json!({ "songs": [copy_json(6, true)] }).to_string()));
         assert_eq!(send(&Joined::new(&address, "t", "S", None), &with_parts(&scratch("there-split"), "yt-there-split", &crate::split::PARTS)), Sent::Done);
         assert_eq!(seen.join().unwrap().len(), 1);
@@ -367,7 +445,11 @@ mod tests {
     #[test]
     fn later_or_never() {
         let (busy, _b) = stand_in(1, |_, _, _, _| (503, r#"{"error":"busy"}"#.into()));
-        let (no, _n) = stand_in(2, |method, _, _, _| if method == "GET" { (200, r#"{"songs":[]}"#.into()) } else { (403, r#"{"error":"adding songs is off"}"#.into()) });
+        let (no, _n) = stand_in(3, |method, path, _, _| match (method, path) {
+            ("GET", "/api/me") => (200, ME.into()),
+            ("GET", _) => (200, r#"{"songs":[]}"#.into()),
+            _ => (403, r#"{"error":"adding songs is off"}"#.into()),
+        });
         let dir = scratch("later-never");
         let t = with_parts(&dir, "yt-later", &crate::split::PARTS);
         assert_eq!(send(&Joined::new(&busy, "t", "S", None), &t), Sent::Later);
@@ -381,6 +463,61 @@ mod tests {
         let mut odd = t.clone();
         odd.file = Some(ogg.display().to_string());
         assert!(matches!(send(&Joined::new(&busy, "t", "S", None), &odd), Sent::Aside(_)));
+    }
+
+    /// A friend the owner hasn't let add songs: nothing is sent at all (the server would drop the connection
+    /// before reading a big upload, which looks like "not answering", and it would go again and again).
+    #[test]
+    fn a_friend_who_cant_add_songs_sends_nothing() {
+        let (address, seen) = stand_in(2, |_, path, _, _| {
+            if path.starts_with("/api/me") {
+                (200, r#"{"person":{"id":3,"name":"Ana","role":"friend"},"device":{"id":7,"name":"laptop"},"server":{"name":"S"},"can":{"add":false,"split":true,"host":false}}"#.into())
+            } else {
+                (200, r#"{"songs":[]}"#.into())
+            }
+        });
+        let t = with_parts(&scratch("cant-add"), "yt-cant-add", &crate::split::PARTS);
+        assert!(matches!(send(&Joined::new(&address, "t", "S", None), &t), Sent::Aside(_)));
+        assert_eq!(seen.join().unwrap().iter().map(|s| s.0.split('?').next().unwrap().to_string()).collect::<Vec<_>>(), ["GET /api/library", "GET /api/me"]);
+    }
+
+    /// One song the server keeps failing on doesn't hold up the others; after five tries it's set aside.
+    #[test]
+    fn a_song_that_keeps_failing_doesnt_hold_up_the_rest() {
+        let _turn = JOINED_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = scratch("keeps-failing");
+        set_file(Some(dir.join("server-uploads.json")));
+        let (address, _seen) = stand_in(40, |method, path, _, _| match (method, path) {
+            (_, p) if p.starts_with("/api/library?q=Dilaw") => (200, r#"{"songs":[]}"#.into()),
+            (_, p) if p.starts_with("/api/library?") => (200, json!({ "songs": [{ "id": 9, "artist": "Maki", "title": "Saan", "file": "Maki - Saan.opus", "url": "/files/9.opus", "split": true, "files": {} }] }).to_string()),
+            (_, p) if p.starts_with("/api/me") => (200, r#"{"person":{"id":3},"device":{"id":7},"server":{"name":"S"},"can":{"add":true,"split":true}}"#.into()),
+            _ => (503, r#"{"error":"busy"}"#.into()),
+        });
+        set_joined(&[Joined::new(&address, "t", "S", None)]);
+        let failing = with_parts(&dir, "yt-fails", &crate::split::PARTS);
+        let other_dir = dir.join("other");
+        std::fs::create_dir_all(&other_dir).unwrap();
+        std::fs::write(other_dir.join("Maki - Saan.opus"), b"OPUS").unwrap();
+        let mut other = yt_song("Maki", "Saan", "yt-saan");
+        other.file = Some(other_dir.join("Maki - Saan.opus").display().to_string());
+        enqueue(&failing);
+        enqueue(&other);
+        drain();
+        let after_one = state();
+        for _ in 0..4 {
+            drain();
+        }
+        let after_five = state();
+        set_joined(&[]);
+        set_file(None);
+        assert_eq!(after_one.done, vec![format!("{address}|{}", other.key())], "the other song went: {after_one:?}");
+        assert_eq!(after_one.waiting.len(), 1, "{after_one:?}");
+        assert_eq!(after_five.aside, vec![format!("{address}|{}", failing.key())], "{after_five:?}");
+        assert!(after_five.waiting.is_empty());
+    }
+
+    fn yt_song(artist: &str, title: &str, id: &str) -> Track {
+        Track { source: Source::YouTube, id: id.into(), title: title.into(), artist: artist.into(), album: String::new(), seconds: 200, art: String::new(), format: String::new(), file: None, video: false, genres: None }
     }
 
     /// The queue: a split song waits per server joined, is kept across a restart, goes once, and a

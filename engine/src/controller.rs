@@ -2224,6 +2224,9 @@ impl Engine {
         crate::servers::skip_for_now(&address);
         crate::servers::forget_answer(&t);
         self.streams.borrow_mut().forget(&t.id);
+        for other in crate::servers::streams_noted_from(&address) {
+            self.streams.borrow_mut().forget(&other); // (the next song's, found there ahead)
+        }
         self.restore_at.set((at > 1.0).then_some(at));
         self.play_current();
         true
@@ -2738,6 +2741,7 @@ impl Engine {
             self.toast(words::split_two_toast(&t.title));
         } else {
             self.split_asked.borrow_mut().insert(t.key());
+            crate::splitting::asked_by_hand(&t.key()); // (not waited on a server's own split)
             self.queue_split(&t, true);
             self.toast(words::split_four_toast(&t.title));
         }
@@ -2851,7 +2855,8 @@ impl Engine {
         });
         self.bg(
             move || {
-                let uri = plain.or_else(|| sources.stream(&song.id).ok().zip(relay).map(|(s, r)| r.add(s.url, s.size, s.mime))).unwrap_or_default();
+                // a joined server's copy's sound first (rule 1), else YouTube's stream
+                let uri = plain.or_else(|| relay.and_then(|r| playing::stream_of(&song, &r, || sources.stream(&song.id)).ok()).map(|(u, _)| u)).unwrap_or_default();
                 sources.split(&song, false, &uri, report)
             },
             move |e, result: Result<(), String>| {
@@ -2891,7 +2896,8 @@ impl Engine {
         let song = t.clone();
         self.bg(
             move || {
-                let uri = plain.or_else(|| sources.stream(&song.id).ok().zip(relay).map(|(s, r)| r.add(s.url, s.size, s.mime))).unwrap_or_default();
+                // a joined server's copy's sound first (rule 1), else YouTube's stream
+                let uri = plain.or_else(|| relay.and_then(|r| playing::stream_of(&song, &r, || sources.stream(&song.id)).ok()).map(|(u, _)| u)).unwrap_or_default();
                 sources.split(&song, true, &uri, Arc::new(|_| {}))
             },
             move |e, result: Result<(), String>| {
@@ -3592,13 +3598,14 @@ impl Engine {
         self.shared.view(|v| {
             v.split_done.insert(t.key(), mark);
         });
-        if t.source == Source::Server {
-            self.rms_share_parts(t); // a server's own song: its parts to it (the Linux app's split_landed)
-        } else {
-            // rule 2 (owner, 2026-11-09): up to the servers joined, with its parts, by itself
+        // a server's copy of it without parts gets these, and says so (as before); rule 2 (owner, 2026-11-09):
+        // the other servers joined get the song with its parts, by themselves
+        self.rms_share_parts(t);
+        if t.source != Source::Server {
+            let others: Vec<_> = self.settings.borrow().servers.iter().filter(|s| crate::servers::copy_on(s, t).is_none_or(|c| c.split)).cloned().collect();
             let saved = self.liked.borrow().iter().find(|x| x.key() == t.key() && x.file.is_some()).cloned();
             if let Some(saved) = saved.or_else(|| t.file.is_some().then(|| t.clone())) {
-                crate::uploads::enqueue(&saved);
+                crate::uploads::enqueue_to(&saved, &others);
                 crate::uploads::kick();
             }
         }

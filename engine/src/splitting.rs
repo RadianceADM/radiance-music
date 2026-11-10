@@ -58,11 +58,29 @@ pub fn source_uri(t: &Track, plain: Option<String>, relay: Option<Relay>) -> Res
         Some(u) => Ok(u),
         None => {
             let relay = relay.ok_or("no relay")?;
-            let s = youtube::stream(&t.id)?;
-            Ok(relay.add(s.url, s.size, s.mime))
+            // a joined server's copy first (rule 1): its sound, not YouTube's
+            crate::playing::stream_of(t, &relay, || youtube::stream(&t.id)).map(|(uri, _)| uri)
         }
     }
 }
+
+/// Splits asked for by hand (Split, No vocals): they don't wait on a server's own split (rule 1's wait is
+/// for the liked songs split in the background).
+static ASKED: std::sync::Mutex<Option<std::collections::HashSet<String>>> = std::sync::Mutex::new(None);
+
+/// This song's split was asked for by hand (the apps' split_now / a first-in-line split).
+pub fn asked_by_hand(key: &str) {
+    if let Ok(mut a) = ASKED.lock() {
+        a.get_or_insert_with(Default::default).insert(key.to_string());
+    }
+}
+
+fn was_asked_by_hand(key: &str) -> bool {
+    ASKED.lock().ok().is_some_and(|mut a| a.as_mut().is_some_and(|a| a.remove(key)))
+}
+
+/// How many checks in a row a server may leave unanswered while its split is waited on.
+const QUIET_MOST: u32 = 3;
 
 /// Rule 1: how often a joined server's own split of a song is checked on, and for how long (the phone's).
 const WAIT_EVERY: Duration = Duration::from_secs(20);
@@ -116,13 +134,17 @@ pub fn two_parts(t: &Track, uri: &str, local: Option<&LocalSplitter>, report: Ar
 /// Whether the parts came.
 fn from_a_server(t: &Track, report: &(dyn Fn(Phase) + Send + Sync), wait: Option<(Duration, Duration)>) -> bool {
     let Some((server, mut song)) = crate::servers::copy_of(t) else { return false };
+    // waited on only for a saved song split in the background: one asked for by hand, or a song only
+    // streamed (No vocals as it plays), is split here at once
+    let by_hand = was_asked_by_hand(&t.key());
     if !song.split {
-        let Some((every, most)) = wait else { return false };
+        let Some((every, most)) = wait.filter(|_| !by_hand && t.file.is_some()) else { return false };
         if let Err(f) = crate::servers::split_by_id(&server, song.id) {
             crate::log::note(&format!("{} won't split “{}” ({}): split here", server.name, t.title, f.words(&server.name)));
             return false;
         }
         let asked = Instant::now();
+        let mut quiet = 0;
         loop {
             if asked.elapsed() >= most {
                 crate::log::note(&format!("{} hasn't split “{}” yet: split here", server.name, t.title));
@@ -134,9 +156,18 @@ fn from_a_server(t: &Track, report: &(dyn Fn(Phase) + Send + Sync), wait: Option
                     song = s;
                     break;
                 }
-                Ok(_) => {}
+                Ok(_) => quiet = 0,
                 Err(f) if f.status == 404 || f.status == 401 => return false,
-                Err(_) => continue, // away a moment: asked again
+                Err(f) => {
+                    // away a moment: asked again; a few times unanswered: split here
+                    quiet += 1;
+                    if quiet >= QUIET_MOST {
+                        crate::log::note(&format!("{} stopped answering ({}): “{}” is split here", server.name, f.words(&server.name), t.title));
+                        crate::servers::skip_for_now(&server.address);
+                        return false;
+                    }
+                    continue;
+                }
             }
             if let Ok(q) = crate::servers::queue(&server) {
                 match q.jobs.iter().find(|j| j.song == song.id) {

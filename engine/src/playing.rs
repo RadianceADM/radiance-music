@@ -54,6 +54,7 @@ pub fn stream_of(t: &Track, relay: &Relay, youtube: impl FnOnce() -> Result<crat
         crate::log::note(&format!("“{}” plays from {} (its copy there)", t.title, server.name));
         return Ok((web_uri(Some(relay), &crate::servers::copy_stream(&server, &song)), 0));
     }
+    crate::servers::stream_not_from_a_server(&t.id);
     youtube().map(|s| (relay.add(s.url, s.size, s.mime), s.kbps))
 }
 

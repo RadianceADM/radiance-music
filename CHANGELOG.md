@@ -12,8 +12,10 @@
   - **Away from home:** a server that doesn't answer within 3 seconds is skipped for a minute. If its stream breaks mid-song, the song carries on from YouTube where it was.
 - **Songs you split go up to your server by themselves (#75):** a song split on this computer goes to each joined server that lacks it, with its four parts, so the server doesn't split it again.
   - Offline or away, it waits and goes up when the server answers.
-  - Songs you split before joining go up too.
+  - Songs you split in four parts before joining go up too.
   - Music + Vocals halves stay on this computer: the server splits the song itself.
+  - Uploads go slowly (128 KB a second), so Wi-Fi beside Bluetooth speakers doesn't stutter.
+  - If the server's owner hasn't let you add songs, nothing is sent.
 
 ## v0.7.22 — 2026-11-09
 
