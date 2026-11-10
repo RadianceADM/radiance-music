@@ -1678,7 +1678,8 @@ pub(crate) mod tests {
         let there = crate::playing::stream_of(&yt("Maki", "Dilaw", "yt-play-there"), &relay, youtube);
         let not = crate::playing::stream_of(&yt("Moira", "Paubaya", "yt-play-not"), &relay, youtube);
         set_joined(&[]);
-        assert_eq!(there, Ok((format!("{address}/files/3.opus?t=tok-3"), 0)));
+        // (on Windows a server's address goes through the app's relay, as its songs' do: playing::web_uri)
+        assert_eq!(there.map(|(u, kbps)| (cfg!(windows) || u == format!("{address}/files/3.opus?t=tok-3"), kbps)), Ok((true, 0)));
         assert_eq!(stream_from("yt-play-there"), Some(address.clone()));
         assert_eq!(stream_from("yt-play-there"), None, "told once");
         assert_eq!(not.map(|(_, kbps)| kbps), Ok(130));
@@ -1737,7 +1738,8 @@ pub(crate) mod tests {
         let relay = crate::relay::Relay::start().unwrap();
         let uri = crate::splitting::source_uri(&yt("Maki", "Dilaw", "yt-split-stream"), None, Some(relay));
         set_joined(&[]);
-        assert_eq!(uri, Ok(format!("{address}/files/3.opus?t=tok-s")));
+        // (on Windows a server's address goes through the app's relay, as its songs' do: playing::web_uri)
+        assert_eq!(uri.map(|u| if cfg!(windows) { !u.contains(&address) } else { u == format!("{address}/files/3.opus?t=tok-s") }), Ok(true));
     }
 
     /// The first server joined that has it is the one; one that doesn't answer is passed over for a minute.
