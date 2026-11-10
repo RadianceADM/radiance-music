@@ -134,6 +134,7 @@ impl Engine {
         }
         self.rms_fallback();
         self.rms_publish();
+        crate::uploads::start(&self.liked.borrow()); // rule 2: what's split here goes up
     }
 
     /// A server's events line: what changes there is told.
@@ -308,6 +309,7 @@ impl Engine {
                     e.rms_fetch(&joined);
                     e.rms_open_line(&joined);
                     e.toast(rw::joined_toast(&joined.name));
+                    crate::uploads::joined_now(&e.liked.borrow()); // rule 2: the songs split here go up to it
                 }
                 Err(err) => e.rms_note(err, true),
             }

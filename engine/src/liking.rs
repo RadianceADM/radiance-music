@@ -27,7 +27,8 @@ pub fn toggle(liked: &mut Vec<Track>, t: &Track) -> Like {
     }
     let mut t = t.clone();
     t.file = None;
-    let save = library::saves(&t);
+    // a YouTube song goes to be saved too while a server is joined: its copy there may be (rule 1)
+    let save = library::saves(&t) || (t.source == Source::YouTube && crate::servers::any_joined());
     liked.insert(0, t);
     library::store(liked);
     Like::Liked { save }

@@ -59,26 +59,45 @@ pub fn save_with(t: &Track, download: &dyn Fn(&str, &Path) -> Result<(), String>
         return crate::servers::save(t, &dir);
     }
     let base = file_name(&if t.artist.is_empty() { t.title.clone() } else { format!("{} - {}", t.artist, t.title) });
-    if !saves(t) {
-        return Err("YouTube songs stream, they aren't saved".into());
-    }
-    let path = match t.source {
-        Source::YouTube => youtube::save(&t.id, &dir, &base)?,
-        Source::Server => unreachable!("a server's song is saved above"),
-        Source::Archive => {
-            let path = dir.join(format!("{base}.flac"));
-            download(&t.id, &path)?;
-            path.display().to_string()
+    // rule 1 (owner, 2026-11-09): a joined server's copy first: its song, parts, lyrics and cover
+    // (even in a build that only streams YouTube songs: it's the server's copy that's saved)
+    let mut path = None;
+    if let Some((server, song)) = crate::servers::copy_of(t) {
+        match crate::servers::save_copy(&server, &song, &dir, &base) {
+            Ok(p) => path = Some(p),
+            Err(e) => crate::log::note(&format!("saving “{}” from {}: {e}; from YouTube instead", t.title, server.name)),
         }
-    };
-    if let Some((ext, text)) = lyrics::to_file(&lyrics_of(t), Some(t), &[]) {
-        let _ = fs::write(beside(&path, ext), text);
     }
-    if let Some(bytes) = net::get_bytes(&t.art) {
-        let _ = fs::write(beside(&path, "jpg"), bytes);
+    let path = match path {
+        Some(p) => p,
+        None if !saves(t) => return Err(STREAMS_ONLY.into()),
+        None => match t.source {
+            Source::YouTube => youtube::save(&t.id, &dir, &base)?,
+            Source::Server => unreachable!("a server's song is saved above"),
+            Source::Archive => {
+                let path = dir.join(format!("{base}.flac"));
+                download(&t.id, &path)?;
+                path.display().to_string()
+            }
+        },
+    };
+    // its lyrics and cover, unless they came with it
+    if !beside(&path, "lyrics.yaml").exists() && !beside(&path, "lrc").exists() {
+        if let Some((ext, text)) = lyrics::to_file(&lyrics_of(t), Some(t), &[]) {
+            let _ = fs::write(beside(&path, ext), text);
+        }
+    }
+    if !beside(&path, "jpg").exists() {
+        if let Some(bytes) = net::get_bytes(&t.art) {
+            let _ = fs::write(beside(&path, "jpg"), bytes);
+        }
     }
     Ok(path)
 }
+
+/// What saving a YouTube song says in a build that only streams them (and no joined server has it):
+/// liked, not saved, and nothing went wrong.
+pub const STREAMS_ONLY: &str = "YouTube songs stream, they aren't saved";
 
 /// A file kept beside a saved song: "<the song's name>.<ext>". Older builds cut
 /// names that have a dot in them ("Mood (feat. Muric)" became "Mood (feat.lrc");

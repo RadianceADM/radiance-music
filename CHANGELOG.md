@@ -1,5 +1,20 @@
 # Changelog
 
+## Not released yet
+
+- **Your Radiance Music Server first (#75):** joined to a server, the app asks it before YouTube.
+  - **If the server has the song:**
+    - it plays from the server;
+    - liking it saves the server's copy (song, parts, lyrics and cover), even on Windows, where YouTube songs otherwise only stream;
+    - splitting it brings the server's parts. If the server hasn't split it yet, the app asks the server to and waits for it.
+  - **Matching:** it has to be the same version, the title to the letter: "Dilaw (Acoustic)" isn't "Dilaw".
+  - **If the server doesn't have it,** the app goes to YouTube at once.
+  - **Away from home:** a server that doesn't answer within 3 seconds is skipped for a minute. If its stream breaks mid-song, the song carries on from YouTube where it was.
+- **Songs you split go up to your server by themselves (#75):** a song split on this computer goes to each joined server that lacks it, with its four parts, so the server doesn't split it again.
+  - Offline or away, it waits and goes up when the server answers.
+  - Songs you split before joining go up too.
+  - Music + Vocals halves stay on this computer: the server splits the song itself.
+
 ## v0.7.22 — 2026-11-09
 
 - **Radiance Music for Windows is now built for Windows itself (WinUI 3):** faster and lighter, in Windows' own look. Today's Windows app offers it as any update (Update Now, then Restart to Update), and the new app opens by itself afterwards, with your songs, playlists, settings and the splitter (they're in your data folders; the update takes only the old app's program files away). The Start menu entry and `radiancemusic://` links open the new app. It has everything today's app has, servers and listening parties included.

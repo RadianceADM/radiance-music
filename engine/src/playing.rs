@@ -38,6 +38,23 @@ impl Streams {
     pub fn done_finding(&mut self, id: &str) {
         self.finding.remove(id);
     }
+
+    /// A stream that broke: found again next time.
+    pub fn forget(&mut self, id: &str) {
+        self.found.remove(id);
+    }
+}
+
+/// Where a YouTube song plays from (worker thread): a joined server's copy first (rule 1, owner
+/// 2026-11-09: no YouTube when the server has it), else YouTube's stream as `youtube` finds it.
+/// (address, kbps: 0 for a server's copy).
+pub fn stream_of(t: &Track, relay: &Relay, youtube: impl FnOnce() -> Result<crate::youtube::Stream, String>) -> Result<(String, u32), String> {
+    if let Some((server, song)) = crate::servers::copy_of(t) {
+        crate::servers::note_stream(&t.id, &server.address);
+        crate::log::note(&format!("“{}” plays from {} (its copy there)", t.title, server.name));
+        return Ok((web_uri(Some(relay), &crate::servers::copy_stream(&server, &song)), 0));
+    }
+    youtube().map(|s| (relay.add(s.url, s.size, s.mime), s.kbps))
 }
 
 /// An Internet Archive file's (or a Radiance Music Server's) address for the player: as it is,

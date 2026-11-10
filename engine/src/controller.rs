@@ -2083,9 +2083,10 @@ impl Engine {
             return; // already being looked up
         }
         let sources = self.shared.sources.clone();
-        let look = id.clone();
+        let (look, song) = (id.clone(), t.clone());
         self.bg(
-            move || sources.stream(&look).map(|s| (relay.add(s.url, s.size, s.mime), s.kbps)),
+            // a joined server's copy first (rule 1), else YouTube's stream
+            move || playing::stream_of(&song, &relay, || sources.stream(&look)),
             move |e, result| {
                 e.streams.borrow_mut().done_finding(&id);
                 match result {
@@ -2203,11 +2204,29 @@ impl Engine {
             }
             Event::Error(e) if trouble::sound_device_gone(&e) && self.sound_tries.get() < 3 => self.carry_on(),
             Event::Error(e) => {
+                if self.server_copy_broke(&e) {
+                    return;
+                }
                 if !self.back_from_video(&e) {
                     self.unavailable(&song, &e);
                 }
             }
         }
+    }
+
+    /// The song played from a joined server's copy (rule 1) and its stream broke (away from home): on from
+    /// YouTube where it was, that server passed over for a minute. Whether it was that.
+    fn server_copy_broke(self: &Rc<Self>, err: &str) -> bool {
+        let Some(t) = self.current.borrow().clone().filter(|t| t.source == Source::YouTube && t.file.is_none()) else { return false };
+        let Some(address) = crate::servers::stream_from(&t.id) else { return false };
+        let at = self.player.borrow().as_ref().and_then(|p| p.position()).unwrap_or(0.0);
+        crate::log::note(&format!("“{}” from {address} broke ({err}): from YouTube at {at:.0} s", t.title));
+        crate::servers::skip_for_now(&address);
+        crate::servers::forget_answer(&t);
+        self.streams.borrow_mut().forget(&t.id);
+        self.restore_at.set((at > 1.0).then_some(at));
+        self.play_current();
+        true
     }
 
     /// The sound device went away mid-song: the same song again from where it was, on the
@@ -3573,7 +3592,16 @@ impl Engine {
         self.shared.view(|v| {
             v.split_done.insert(t.key(), mark);
         });
-        self.rms_share_parts(t); // a server's copy of it without parts gets these (the Linux app's split_landed)
+        if t.source == Source::Server {
+            self.rms_share_parts(t); // a server's own song: its parts to it (the Linux app's split_landed)
+        } else {
+            // rule 2 (owner, 2026-11-09): up to the servers joined, with its parts, by itself
+            let saved = self.liked.borrow().iter().find(|x| x.key() == t.key() && x.file.is_some()).cloned();
+            if let Some(saved) = saved.or_else(|| t.file.is_some().then(|| t.clone())) {
+                crate::uploads::enqueue(&saved);
+                crate::uploads::kick();
+            }
+        }
         // the song playing: on with its parts from where it's got to (fading over), its lyrics again
         // (its words may be timed now)
         let cur = self.current.borrow().clone();
@@ -3697,6 +3725,8 @@ impl Engine {
                             crate::library::unsave(&t);
                         }
                     }
+                    // a build that only streams YouTube songs, and no joined server had it: liked, that's all
+                    Err(err) if err == crate::library::STREAMS_ONLY => e.toast(words::liked_toast(&t.title)),
                     Err(err) => {
                         crate::log::note(&format!("save {}: {err}", t.title));
                         e.toast(words::save_failed(&t.title));
@@ -4424,6 +4454,7 @@ impl Engine {
                 self.search(q);
             }
             self.fetch_two_part();
+            crate::uploads::kick(); // rule 2: what waited goes up now
         }
         // back online: the song's lyrics looked up again (none came offline), as the GTK app's
         if changed && on && self.lyrics_offline.replace(false) {

@@ -1495,6 +1495,7 @@ impl Ui {
         }
         self.toast("Back online");
         self.get_two_part_ready(); // (if they didn't come at the start)
+        radiance_engine::uploads::kick(); // rule 2: what waited goes up now
         if !self.search.text().trim().is_empty() {
             self.run_search();
         }
@@ -4628,6 +4629,8 @@ impl Ui {
                         library::unsave(&done);
                     }
                 }
+                // a build that only streams YouTube songs, and no joined server had it: liked, that's all
+                Err(e) if e == library::STREAMS_ONLY => me.toast(&words::liked_toast(&title)),
                 Err(e) => {
                     debug(&format!("save {title}: {e}"));
                     me.toast(&words::save_failed(&title));
@@ -5257,8 +5260,9 @@ impl Ui {
         let me = Rc::downgrade(self);
         bg(
             {
-                let id = id.clone();
-                move || youtube::stream(&id).map(|s| (relay.add(s.url, s.size, s.mime), s.kbps))
+                let (id, song) = (id.clone(), t.clone());
+                // a joined server's copy first (rule 1), else YouTube's stream
+                move || crate::playing::stream_of(&song, &relay, || youtube::stream(&id))
             },
             move |result| {
                 let Some(me) = me.upgrade() else { return };
@@ -5450,11 +5454,27 @@ impl Ui {
                 self.feedback_moment(); // a song's end: a free moment for the feedback pop-up
             }
             Event::Error(e) if sound_device_gone(&e) && self.sound_tries.get() < 3 => self.carry_on(),
+            Event::Error(e) if self.server_copy_broke(&e) => {}
             Event::Error(e) => {
                 let title = self.current.borrow().as_ref().map(|t| t.title.clone()).unwrap_or_default();
                 self.unavailable(&title, &e);
             }
         }
+    }
+
+    /// The song played from a joined server's copy (rule 1) and its stream broke (away from home): on from
+    /// YouTube where it was, that server passed over for a minute. Whether it was that.
+    fn server_copy_broke(self: &Rc<Self>, err: &str) -> bool {
+        let Some(t) = self.current.borrow().clone().filter(|t| t.source == Source::YouTube && t.file.is_none()) else { return false };
+        let Some(address) = servers::stream_from(&t.id) else { return false };
+        let at = self.player.borrow().as_ref().and_then(|p| p.position()).unwrap_or(0.0);
+        crate::log::note(&format!("“{}” from {address} broke ({err}): from YouTube at {at:.0} s", t.title));
+        servers::skip_for_now(&address);
+        servers::forget_answer(&t);
+        self.streams.borrow_mut().forget(&t.id);
+        self.restore_at.set((at > 1.0).then_some(at));
+        self.play_current();
+        true
     }
 
     /// The sound device went away mid-song (Windows: headphones, a speaker or HDMI unplugged
@@ -6155,7 +6175,16 @@ impl Ui {
             self.refresh_lyrics(); // its words get their times from the new Vocals part
         }
         self.refresh_split_marks(); // its scissors, in every list
-        self.share_parts(t); // a server's copy without parts gets these
+        if t.source == Source::Server {
+            self.share_parts(t); // a server's own song: its parts to it
+        } else {
+            // rule 2 (owner, 2026-11-09): up to the servers joined, with its parts, by itself
+            let saved = self.liked.borrow().iter().find(|x| x.key() == t.key() && x.file.is_some()).cloned();
+            if let Some(saved) = saved.or_else(|| t.file.is_some().then(|| t.clone())) {
+                radiance_engine::uploads::enqueue(&saved);
+                radiance_engine::uploads::kick();
+            }
+        }
     }
 
     /// The fast split, in its own lane beside the four-part queue (never behind a four-part

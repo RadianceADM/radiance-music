@@ -194,6 +194,7 @@ impl Ui {
             });
         }
         self.start_fallback();
+        radiance_engine::uploads::start(&self.liked.borrow()); // rule 2: what's split here goes up
     }
 
     /// A server's events line (/api/events): what changes there is told, nothing is asked again and again.
@@ -575,6 +576,7 @@ impl Ui {
                             me.open_line(&joined);
                             f();
                             me.toast(&rw::joined_toast(&joined.name));
+                            radiance_engine::uploads::joined_now(&me.liked.borrow()); // rule 2: the songs split here go up to it
                         }
                         Err(e) => {
                             if let Some(n) = &note {

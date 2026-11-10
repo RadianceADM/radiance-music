@@ -3,6 +3,7 @@
 //! or your split server), then its words timed or its copy kept on the server; or the fast split in two.
 
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use crate::relay::Relay;
 use crate::settings::{LocalSplitter, SplitServer};
@@ -63,8 +64,21 @@ pub fn source_uri(t: &Track, plain: Option<String>, relay: Option<Relay>) -> Res
     }
 }
 
+/// Rule 1: how often a joined server's own split of a song is checked on, and for how long (the phone's).
+const WAIT_EVERY: Duration = Duration::from_secs(20);
+const WAIT_MOST: Duration = Duration::from_secs(45 * 60);
+
 /// A song in four parts (the GTK app's run_splits worker), then its words timed or its copy kept.
+/// A joined server that has the song gives its parts instead (rule 1).
 pub fn four_parts(t: &Track, uri: &str, server: Option<&SplitServer>, local: Option<&LocalSplitter>, report: Arc<dyn Fn(Phase) + Send + Sync>) -> Result<(), String> {
+    four_parts_with(t, uri, server, local, report, WAIT_EVERY, WAIT_MOST)
+}
+
+/// As [four_parts], checking on a server's own split every `every` for up to `most`.
+pub fn four_parts_with(t: &Track, uri: &str, server: Option<&SplitServer>, local: Option<&LocalSplitter>, report: Arc<dyn Fn(Phase) + Send + Sync>, every: Duration, most: Duration) -> Result<(), String> {
+    if from_a_server(t, report.as_ref(), Some((every, most))) {
+        return Ok(());
+    }
     let r = report.clone();
     let done = split::split(t, uri, server, local, Arc::new(move |p| r(Phase::Splitting(p))));
     if done.is_ok() {
@@ -87,9 +101,66 @@ pub fn four_parts(t: &Track, uri: &str, server: Option<&SplitServer>, local: Opt
     done
 }
 
-/// The fast split in two (Music + Vocals, inside the app: the GTK app's run_fast worker).
+/// The fast split in two (Music + Vocals, inside the app: the GTK app's run_fast worker). A joined
+/// server's split copy gives its parts instead (rule 1); one not split yet isn't waited for (it's asked by hand).
 pub fn two_parts(t: &Track, uri: &str, local: Option<&LocalSplitter>, report: Arc<dyn Fn(Phase) + Send + Sync>) -> Result<(), String> {
+    if from_a_server(t, report.as_ref(), None) {
+        return Ok(());
+    }
     split::split_two(t, uri, local, Arc::new(move |p| report(Phase::Splitting(p))))
+}
+
+/// Rule 1 (owner, 2026-11-09): a joined server's copy of the song gives its parts instead of a split
+/// here. Its copy not split yet: with `wait`, the server is asked to split it and checked on every
+/// `every` for up to `most`; it failed, or can't (the owner turned splitting off for you): split here.
+/// Whether the parts came.
+fn from_a_server(t: &Track, report: &(dyn Fn(Phase) + Send + Sync), wait: Option<(Duration, Duration)>) -> bool {
+    let Some((server, mut song)) = crate::servers::copy_of(t) else { return false };
+    if !song.split {
+        let Some((every, most)) = wait else { return false };
+        if let Err(f) = crate::servers::split_by_id(&server, song.id) {
+            crate::log::note(&format!("{} won't split “{}” ({}): split here", server.name, t.title, f.words(&server.name)));
+            return false;
+        }
+        let asked = Instant::now();
+        loop {
+            if asked.elapsed() >= most {
+                crate::log::note(&format!("{} hasn't split “{}” yet: split here", server.name, t.title));
+                return false;
+            }
+            std::thread::sleep(every);
+            match crate::servers::song(&server, song.id) {
+                Ok(s) if s.split => {
+                    song = s;
+                    break;
+                }
+                Ok(_) => {}
+                Err(f) if f.status == 404 || f.status == 401 => return false,
+                Err(_) => continue, // away a moment: asked again
+            }
+            if let Ok(q) = crate::servers::queue(&server) {
+                match q.jobs.iter().find(|j| j.song == song.id) {
+                    Some(j) if j.state == "failed" || j.state == "removed" => {
+                        crate::log::note(&format!("{} didn't split “{}” ({}): split here", server.name, t.title, j.note));
+                        return false;
+                    }
+                    Some(j) => report(Phase::Splitting(j.progress)),
+                    None => {}
+                }
+            }
+        }
+    }
+    match crate::servers::bring_parts(t, &server, &song) {
+        Ok(n) if n > 0 => {
+            crate::log::note(&format!("“{}”: its parts from {} (not split here)", t.title, server.name));
+            true
+        }
+        Ok(_) => false,
+        Err(e) => {
+            crate::log::note(&format!("“{}”'s parts from {}: {e}: split here", t.title, server.name));
+            false
+        }
+    }
 }
 
 #[cfg(test)]

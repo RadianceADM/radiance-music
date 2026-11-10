@@ -98,6 +98,16 @@ pub fn set_joined(list: &[Joined]) {
     }
 }
 
+/// The servers joined, in the order joined.
+pub fn joined() -> Vec<Joined> {
+    JOINED.read().map(|j| j.clone()).unwrap_or_default()
+}
+
+/// Some server is joined (rule 1 has one to ask).
+pub fn any_joined() -> bool {
+    JOINED.read().is_ok_and(|j| !j.is_empty())
+}
+
 /// The joined server an address is on (it starts with the server's address, now or when first joined).
 pub fn of_url(url: &str) -> Option<Joined> {
     let joined = JOINED.read().ok()?;
@@ -577,10 +587,18 @@ pub fn save(t: &Track, dir: &Path) -> Result<String, String> {
         Some((_, s)) => song(&server, s.id).map_err(|f| if f.status == 404 { gone() } else { f.words(&server.name) })?,
         None => library(&server).map_err(|f| f.words(&server.name))?.into_iter().find(|s| format!("{}{}", server.first, s.url) == t.id).ok_or_else(gone)?,
     };
+    let stem = song.files.get("song").map(|f| f.name.as_str()).unwrap_or(&song.file).rsplit_once('.').map(|(s, _)| file_name(s)).ok_or("the song's file has no type")?;
+    save_copy(&server, &song, dir, &stem)
+}
+
+/// A server's song saved as `dir/STEM.EXT`, with its parts, lyrics and cover beside it
+/// ("STEM.drums.ogg", "STEM.lyrics.yaml", "STEM.jpg"), as the app names a saved song's
+/// files. Its music video stays on the server. The song's path.
+pub fn save_copy(server: &Joined, song: &Song, dir: &Path, stem: &str) -> Result<String, String> {
     let own = song.files.get("song").cloned().unwrap_or(File { name: song.file.clone(), size: 0, url: song.url.clone() });
-    let (stem, ext) = own.name.rsplit_once('.').map(|(s, e)| (file_name(s), e.to_ascii_lowercase())).ok_or("the song's file has no type")?;
+    let ext = own.name.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase()).ok_or("the song's file has no type")?;
     let path = dir.join(format!("{stem}.{ext}"));
-    download(&server, &own, &path)?;
+    download(server, &own, &path)?;
     // its extras (one that doesn't come is left out: the song is what matters)
     for (kind, f) in &song.files {
         let fext = f.name.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase()).unwrap_or_default();
@@ -591,8 +609,8 @@ pub fn save(t: &Track, dir: &Path) -> Result<String, String> {
             "lyrics" => format!("{stem}.lrc"),
             part => format!("{stem}.{part}.{fext}"),
         };
-        if let Err(e) = download(&server, f, &dir.join(name)) {
-            crate::log::note(&format!("saving “{}” from {}: {kind}: {e}", t.title, server.name));
+        if let Err(e) = download(server, f, &dir.join(name)) {
+            crate::log::note(&format!("saving “{}” from {}: {kind}: {e}", song.title, server.name));
         }
     }
     Ok(path.display().to_string())
@@ -664,7 +682,21 @@ fn send_form(server: &Joined, path: &str, fields: &[Field]) -> Result<Value, Fai
 /// its file, with its cover and lyrics when it has them; then its parts, when
 /// this computer has them and the server's copy hasn't (see upload_parts).
 pub fn upload(server: &Joined, t: &Track) -> Result<Added, String> {
-    let file = t.file.as_deref().filter(|f| Path::new(f).exists()).ok_or("Only saved songs can go to a server: like it first, so it's saved.")?;
+    let mut added = upload_with(server, t, !parts_here(t).is_empty()).map_err(|f| f.words(&server.name))?;
+    // its parts too, when they're here and not there
+    if let Some(s) = added.song.clone().filter(|s| !s.split) {
+        if let Ok((parts, now)) = upload_parts(server, s.id, t) {
+            added.parts = parts;
+            added.song = now.or(added.song);
+        }
+    }
+    Ok(added)
+}
+
+/// The song itself sent (POST /api/songs: its file, artist, title, seconds, cover and lyrics), with
+/// `parts_coming` (its parts follow from here: the server doesn't split it, rms 0.2.2+). Not its parts.
+pub fn upload_with(server: &Joined, t: &Track, parts_coming: bool) -> Result<Added, Failure> {
+    let file = t.file.as_deref().filter(|f| Path::new(f).exists()).ok_or(Failure { status: 400, said: "Only saved songs can go to a server: like it first, so it's saved.".into() })?;
     let name = Path::new(file).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "song".into());
     let mut fields = vec![Field::File("song", name, file.into()), Field::Text("artist", t.artist.clone()), Field::Text("title", t.title.clone())];
     if t.seconds > 0 {
@@ -679,20 +711,12 @@ pub fn upload(server: &Joined, t: &Track) -> Result<Added, String> {
             fields.push(Field::File(kind, p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(), p));
         }
     }
-    let said = send_form(server, "/api/songs", &fields).map_err(|f| f.words(&server.name))?;
+    let said = send_form(server, if parts_coming { "/api/songs?parts=coming" } else { "/api/songs" }, &fields)?;
     let song = parse_song(&said["song"]);
     if let Some(s) = &song {
         keep(server, s);
     }
-    let mut added = Added { skipped: said["skipped"].as_bool().unwrap_or(false), extras: said["extras"].as_array().map(|e| e.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default(), song, parts: vec![] };
-    // its parts too, when they're here and not there
-    if let Some(s) = added.song.clone().filter(|s| !s.split) {
-        if let Ok((parts, now)) = upload_parts(server, s.id, t) {
-            added.parts = parts;
-            added.song = now.or(added.song);
-        }
-    }
-    Ok(added)
+    Ok(Added { skipped: said["skipped"].as_bool().unwrap_or(false), extras: said["extras"].as_array().map(|e| e.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default(), song, parts: vec![] })
 }
 
 /// The parts a song split on this computer has to send (drums, bass, other and vocals, all four, and music).
@@ -707,15 +731,20 @@ pub fn parts_here(t: &Track) -> Vec<(&'static str, std::path::PathBuf)> {
 /// timed (the server keeps them if its own aren't). The server skips parts it
 /// has. (the parts it took, the song as it is now)
 pub fn upload_parts(server: &Joined, id: i64, t: &Track) -> Result<(Vec<String>, Option<Song>), String> {
+    upload_parts_with(server, id, t).map_err(|f| f.words(&server.name))
+}
+
+/// As [upload_parts], with the server's answer as it came (rule 2's queue tells "later" from "never").
+pub fn upload_parts_with(server: &Joined, id: i64, t: &Track) -> Result<(Vec<String>, Option<Song>), Failure> {
     let parts = parts_here(t);
     if parts.is_empty() {
-        return Err("This computer hasn't split it.".into());
+        return Err(Failure { status: 400, said: "This computer hasn't split it.".into() });
     }
     let mut fields: Vec<Field> = parts.into_iter().map(|(p, f)| (p, format!("{p}.{}", f.extension().and_then(|e| e.to_str()).unwrap_or("ogg")), f)).map(|(p, n, f)| Field::File(p, n, f)).collect();
     if let Some(y) = t.file.as_deref().map(|f| crate::library::beside(f, "lyrics.yaml")).filter(|y| std::fs::read_to_string(y).is_ok_and(|text| text.contains("\n    words:"))) {
         fields.push(Field::File("lyrics", "lyrics.lyrics.yaml".into(), y));
     }
-    let said = send_form(server, &format!("/api/songs/{id}/parts"), &fields).map_err(|f| f.words(&server.name))?;
+    let said = send_form(server, &format!("/api/songs/{id}/parts"), &fields)?;
     let now = parse_song(&said["song"]);
     if let Some(s) = &now {
         keep(server, s);
@@ -822,6 +851,41 @@ pub fn copy_stream(server: &Joined, song: &Song) -> String {
     with_token(&format!("{}{}", server.address, song.url), &server.token)
 }
 
+/// Rule 1 when splitting: a server copy's parts brought down to where a split here puts them (beside
+/// a saved song, else the cache): its four, else its music and vocals; with its word times beside a
+/// saved song that has none (the server timed them). How many parts came.
+pub fn bring_parts(t: &Track, server: &Joined, song: &Song) -> Result<usize, String> {
+    let has = |p: &str| song.files.contains_key(p);
+    let parts: Vec<&str> = if crate::split::PARTS.iter().all(|p| has(p)) {
+        crate::split::PARTS.to_vec()
+    } else if has("music") && has("vocals") {
+        vec!["music", "vocals"]
+    } else {
+        return Ok(0);
+    };
+    let base = crate::split::stems_base(t);
+    let stem = base.file_name().map(|n| n.to_string_lossy().into_owned()).ok_or("no place for its parts")?;
+    if let Some(dir) = base.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    }
+    let mut got = 0;
+    for part in parts {
+        let f = &song.files[part];
+        let ext = f.name.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase()).unwrap_or_else(|| "ogg".into());
+        download(server, f, &base.with_file_name(format!("{stem}.{part}.{ext}")))?;
+        got += 1;
+    }
+    if let (Some(file), Some(f)) = (&t.file, song.files.get("lyrics").filter(|f| song.word_times && f.name.ends_with(".lyrics.yaml"))) {
+        let here = crate::library::beside(file, "lyrics.yaml");
+        if !std::fs::read_to_string(&here).is_ok_and(|text| text.contains("\n    words:")) {
+            if let Err(e) = download(server, f, &here) {
+                crate::log::note(&format!("“{}”'s word times from {}: {e}", t.title, server.name));
+            }
+        }
+    }
+    Ok(got)
+}
+
 /// A YouTube song's stream came from this server (rule 1): if it breaks, YouTube instead.
 pub fn note_stream(id: &str, address: &str) {
     if let Ok(mut s) = STREAMED_FROM.lock() {
@@ -896,6 +960,12 @@ pub fn leave(server: &Joined) -> Result<(), Failure> {
 /// Asks a server to split one of its songs (POST /api/split; worker thread).
 pub fn split(server: &Joined, t: &Track) -> Result<Asked, Failure> {
     let said = post(server, "/api/split", &json!({ "song": song_ref(t) }))?;
+    parse_asked(&said).ok_or(Failure { status: 500, said: "The server's answer didn't say where the song is in its queue.".into() })
+}
+
+/// Asks a server to split one of its songs, by its id there (rule 1: its copy of a song not split yet).
+pub fn split_by_id(server: &Joined, id: i64) -> Result<Asked, Failure> {
+    let said = post(server, "/api/split", &json!({ "song": id }))?;
     parse_asked(&said).ok_or(Failure { status: 500, said: "The server's answer didn't say where the song is in its queue.".into() })
 }
 
@@ -1323,11 +1393,11 @@ pub fn reaction_icon(emoji: &str) -> (&'static str, &'static str) {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     /// The tests that set the joined servers (they're the app's, one list) take turns.
-    static JOINED_TESTS: Mutex<()> = Mutex::new(());
+    pub(crate) static JOINED_TESTS: Mutex<()> = Mutex::new(());
 
     fn server() -> Joined {
         Joined::new("https://music.example.com", "ab12", "Bassi's server", Some("srv-1".into()))
@@ -1377,6 +1447,161 @@ mod tests {
         // asked again: the answer kept (the stand-in is gone, so a second call couldn't be answered)
         assert_eq!(copy_among(&[s.clone()], &t).map(|(_, s)| s.id), Some(5));
         assert_eq!(copy_stream(&s, &song), format!("{address}/files/5.opus?t=tok-1"));
+    }
+
+    /// Rule 1 when liking: a YouTube song the server has is saved from the server (its song, parts,
+    /// lyrics and cover) under the YouTube song's own name, and YouTube is never asked (yt-dlp isn't there).
+    #[test]
+    fn liking_a_song_the_server_has_saves_its_copy() {
+        let _turn = JOINED_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+        let (address, seen) = stand_in(8, |_, path, _, _| {
+            if path.starts_with("/api/library?") {
+                let mut files = json!({
+                    "song": { "name": "maki dilaw.m4a", "size": 4, "url": "/files/7.m4a" },
+                    "lyrics": { "name": "maki dilaw.lyrics.yaml", "size": 5, "url": "/files/7.lyrics.yaml" },
+                    "cover": { "name": "maki dilaw.jpg", "size": 3, "url": "/files/7.jpg" },
+                });
+                for p in crate::split::PARTS {
+                    files[p] = json!({ "name": format!("maki dilaw.{p}.ogg"), "size": 4, "url": format!("/files/7.{p}.ogg") });
+                }
+                let song = json!({ "id": 7, "artist": "Maki", "title": "Dilaw", "file": "maki dilaw.m4a", "url": "/files/7.m4a", "split": true, "files": files });
+                (200, json!({ "songs": [song] }).to_string())
+            } else if path.ends_with(".yaml") {
+                (200, "words".into())
+            } else if path.ends_with(".jpg") {
+                (200, "jpg".into())
+            } else {
+                (200, "song".into())
+            }
+        });
+        let dir = scratch("save-copy");
+        set_joined(&[Joined::new(&address, "tok-7", "Bassi's server", None)]);
+        crate::library::set_music_dir(Some(dir.clone()));
+        let t = yt("Maki", "Dilaw", "yt-dilaw-save");
+        let saved = crate::library::save_with(&t, &|_, _| Err("not this way".into()), &|_| crate::lyrics::Lyrics::None);
+        crate::library::set_music_dir(None);
+        set_joined(&[]);
+        let saved = saved.expect("saved from the server");
+        assert_eq!(saved, dir.join("Maki - Dilaw.m4a").display().to_string());
+        for (name, body) in [("Maki - Dilaw.m4a", "song"), ("Maki - Dilaw.drums.ogg", "song"), ("Maki - Dilaw.vocals.ogg", "song"), ("Maki - Dilaw.lyrics.yaml", "words"), ("Maki - Dilaw.jpg", "jpg")] {
+            assert_eq!(std::fs::read_to_string(dir.join(name)).ok().as_deref(), Some(body), "{name}");
+        }
+        let mut t = t;
+        t.file = Some(saved);
+        assert!(crate::split::has_parts(&t), "its parts came with it: no split here");
+        assert_eq!(seen.join().unwrap().len(), 8);
+    }
+
+    pub(crate) fn copy_json(id: i64, split: bool) -> Value {
+        let mut files = json!({ "song": { "name": "Maki - Dilaw.opus", "size": 4, "url": format!("/files/{id}.opus") } });
+        if split {
+            for p in crate::split::PARTS {
+                files[p] = json!({ "name": format!("Maki - Dilaw.{p}.ogg"), "size": 4, "url": format!("/files/{id}.{p}.ogg") });
+            }
+        }
+        json!({ "id": id, "artist": "Maki", "title": "Dilaw", "file": "Maki - Dilaw.opus", "url": format!("/files/{id}.opus"), "split": split, "files": files })
+    }
+
+    /// A saved song in a scratch folder (its parts land beside it).
+    pub(crate) fn saved(dir: &Path, id: &str) -> Track {
+        let mut t = yt("Maki", "Dilaw", id);
+        let f = dir.join("Maki - Dilaw.opus");
+        std::fs::write(&f, b"OPUS").unwrap();
+        t.file = Some(f.display().to_string());
+        t
+    }
+
+    fn no_report() -> Arc<dyn Fn(crate::splitting::Phase) + Send + Sync> {
+        Arc::new(|_| {})
+    }
+
+    /// Rule 1 when splitting: the server's parts come down instead (no splitter here is needed).
+    #[test]
+    fn a_split_here_takes_the_servers_parts_first() {
+        let _turn = JOINED_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+        let (address, seen) = stand_in(5, |_, path, _, _| if path.starts_with("/api/library?") { (200, json!({ "songs": [copy_json(3, true)] }).to_string()) } else { (200, "PART".into()) });
+        set_joined(&[Joined::new(&address, "t", "Bassi's server", None)]);
+        let dir = scratch("parts-first");
+        let t = saved(&dir, "yt-dilaw-parts");
+        let done = crate::splitting::four_parts_with(&t, "", None, None, no_report(), Duration::from_millis(10), Duration::from_secs(5));
+        set_joined(&[]);
+        assert_eq!(done, Ok(()));
+        for p in crate::split::PARTS {
+            assert_eq!(std::fs::read_to_string(dir.join(format!("Maki - Dilaw.{p}.ogg"))).ok().as_deref(), Some("PART"), "{p}");
+        }
+        assert!(crate::split::has_parts(&t));
+        assert_eq!(seen.join().unwrap().len(), 5);
+    }
+
+    /// Its copy there isn't split yet: the server is asked to, and its parts are waited for.
+    #[test]
+    fn a_split_here_waits_for_the_servers_own_split() {
+        let _turn = JOINED_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+        let (address, seen) = stand_in(7, |method, path, _, _| match (method, path) {
+            (_, p) if p.starts_with("/api/library?") => (200, json!({ "songs": [copy_json(3, false)] }).to_string()),
+            ("POST", "/api/split") => (200, r#"{"queued":false,"job":{"id":1,"song":{"id":3},"state":"splitting","progress":0.5}}"#.into()),
+            ("GET", "/api/songs/3") => (200, copy_json(3, true).to_string()),
+            _ => (200, "PART".into()),
+        });
+        set_joined(&[Joined::new(&address, "t", "Bassi's server", None)]);
+        let dir = scratch("parts-wait");
+        let t = saved(&dir, "yt-dilaw-wait");
+        let done = crate::splitting::four_parts_with(&t, "", None, None, no_report(), Duration::from_millis(10), Duration::from_secs(5));
+        set_joined(&[]);
+        assert_eq!(done, Ok(()));
+        assert!(crate::split::has_parts(&t));
+        let seen = seen.join().unwrap();
+        assert_eq!(seen[1].0, "POST /api/split");
+        assert_eq!(serde_json::from_str::<Value>(&seen[1].2).unwrap(), json!({ "song": 3 }));
+        assert_eq!(seen[2].0, "GET /api/songs/3");
+    }
+
+    /// The server won't split it (the owner turned splitting off for you): split here as before;
+    /// the fast split in two never waits for the server.
+    #[test]
+    fn a_split_here_goes_on_when_the_server_cant() {
+        let _turn = JOINED_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+        let (address, seen) = stand_in(2, |method, path, _, _| match (method, path) {
+            (_, p) if p.starts_with("/api/library?") => (200, json!({ "songs": [copy_json(3, false)] }).to_string()),
+            _ => (403, r#"{"error":"turned off"}"#.into()),
+        });
+        set_joined(&[Joined::new(&address, "t", "Bassi's server", None)]);
+        let dir = scratch("parts-cant");
+        let t = saved(&dir, "yt-dilaw-cant");
+        let four = crate::splitting::four_parts_with(&t, "", None, None, no_report(), Duration::from_millis(10), Duration::from_secs(5));
+        let two = crate::splitting::two_parts(&t, "", None, no_report());
+        set_joined(&[]);
+        assert!(four.is_err() && two.is_err(), "split here (no splitter in a test): {four:?} {two:?}");
+        assert_eq!(seen.join().unwrap().iter().map(|s| s.0.split('?').next().unwrap().to_string()).collect::<Vec<_>>(), ["GET /api/library", "POST /api/split"]);
+    }
+
+    /// Rule 1 when playing (both apps' find_stream): the server's copy streams, YouTube isn't asked, and
+    /// the stream is noted as the server's (a break goes to YouTube); without a copy, YouTube's stream.
+    #[test]
+    fn a_song_the_server_has_plays_from_there() {
+        let _turn = JOINED_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+        let (address, _seen) = stand_in(2, |_, path, _, _| {
+            if path.contains("q=Dilaw") {
+                (200, json!({ "songs": [copy_json(3, false)] }).to_string())
+            } else {
+                (200, r#"{"songs":[]}"#.into())
+            }
+        });
+        set_joined(&[Joined::new(&address, "tok-3", "Bassi's server", None)]);
+        let relay = crate::relay::Relay::start().unwrap();
+        let asked = std::sync::atomic::AtomicUsize::new(0);
+        let youtube = || {
+            asked.fetch_add(1, Ordering::SeqCst);
+            Ok(crate::youtube::Stream { url: "https://yt.example/a".into(), size: 1, mime: "audio/webm".into(), kbps: 130 })
+        };
+        let there = crate::playing::stream_of(&yt("Maki", "Dilaw", "yt-play-there"), &relay, youtube);
+        let not = crate::playing::stream_of(&yt("Moira", "Paubaya", "yt-play-not"), &relay, youtube);
+        set_joined(&[]);
+        assert_eq!(there, Ok((format!("{address}/files/3.opus?t=tok-3"), 0)));
+        assert_eq!(stream_from("yt-play-there"), Some(address.clone()));
+        assert_eq!(stream_from("yt-play-there"), None, "told once");
+        assert_eq!(not.map(|(_, kbps)| kbps), Ok(130));
+        assert_eq!(asked.load(Ordering::SeqCst), 1, "YouTube asked only for the song the server lacks");
     }
 
     /// The first server joined that has it is the one; one that doesn't answer is passed over for a minute.
@@ -1570,7 +1795,7 @@ mod tests {
 
     /// A tiny stand-in server: answers each request with `answer(method, path,
     /// headers, body)`, one connection at a time; the requests come back at the end.
-    fn stand_in(n: usize, answer: fn(&str, &str, &str, &str) -> (u16, String)) -> (String, std::thread::JoinHandle<Vec<(String, String, String)>>) {
+    pub(crate) fn stand_in(n: usize, answer: fn(&str, &str, &str, &str) -> (u16, String)) -> (String, std::thread::JoinHandle<Vec<(String, String, String)>>) {
         use std::io::{BufRead, BufReader};
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let address = format!("http://{}", listener.local_addr().unwrap());
@@ -1648,7 +1873,7 @@ mod tests {
     }
 
     /// A folder of its own for a test's files (under TMPDIR), empty.
-    fn scratch(name: &str) -> std::path::PathBuf {
+    pub(crate) fn scratch(name: &str) -> std::path::PathBuf {
         let d = std::env::temp_dir().join(format!("radiance-music-test-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
