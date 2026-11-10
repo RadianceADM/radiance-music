@@ -165,6 +165,26 @@ pub fn plain(text: &str) -> String {
     out
 }
 
+/// Lowercase letters and digits only, accents taken off, bracketed words KEPT
+/// ("Dilaw (Acoustic)" → "dilawacoustic"): a server's copy has to be the same
+/// version, as the phone's ServerFirst.whole matches it.
+pub fn whole(text: &str) -> String {
+    unaccent(text).chars().filter(|c| c.is_alphanumeric()).flat_map(char::to_lowercase).collect()
+}
+
+/// Accents taken off ("Mäki" → "Maki"; NFD, its combining marks left out).
+fn unaccent(text: &str) -> String {
+    use unicode_normalization::{char::is_combining_mark, UnicodeNormalization};
+    text.nfd().filter(|c| !is_combining_mark(*c)).collect()
+}
+
+/// A server's song (`artist`, `title`) is this song: the same title to the letter
+/// (brackets kept), the same artist (plain, accents off: "Maki (PH)" and "Mäki" are Maki).
+/// Owner's rule 1, 2026-11-09.
+pub fn same_copy(artist: &str, title: &str, t: &Track) -> bool {
+    whole(title) == whole(&t.title) && plain(&unaccent(artist)) == plain(&unaccent(&t.artist))
+}
+
 /// A name that's safe as a file name.
 pub fn file_name(text: &str) -> String {
     let cleaned: String = text
@@ -235,6 +255,22 @@ mod tests {
         // GLib's SHA-256 made the keys and file names already out there
         assert_eq!(digest("radiance"), "ee305956fcdb25b8");
         assert_eq!(digest(""), "e3b0c44298fc1c14");
+    }
+
+    #[test]
+    fn whole_keeps_brackets_and_drops_accents() {
+        assert_eq!(whole("Dilaw (Acoustic)"), "dilawacoustic");
+        assert_eq!(whole("DILAW"), whole("Dílaw"));
+        assert_eq!(whole("Señorita [Live]"), "senoritalive");
+    }
+
+    /// A server's copy is the same version (the Android app's ServerFirstTest.onlyTheSameVersionCounts).
+    #[test]
+    fn same_copy_pairs() {
+        assert!(!same_copy("Maki", "Dilaw (Acoustic)", &song("Maki", "Dilaw")));
+        assert!(same_copy("Mäki", "DILAW", &song("Maki", "Dilaw")));
+        assert!(same_copy("Maki (PH)", "Dilaw", &song("Maki", "Dilaw")));
+        assert!(!same_copy("Moira", "Dilaw", &song("Maki", "Dilaw")));
     }
 
     fn song(artist: &str, title: &str) -> Track {

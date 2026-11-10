@@ -15,3 +15,5 @@ serde_json = "1"
 serde_yaml = "0.9"
 # track::digest: the first 16 hex digits of SHA-256, as GLib made them
 sha2 = "0.10"
+# track::whole: accents taken off (NFD), as the phone matches a server's copy
+unicode-normalization = "0.1"
