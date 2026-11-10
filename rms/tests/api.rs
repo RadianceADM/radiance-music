@@ -1188,8 +1188,10 @@ async fn next_event<S>(ws: &mut S, ok: impl Fn(&Value) -> bool) -> Value
 where
     S: futures_util::Stream<Item = Result<tokio_tungstenite::tungstenite::Message, tokio_tungstenite::tungstenite::Error>> + Unpin,
 {
+    // 30 s for the one wanted, whatever else comes meanwhile (the server's pings every 25 s, other events)
+    let until = tokio::time::Instant::now() + Duration::from_secs(30);
     loop {
-        let m = tokio::time::timeout(Duration::from_secs(30), ws.next()).await.expect("an event in time").expect("the line is open").unwrap();
+        let m = tokio::time::timeout_at(until, ws.next()).await.expect("an event in time").expect("the line is open").unwrap();
         if let Ok(text) = m.to_text() {
             if let Ok(v) = serde_json::from_str::<Value>(text) {
                 if ok(&v) {
@@ -1213,16 +1215,18 @@ async fn change_events_instead_of_polling() {
     let hello = next_event(&mut ws, |v| v["type"] == "hello").await;
     assert_eq!(hello["server"]["id"], status["id"]);
 
-    // a song added: the library changed
-    let form = reqwest::multipart::Form::new().part("song", reqwest::multipart::Part::bytes(flac(4_000)).file_name("Kai - Eleven.flac"));
-    let res = s.http.post(format!("{}/api/songs", s.base)).bearer_auth(&owner).multipart(form).send().await.unwrap();
-    assert_eq!(res.status(), StatusCode::CREATED);
-    let song = res.json::<Value>().await.unwrap()["song"]["id"].clone();
+    // a song added: the library changed. (Its parts are said to follow, so the server doesn't split it
+    // at once: its parts then land only after the split asked for below, never inside this first change,
+    // as two changes close together go out as one "library".)
+    let v = upload_song(&s, &owner, "Kai - Eleven.flac", "?parts=coming").await;
+    let song = v["song"]["id"].clone();
     next_event(&mut ws, |v| v["type"] == "library").await;
-    // the song is split by itself (every song on the server is): the queue as it goes, up to done,
-    // and the library (its parts); asking for it too gives its place, not a second job
+    // a split asked for: the queue as it goes, up to done, and the library (its parts);
+    // asking again gives its place, not a second job
     let (st, v) = s.post("/api/split", Some(&mika), json!({ "song": song })).await;
-    assert!(st == StatusCode::OK && (v["queued"] == false), "{v}");
+    assert!(st.is_success() && v["queued"] == true, "{v}");
+    let (st, v) = s.post("/api/split", Some(&mika), json!({ "song": song })).await;
+    assert!(st == StatusCode::OK && v["queued"] == false, "{v}");
     let first = next_event(&mut ws, |v| v["type"] == "queue").await;
     assert_eq!(first["jobs"][0]["song"]["title"], "Eleven");
     assert!(first["splitter"]["ready"].as_bool().unwrap());
@@ -1269,4 +1273,23 @@ async fn change_events_instead_of_polling() {
     assert!(closed);
     let (st, _) = s.get("/api/me", Some(&mika)).await;
     assert_eq!(st, StatusCode::UNAUTHORIZED);
+}
+
+/// The line closes right after the "me" of the removal itself, never after an earlier "me" (radiance-music#74:
+/// a friend removed the moment they heard of a switch change could have their line closed without the
+/// removal's own "me"). Many friends, each removed as soon as they're told of a change.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_removal_is_told_before_the_line_closes() {
+    let s = server(true).await;
+    let owner = s.setup("Bassi").await;
+    for n in 0..25 {
+        let (token, id) = s.friend(&owner, &format!("Friend {n}")).await;
+        let (mut ws, _) = tokio_tungstenite::connect_async(format!("{}/api/events?t={token}", s.base.replace("http://", "ws://"))).await.unwrap();
+        next_event(&mut ws, |v| v["type"] == "hello").await;
+        let res = s.http.patch(format!("{}/api/people/{id}", s.base)).bearer_auth(&owner).json(&json!({ "can_split": false })).send().await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        next_event(&mut ws, |v| v["type"] == "me").await;
+        s.post(&format!("/api/people/{id}/revoke"), Some(&owner), json!({})).await;
+        next_event(&mut ws, |v| v["type"] == "me").await;
+    }
 }
