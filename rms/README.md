@@ -204,8 +204,8 @@ party's WebSocket also accept `?t=TOKEN`, because players and browsers can't set
 | `GET /api/songs/ID` | One song, as one entry of `/api/library` |
 | `POST /api/songs/ID/parts` (multipart) | A song split on a phone or computer brings its parts: `drums`, `bass`, `other`, `vocals` (all four, with what the server has), `music`, and optional `lyrics`. Parts the server has are skipped. `replace=1` (query or field; the owner only) puts the new ones in their place. Needs "Can add songs" |
 | `GET /files/NAME` | Any library file, with HTTP Range (seeking) |
-| `POST /api/songs` (multipart) | `song` file, plus optional `cover`, `lyrics`, `video`, `artist`, `title`, `seconds`. If the song is already there (same artist and title), it's skipped |
-| `POST /api/split {song}` | Queues a song for splitting (`song`: its id, or its file name) |
+| `POST /api/songs` (multipart) | `song` file, plus optional `cover`, `lyrics`, `video`, `artist`, `title`, `seconds`. If the song is already there (same artist and title), it's skipped. Every song on the server gets split: unless it's split already, it goes in the split queue for whoever sent it (`split_job` in the answer). If its parts follow (a device split it), send `parts=coming` (query or field) and then `POST /api/songs/ID/parts`; a song whose parts arrive before its turn isn't split again |
+| `POST /api/split {song}` | Queues a song for splitting (`song`: its id, or its file name); asking for one in the queue already gives its place. Songs put straight in the library folder are queued at the server's start |
 | `GET /api/queue`, `DELETE /api/queue/ID` | The split queue with progress and plain-words notes. Waiting songs are listed in their turns, and `next_turn` says whose turn is next. Take a song out (the owner, or whoever asked) |
 | `GET /api/time` | `{now_ms}`: the server's clock, for clock-offset pings (no token needed) |
 | `GET /api/party` | The party's state (`on: false` when there's none) |

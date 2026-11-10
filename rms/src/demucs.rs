@@ -1,9 +1,10 @@
 //! Demucs (htdemucs, as ONNX: the model the phone and the app's prototype run)
 //! splitting a song into drums, bass, other and vocals, in this process.
 //!
-//! As the phone's Separate.kt and engine/src/onnx_split.rs: the song in pieces
-//! of N frames (7.8 s, fixed when the model was exported), each overlapping the
-//! last by a quarter, faded across and blended. As split.py: the song
+//! As Demucs's own apply_model, the way split.py calls it (checked against it:
+//! tests/fixtures/demucs): the song in pieces of N frames (7.8 s, fixed when the
+//! model was exported), a new one every three quarters of a piece, blended by a
+//! triangle (owner, 2026-11-09: "Blend like Python"). As split.py: the song
 //! normalised first (its mono mix's mean and spread), then the parts written
 //! (vocals, music = all but the vocals, drums, bass, other), all at once.
 
@@ -18,7 +19,9 @@ pub const RATE: u32 = 44_100;
 pub const PARTS: [&str; 4] = ["drums", "bass", "other", "vocals"];
 /// A piece's frames (the exported model's fixed length), and its overlap.
 pub const N: usize = 343_980;
-const OVERLAP: usize = N / 4;
+/// How far apart pieces start (Demucs: int(0.75 * N)).
+#[cfg(test)]
+const STRIDE: usize = 257_985;
 /// The longest song the server splits: the splitting runs in the server's own memory (a 20-minute
 /// song's samples take about 2.7 GB while it works), and a song that takes it down takes everyone's down.
 pub const MOST_MINUTES: usize = 20;
@@ -28,76 +31,82 @@ pub fn too_long(frames: usize) -> Option<String> {
     let minutes = frames / RATE as usize / 60;
     (frames > MOST_MINUTES * 60 * RATE as usize).then(|| format!("it's {minutes} minutes long, and the server splits songs up to {MOST_MINUTES} minutes"))
 }
-const STRIDE: usize = N - OVERLAP;
 
 /// The model on one piece: planar stereo in ([left N][right N]), the four
 /// parts out ([part][channel][N]).
 pub type Model<'a> = &'a mut dyn FnMut(&[f32]) -> Result<Vec<f32>, String>;
 
-/// The fade: in over the overlap, out over the overlap, never quite 0 (a
-/// sample only one piece covers, the song's first or last, keeps its weight).
-fn window() -> Vec<f32> {
-    (0..N)
-        .map(|i| {
-            if i < OVERLAP {
-                (i + 1) as f32 / (OVERLAP + 1) as f32
-            } else if i >= N - OVERLAP {
-                (N - i) as f32 / (OVERLAP + 1) as f32
-            } else {
-                1.0
-            }
-        })
-        .collect()
+/// Demucs's weights for a piece of `n` frames (apply_model): a triangle, highest in the middle, never 0
+/// (1, 2, … n/2, … 2, 1, over its highest), so each frame's parts are mostly from the piece it's
+/// nearest the middle of.
+fn triangle(n: usize) -> Vec<f32> {
+    let half = n / 2;
+    let w: Vec<f32> = (1..=half).chain((1..=n - half).rev()).map(|v| v as f32).collect();
+    let most = w.iter().copied().fold(0.0f32, f32::max);
+    w.into_iter().map(|v| v / most).collect()
 }
 
 /// The four parts of interleaved stereo `x` (each interleaved, as long as `x`).
 pub fn separate(x: &[f32], run: Model, progress: &dyn Fn(f64), stop: &AtomicBool) -> Result<[Vec<f32>; 4], String> {
+    separate_n(x, N, run, progress, stop)
+}
+
+/// `separate` with pieces of `n` frames (the model's own: N; the tests' small ones), as Demucs's
+/// apply_model does it for split.py (split, overlap 0.25; its random shift left out): the song
+/// normalised by its mono mix (mean, and spread over n - 1 as torch's std); a piece every 3/4 of a
+/// piece to the song's end; a piece shorter than `n` (the song's last, or a short song) widened
+/// around its middle with the song on either side (silence past its ends), its parts trimmed back;
+/// the pieces blended by the triangle.
+pub fn separate_n(x: &[f32], n: usize, run: Model, progress: &dyn Fn(f64), stop: &AtomicBool) -> Result<[Vec<f32>; 4], String> {
     let total = x.len() / 2;
     if total == 0 {
         return Err("the song has no sound".into());
     }
     let mono = |i: usize| 0.5 * (x[2 * i] + x[2 * i + 1]) as f64;
     let mean = (0..total).map(mono).sum::<f64>() / total as f64;
-    let std = ((0..total).map(|i| (mono(i) - mean).powi(2)).sum::<f64>() / total as f64).sqrt() + 1e-8;
-    let (mean, std) = (mean as f32, std as f32);
-    let window = window();
+    let spread = (0..total).map(|i| (mono(i) - mean).powi(2)).sum::<f64>() / (total.max(2) - 1) as f64;
+    let (mean, std) = (mean as f32, spread.sqrt() as f32 + 1e-8);
+    let norm = |i: isize, ch: usize| if i >= 0 && (i as usize) < total { (x[2 * i as usize + ch] - mean) / std } else { 0.0 };
+    let weight = triangle(n);
+    let stride = (0.75 * n as f64) as usize;
+    let starts: Vec<usize> = (0..total).step_by(stride.max(1)).collect();
     let mut acc: [Vec<f32>; 4] = std::array::from_fn(|_| vec![0.0; 2 * total]);
-    let mut weight = vec![0.0f32; total];
-    let pieces = if total <= N { 1 } else { 1 + (total - N).div_ceil(STRIDE) };
-    let mut piece = vec![0.0f32; 2 * N];
-    for c in 0..pieces {
+    let mut sum = vec![0.0f32; total];
+    let mut piece = vec![0.0f32; 2 * n];
+    for (c, &s) in starts.iter().enumerate() {
         if stop.load(Ordering::Relaxed) {
             return Err(REMOVED.into());
         }
-        let s = c * STRIDE;
-        let len = N.min(total - s);
-        piece.fill(0.0);
-        for i in 0..len {
-            piece[i] = (x[2 * (s + i)] - mean) / std;
-            piece[N + i] = (x[2 * (s + i) + 1] - mean) / std;
+        let len = n.min(total - s);
+        // widened around its middle to the model's length (apply_model's TensorChunk.padded)
+        let pad = (n - len) / 2;
+        let from = s as isize - pad as isize;
+        for k in 0..n {
+            piece[k] = norm(from + k as isize, 0);
+            piece[n + k] = norm(from + k as isize, 1);
         }
         let y = run(&piece)?;
-        if y.len() < 8 * N {
-            return Err(format!("the splitting model gave {} values, not {}", y.len(), 8 * N));
+        if y.len() < 8 * n {
+            return Err(format!("the splitting model gave {} values, not {}", y.len(), 8 * n));
         }
+        // its parts trimmed back around the middle (center_trim), weighted from the triangle's start
         for (p, part) in acc.iter_mut().enumerate() {
             for ch in 0..2 {
-                let base = (p * 2 + ch) * N;
+                let base = (p * 2 + ch) * n + pad;
                 for i in 0..len {
-                    part[2 * (s + i) + ch] += y[base + i] * window[i];
+                    part[2 * (s + i) + ch] += weight[i] * y[base + i];
                 }
             }
         }
         for i in 0..len {
-            weight[s + i] += window[i];
+            sum[s + i] += weight[i];
         }
-        progress((c + 1) as f64 / pieces as f64);
+        progress((c + 1) as f64 / starts.len() as f64);
     }
     for part in acc.iter_mut() {
         for i in 0..total {
-            let w = weight[i];
-            part[2 * i] = part[2 * i] / w * std + mean;
-            part[2 * i + 1] = part[2 * i + 1] / w * std + mean;
+            part[2 * i] = part[2 * i] / sum[i] * std + mean;
+            part[2 * i + 1] = part[2 * i + 1] / sum[i] * std + mean;
         }
     }
     Ok(acc)
@@ -146,6 +155,42 @@ mod tests {
         }).collect()
     }
 
+    /// The reference's stand-in model (gen_demucs.py's Ramp): each part is its piece times a ramp along the
+    /// piece, times the part's number, so where pieces start, how a short one is padded, and how they're
+    /// weighted all show.
+    fn ramp(n: usize) -> impl FnMut(&[f32]) -> Result<Vec<f32>, String> {
+        move |piece: &[f32]| {
+            let mut y = vec![0.0f32; 8 * n];
+            for p in 0..4 {
+                for ch in 0..2 {
+                    for k in 0..n {
+                        let r = 1.0f32 + k as f32 / n as f32;
+                        y[(p * 2 + ch) * n + k] = piece[ch * n + k] * r * (p + 1) as f32;
+                    }
+                }
+            }
+            Ok(y)
+        }
+    }
+
+    #[test]
+    fn the_blend_is_demucs_apply_models() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/demucs/apply_model.json");
+        let fixture: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        let n = fixture["n"].as_u64().unwrap() as usize;
+        let floats = |v: &serde_json::Value| v.as_array().unwrap().iter().map(|x| x.as_f64().unwrap() as f32).collect::<Vec<f32>>();
+        for case in fixture["cases"].as_array().unwrap() {
+            let x = floats(&case["x"]);
+            let parts = separate_n(&x, n, &mut ramp(n), &|_| {}, &AtomicBool::new(false)).unwrap();
+            for (p, want) in case["parts"].as_array().unwrap().iter().enumerate() {
+                let want = floats(want);
+                assert_eq!(parts[p].len(), want.len());
+                let worst = parts[p].iter().zip(&want).map(|(a, b)| (a - b).abs()).fold(0.0f32, f32::max);
+                assert!(worst < 2e-5, "{} frames, part {p}: {worst}", case["total"]);
+            }
+        }
+    }
+
     #[test]
     fn a_model_that_changes_nothing_gives_the_song_back() {
         // shorter than one piece, two pieces, four
@@ -157,8 +202,8 @@ mod tests {
                 identity(p)
             }, &|_| {}, &AtomicBool::new(false))
             .unwrap();
-            let total = x.len() / 2;
-            let want = if total <= N { 1 } else { 1 + (total - N).div_ceil(STRIDE) };
+            // as Demucs: a piece every STRIDE frames, to the song's end
+            let want = (x.len() / 2).div_ceil(STRIDE);
             assert_eq!(*calls.lock().unwrap(), want, "{secs} s");
             for part in &parts {
                 assert_eq!(part.len(), x.len());

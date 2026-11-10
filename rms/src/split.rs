@@ -197,6 +197,7 @@ async fn rest(app: &Shared, secs: u64) {
 pub async fn worker(app: Shared) {
     // songs that were being split when the server stopped start over
     let _ = app.db().execute("UPDATE jobs SET state = 'waiting', progress = 0, note = NULL, started_ms = NULL WHERE state IN ('splitting', 'timing')", []);
+    queue_unsplit(&app).await;
     if models_ready(&app) {
         app.splitter.set_models(|m| {
             m.state = "ready";
@@ -256,7 +257,20 @@ fn set_job(app: &Shared, job: i64, state: &str, progress: f64, note: Option<&str
 /// The note of a song that stopped the server twice while it was being split.
 const STOPPED_THE_SERVER: &str = "It stopped the server twice while it was being split (perhaps not enough memory for it), so it was taken out of the queue.";
 
+/// The note of a song whose parts came (from a device that split it) before its turn.
+const PARTS_CAME: &str = "Its parts came with it (split on a device), so the server didn't split it again.";
+
 async fn run(app: &Shared, job: i64, song: i64) {
+    let dir = app.cfg.library();
+    let file = crate::db::song(&app.db(), song).ok().flatten().map(|s| s.file);
+    let split = match file {
+        Some(file) => tokio::task::spawn_blocking(move || library::found(&dir, &file).is_some_and(|f| f.split())).await.unwrap_or(false),
+        None => false,
+    };
+    if split {
+        set_job(app, job, "done", 1.0, Some(PARTS_CAME));
+        return;
+    }
     // the splitting runs inside the server: a song that takes it down (memory) mustn't take it down for ever
     let tries_file = app.cfg.work().join(format!("job-{job}.tries"));
     let tries: u32 = std::fs::read_to_string(&tries_file).ok().and_then(|t| t.trim().parse().ok()).unwrap_or(0);
@@ -470,26 +484,50 @@ pub async fn ask(State(app): State<Shared>, who: Who, Json(body): Json<AskBody>)
     if split {
         return Ok((StatusCode::OK, Json(json!({ "already_split": true, "queued": false, "song": { "id": song.id, "artist": song.artist, "title": song.title } }))));
     }
+    let (job, queued) = queue_song(&app, song.id, Some(who.person), &who.name, &song.file)?;
+    let status = if queued { StatusCode::CREATED } else { StatusCode::OK };
+    Ok((status, Json(json!({ "already_split": false, "queued": queued, "job": job }))))
+}
+
+/// Puts a song in the queue for `asked_by` (None: the server itself), unless it's waiting or being
+/// split already: the job as the queue shows it, and whether it was queued now.
+pub fn queue_song(app: &Shared, song_id: i64, asked_by: Option<i64>, by: &str, file: &str) -> Result<(Value, bool), crate::ApiError> {
     let (row, queued) = {
         let conn = app.db();
-        let there: Option<i64> = conn.query_row("SELECT id FROM jobs WHERE song_id = ?1 AND state IN ('waiting', 'splitting', 'timing') ORDER BY id LIMIT 1", params![song.id], |r| r.get(0)).optional()?;
+        let there: Option<i64> = conn.query_row("SELECT id FROM jobs WHERE song_id = ?1 AND state IN ('waiting', 'splitting', 'timing') ORDER BY id LIMIT 1", params![song_id], |r| r.get(0)).optional()?;
         let (id, queued) = match there {
             Some(id) => (id, false),
             None => {
-                conn.execute("INSERT INTO jobs (song_id, asked_by, state, created_ms) VALUES (?1, ?2, 'waiting', ?3)", params![song.id, who.person, now_ms()])?;
+                conn.execute("INSERT INTO jobs (song_id, asked_by, state, created_ms) VALUES (?1, ?2, 'waiting', ?3)", params![song_id, asked_by, now_ms()])?;
                 (conn.last_insert_rowid(), true)
             }
         };
         (conn.query_row(&format!("{JOB_SELECT} WHERE j.id = ?1"), params![id], job_row)?, queued)
     };
     if queued {
-        crate::log(&format!("{} queued {} for splitting", who.name, song.file));
+        crate::log(&format!("{by} queued {file} for splitting"));
         app.splitter.wake.notify_one();
         app.events.queue();
     }
     let ahead = turns(&app.db())?.iter().position(|(job, _)| *job == row.id);
-    let status = if queued { StatusCode::CREATED } else { StatusCode::OK };
-    Ok((status, Json(json!({ "already_split": false, "queued": queued, "job": job_json(&app, &row, ahead) }))))
+    Ok((job_json(app, &row, ahead), queued))
+}
+
+/// Every song on the server is split (owner, 2026-11-09: "never mag kakaroon ng kanta sa server na
+/// hindi na iisplit"): at the start, the library's songs that aren't, and never were in the queue
+/// (one taken out of it stays out), go in it for the server itself.
+async fn queue_unsplit(app: &Shared) {
+    let a = app.clone();
+    let Ok(Ok(songs)) = tokio::task::spawn_blocking(move || library::sync(&a)).await else { return };
+    for (song, found) in songs {
+        if found.split() {
+            continue;
+        }
+        let never: bool = app.db().query_row("SELECT COUNT(*) = 0 FROM jobs WHERE song_id = ?1", params![song.id], |r| r.get(0)).unwrap_or(false);
+        if never {
+            let _ = queue_song(app, song.id, None, "the server", &song.file);
+        }
+    }
 }
 
 /// GET /api/queue: the songs at work, the waiting ones in their turns (and

@@ -559,6 +559,17 @@ mod tests {
         }
     }
 
+    /// One song split with the real models into RMS_REAL_OUT (by hand, for measuring against Python's).
+    #[test]
+    #[ignore]
+    fn split_one_song_for_measuring() {
+        let var = |k: &str| PathBuf::from(std::env::var(k).unwrap_or_else(|_| panic!("{k}")));
+        let e = Onnx::new(var("RMS_REAL_MODELS"), 8);
+        let t0 = std::time::Instant::now();
+        let names = e.split(&var("RMS_REAL_SONG"), &var("RMS_REAL_OUT"), &|_| {}, &AtomicBool::new(false)).unwrap();
+        eprintln!("split in {:.1} s: {names:?}", t0.elapsed().as_secs_f64());
+    }
+
     /// The real models against today's Python (ribs02, by hand): RMS_REAL_MODELS (fetched models),
     /// RMS_REAL_SONG, RMS_REAL_REF (split.py's vocals.ogg and align.py's words.yaml of that song,
     /// and the given.json it was given).

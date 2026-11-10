@@ -104,7 +104,7 @@
     <!-- the server's page -->
     <section id="dash" class="hidden">
       <div id="banners"></div>
-      <div class="grid">
+      <div class="grid dash-grid">
         <div class="stack">
           <div class="card" id="party-card"></div>
           <div class="card hidden" id="splitter-card"></div>
@@ -157,14 +157,17 @@
                 <button class="btn quiet" type="button" onclick="toggleUpload(false)"><span data-icon="x"></span>Cancel</button>
               </div>
             </form>
-            <div class="row"><input type="search" id="search" placeholder="Search the library" oninput="drawLibrary()"></div>
+            <div class="row"><input type="search" id="search" placeholder="Search the library" oninput="libPage = 0; drawLibrary()"></div>
+            <div id="lib-tabs" class="tabs"></div>
             <div id="library" class="list"></div>
+            <div id="lib-pager"></div>
           </div>
 
           <div class="card stack">
             <h2 class="section-title"><span data-icon="split"></span>Split queue</h2>
             <div id="next-turn" class="row"></div>
             <div id="queue" class="list"></div>
+            <div id="queue-pager"></div>
           </div>
         </div>
       </div>
@@ -178,6 +181,27 @@
 <script>
 const { api, esc, toast, show, $ } = RMS;
 let srv = null, me = null, songs = [], jobs = [], party = null, timers = [];
+// the long lists page (owner, 2026-11-10: "sobrang haba nung sa songs")
+const LIB_PAGE = 20, QUEUE_PAGE = 10;
+let libPage = 0, libTab = 'all', queuePage = 0;
+
+/** "1–20 of 312" and Previous / Next under a list; `go(page)` draws that page. */
+function pager(id, page, total, size, go) {
+  const el = $('#' + id);
+  const pages = Math.max(1, Math.ceil(total / size));
+  if (total <= size) { el.innerHTML = ''; return 0; }
+  page = Math.min(Math.max(0, page), pages - 1);
+  const from = page * size + 1, to = Math.min(total, (page + 1) * size);
+  el.innerHTML = `<div class="pager"><span class="where">${from}–${to} of ${total} · page ${page + 1} of ${pages}</span>
+    <span class="row" style="gap:6px"><button class="btn small" ${page === 0 ? 'disabled' : ''} onclick="${go}(${page - 1})"><span data-icon="left"></span>Previous</button>
+    <button class="btn small" ${page >= pages - 1 ? 'disabled' : ''} onclick="${go}(${page + 1})">Next<span data-icon="right"></span></button></span></div>`;
+  RMS.hydrate(el);
+  return page;
+}
+
+function libGo(page) { libPage = page; drawLibrary(); $('#library').scrollIntoView({ block: 'nearest' }); }
+function libFilter(tab) { libTab = tab; libPage = 0; drawLibrary(); }
+function queueGo(page) { queuePage = page; drawQueue(); }
 
 function view(id) {
   ['loading', 'offline', 'setup', 'welcome', 'visitor', 'removed', 'dash'].forEach((v) => show($('#' + v), v === id));
@@ -312,7 +336,7 @@ function drawSplitter(el, always = false) {
   else if (m.state === 'ready') body = `<p class="muted small" style="margin:0"><span class="pill good">Ready</span> Songs split here, one at a time, at the lowest priority.</p>`;
   else if (m.state === 'failed') body = `<p class="error-text" style="margin:0">${esc(m.message)}</p>`;
   else body = `<div class="bar"><div style="width:${Math.round(m.progress * 100)}%"></div></div>
-    <p class="muted small">${esc(m.message)} ${Math.round(m.progress * 100)} %. Only this once: about 1.3 GB, kept with your library.</p>`;
+    <p class="muted small">${esc(m.message)} ${Math.round(m.progress * 100)} %. Only this once, kept with your library.</p>`;
   el.innerHTML = `<h3>${ready ? 'The splitter' : 'Getting the splitter ready'}</h3>${body}`;
 }
 
@@ -349,18 +373,32 @@ async function loadLibrary() {
 
 function drawLibrary() {
   const q = $('#search').value.trim().toLowerCase();
-  const list = q ? songs.filter((s) => (s.artist + ' ' + s.title).toLowerCase().includes(q)) : songs;
   const queued = new Set(jobs.filter((j) => ['waiting', 'splitting', 'timing'].includes(j.state)).map((j) => j.song.id));
+  const found = q ? songs.filter((s) => (s.artist + ' ' + s.title).toLowerCase().includes(q)) : songs;
+  const tabs = [
+    ['all', 'All', () => true],
+    ['unsplit', 'Not split yet', (s) => !s.split && !queued.has(s.id)],
+    ['queued', 'In the queue', (s) => !s.split && queued.has(s.id)],
+    ['split', 'Split', (s) => s.split],
+  ];
+  const pick = (tabs.find((t) => t[0] === libTab) || tabs[0])[2];
+  $('#lib-tabs').innerHTML = songs.length ? tabs.map(([key, label, f]) => `<button class="tab ${key === libTab ? 'on' : ''}" onclick="libFilter('${key}')">${label}<span class="n">${found.filter(f).length}</span></button>`).join('') : '';
+  const list = found.filter(pick);
   let html;
   if (!songs.length) {
     html = `<div class="empty"><span data-icon="music"></span><div>No songs yet.</div>
       <p class="small">Add one here, or copy your Music folder (the songs as the app saves them) into the server's library folder.</p>
       ${me.can.add ? '<button class="btn primary small" onclick="toggleUpload(true)"><span data-icon="upload"></span>Add a song</button>' : ''}</div>`;
   } else if (!list.length) {
-    html = `<div class="empty"><span data-icon="search"></span><div>No songs match "${esc(q)}".</div>
-      <button class="btn small" onclick="$('#search').value='';drawLibrary()"><span data-icon="x"></span>Clear the search</button></div>`;
+    const what = { unsplit: 'not split yet', queued: 'in the queue', split: 'split' }[libTab];
+    html = q
+      ? `<div class="empty"><span data-icon="search"></span><div>No songs ${what ? what + ' ' : ''}match "${esc(q)}".</div>
+      <button class="btn small" onclick="$('#search').value='';libPage=0;drawLibrary()"><span data-icon="x"></span>Clear the search</button></div>`
+      : `<div class="empty"><span data-icon="music"></span><div>No songs ${what || ''} right now.</div>
+      <button class="btn small" onclick="libFilter('all')"><span data-icon="music"></span>Show all songs</button></div>`;
   } else {
-    html = list.slice(0, 300).map((s) => {
+    libPage = pager('lib-pager', libPage, list.length, LIB_PAGE, 'libGo');
+    html = list.slice(libPage * LIB_PAGE, (libPage + 1) * LIB_PAGE).map((s) => {
       const badges = [s.split ? '<span class="pill on">Split</span>' : '', s.word_times ? '<span class="pill on">Word times</span>' : s.lyrics ? '<span class="pill">Lyrics</span>' : '', s.video ? '<span class="pill">Video</span>' : '']
         .filter(Boolean).join(' ');
       const art = s.cover ? `<img class="art" loading="lazy" decoding="async" src="${esc(RMS.fileUrl(s.cover))}" alt="">` : `<div class="art">${RMS.icon('music')}</div>`;
@@ -372,8 +410,8 @@ function drawLibrary() {
         <div class="row" style="gap:4px;margin-top:2px">${badges}</div></div>
         <button class="btn small round" title="Play" onclick="preview(this, '${esc(s.url)}')"><span data-icon="play"></span></button>${action}</div>`;
     }).join('');
-    if (list.length > 300) html += `<div class="empty small">And ${list.length - 300} more: search to find them.</div>`;
   }
+  if (!list.length) $('#lib-pager').innerHTML = '';
   $('#library').innerHTML = html;
   RMS.hydrate($('#library'));
 }
@@ -403,27 +441,33 @@ async function loadQueue() {
   const wasBusy = jobs.some((j) => ['splitting', 'timing'].includes(j.state));
   jobs = r.data.jobs;
   const busy = jobs.some((j) => ['splitting', 'timing'].includes(j.state));
-  const owner = me && me.person.role === 'owner';
-  const el = $('#queue');
   // people take turns (owner, 2026-11-01): whose song is next
   const next = r.data.next_turn;
   $('#next-turn').innerHTML = next ? `<span class="pill on">${RMS.icon('users')} Next turn: ${esc(next.name)}</span> <span class="hint">Everyone takes turns, one song each.</span>` : '';
+  drawQueue();
+  if (wasBusy && !busy) loadLibrary();
+  else drawLibrary();
+}
+
+function drawQueue() {
+  const owner = me && me.person.role === 'owner';
+  const el = $('#queue');
   if (!jobs.length) {
-    el.innerHTML = `<div class="empty"><span data-icon="split"></span><div>Nothing to split.</div><p class="small">Pick Split on a song in the library: its parts and word times land beside it, for everyone.</p></div>`;
+    $('#queue-pager').innerHTML = '';
+    el.innerHTML = `<div class="empty"><span data-icon="split"></span><div>Nothing to split.</div><p class="small">Every song added to the server is split by itself: its parts and word times land beside it, for everyone.</p></div>`;
   } else {
-    el.innerHTML = jobs.map((j) => {
+    queuePage = pager('queue-pager', queuePage, jobs.length, QUEUE_PAGE, 'queueGo');
+    el.innerHTML = jobs.slice(queuePage * QUEUE_PAGE, (queuePage + 1) * QUEUE_PAGE).map((j) => {
       const running = ['splitting', 'timing'].includes(j.state);
       const pill = { waiting: '<span class="pill">Waiting</span>', splitting: '<span class="pill on">Splitting</span>', timing: '<span class="pill on">Timing words</span>', done: '<span class="pill good">Done</span>', failed: '<span class="pill bad">Didn\'t split</span>' }[j.state] || '';
       const mine = owner || (j.asked_by && me && j.asked_by.id === me.person.id);
       const out = (j.state === 'waiting' || running) && mine ? `<button class="btn quiet small" onclick="unqueue(${j.id})"><span data-icon="x"></span>Take out</button>` : '';
       return `<div class="item"><div class="grow"><div class="title">${esc(j.song.title)} <span class="muted" style="font-weight:400">· ${esc(j.song.artist)}</span></div>
-        <div class="meta">${pill} ${esc(j.note)}${j.asked_by ? ' · asked by ' + esc(j.asked_by.name) : ''}</div>
+        <div class="meta">${pill} ${esc(j.note)}${j.asked_by ? ' · asked by ' + esc(j.asked_by.name) : ' · queued by the server'}</div>
         ${running ? `<div class="bar" style="margin-top:6px"><div style="width:${Math.round(j.progress * 100)}%"></div></div>` : ''}</div>${out}</div>`;
     }).join('');
   }
   RMS.hydrate(el);
-  if (wasBusy && !busy) loadLibrary();
-  else drawLibrary();
 }
 
 async function unqueue(id) {

@@ -113,8 +113,11 @@ async fn listen(app: Shared, who: Who, socket: WebSocket) {
                     Err(broadcast::error::RecvError::Closed) => break,
                 };
                 if mine {
+                    // asked before telling: a device removed the moment it hears of an earlier change
+                    // would otherwise see the line close without the removal's own "me" (#74)
+                    let joined = crate::party::still_joined(&app, who.device);
                     if tx.send(text(json!({ "type": "me" }))).await.is_err() { break; }
-                    if !crate::party::still_joined(&app, who.device) {
+                    if !joined {
                         let _ = tx.send(Message::Close(None)).await;
                         break;
                     }
