@@ -21,7 +21,7 @@ use std::time::Duration;
 use serde_json::{json, Value};
 
 use crate::net;
-use crate::track::{file_name, Source, Track};
+use crate::track::{file_name, same_copy, Source, Track};
 
 /// A server this computer joined: where it is, its key for this computer, and its name.
 #[derive(Clone, Debug, PartialEq)]
@@ -724,14 +724,123 @@ pub fn upload_parts(server: &Joined, id: i64, t: &Track) -> Result<(Vec<String>,
 }
 
 /// The song on a server that's this one (a server's own song; else the same
-/// artist and title, as the server matches them), from its songs as fetched.
+/// version, as rule 1 matches it: see `same_copy`), from its songs as fetched.
 pub fn copy_on(server: &Joined, t: &Track) -> Option<Song> {
     let list = cached(&server.address);
     if let Some(s) = song_of(t).filter(|(s, _)| s.address == server.address).map(|(_, s)| s) {
         return Some(s);
     }
-    let same = |a: &str, b: &str| a.trim().to_lowercase() == b.trim().to_lowercase();
-    list.into_iter().find(|s| same(&s.artist, &t.artist) && same(&s.title, &t.title))
+    list.into_iter().find(|s| same_copy(&s.artist, &s.title, t))
+}
+
+// ------------------------------------------------------------------ rule 1: a joined server first
+//
+// Owner, 2026-11-09 ("applies to all platforms or os"): a device joined to a server asks it first; if
+// the server has the song, the device takes the server's copy (the song, its parts, lyrics and cover)
+// and doesn't go to YouTube or split it itself; if not, YouTube at once. As the phone's ServerFirst.
+
+/// How long a server has to answer whether it has a song.
+const ASK_FOR: Duration = Duration::from_secs(3);
+/// How long a song's answer is kept (found or not).
+const KEEP_ANSWER: Duration = Duration::from_secs(600);
+/// How long a server that didn't answer is passed over.
+const PASS_OVER: Duration = Duration::from_secs(60);
+
+type Answers = HashMap<String, (std::time::Instant, Option<(Joined, Song)>)>;
+static ANSWERS: Mutex<Option<Answers>> = Mutex::new(None);
+static AWAY: Mutex<Option<HashMap<String, std::time::Instant>>> = Mutex::new(None);
+/// YouTube songs whose stream came from a server: id → the server's address.
+static STREAMED_FROM: Mutex<Option<HashMap<String, String>>> = Mutex::new(None);
+
+/// One server asked whether it has this song (GET /api/library?q=TITLE, 3 s): its copy, if it has one.
+pub fn find_on(server: &Joined, t: &Track) -> Result<Option<Song>, Failure> {
+    let q = t.title.replace(['(', ')', '[', ']'], " ");
+    let resp = agent()
+        .get(&format!("{}/api/library", server.address))
+        .query("q", &q)
+        .header("Authorization", &bearer(&server.token))
+        .config()
+        .timeout_global(Some(ASK_FOR))
+        .build()
+        .call();
+    Ok(parse_library(&answer(resp)?).into_iter().find(|s| same_copy(&s.artist, &s.title, t)))
+}
+
+/// A server that didn't answer is passed over for a minute (a laptop away from home: no 3 s wait per song).
+pub fn skip_for_now(address: &str) {
+    if let Ok(mut a) = AWAY.lock() {
+        a.get_or_insert_with(HashMap::new).insert(address.to_string(), std::time::Instant::now());
+    }
+}
+
+pub fn is_away(address: &str) -> bool {
+    AWAY.lock().ok().and_then(|a| a.as_ref()?.get(address).map(|at| at.elapsed() < PASS_OVER)).unwrap_or(false)
+}
+
+/// The server's copy of a YouTube song (rule 1), from the servers joined, in the order joined: the first
+/// that has it. Each song's answer is kept 10 minutes. None for other songs, or with no server joined.
+pub fn copy_of(t: &Track) -> Option<(Joined, Song)> {
+    let joined = JOINED.read().map(|j| j.clone()).unwrap_or_default();
+    copy_among(&joined, t)
+}
+
+pub fn copy_among(joined: &[Joined], t: &Track) -> Option<(Joined, Song)> {
+    if t.source != Source::YouTube || joined.is_empty() {
+        return None;
+    }
+    let key = t.key();
+    if let Some(kept) = ANSWERS.lock().ok().and_then(|a| a.as_ref()?.get(&key).filter(|(at, _)| at.elapsed() < KEEP_ANSWER).map(|(_, c)| c.clone())) {
+        return kept;
+    }
+    let mut found = None;
+    for server in joined {
+        if is_away(&server.address) {
+            continue;
+        }
+        match find_on(server, t) {
+            Ok(Some(song)) => {
+                found = Some((server.clone(), song));
+                break;
+            }
+            Ok(None) => {}
+            // not there, or busy: passed over for a minute (a "no" it said, such as a 401, isn't)
+            Err(f) if f.status == 0 || f.status == 408 || f.status == 429 || f.status >= 500 => {
+                crate::log::note(&format!("{} didn't answer whether it has “{}” ({}): passed over for a minute", server.name, t.title, f.words(&server.name)));
+                skip_for_now(&server.address);
+            }
+            Err(_) => {}
+        }
+    }
+    if let Ok(mut a) = ANSWERS.lock() {
+        a.get_or_insert_with(HashMap::new).insert(key, (std::time::Instant::now(), found.clone()));
+    }
+    found
+}
+
+/// The address the player streams a server's copy from (with this computer's key).
+pub fn copy_stream(server: &Joined, song: &Song) -> String {
+    with_token(&format!("{}{}", server.address, song.url), &server.token)
+}
+
+/// A YouTube song's stream came from this server (rule 1): if it breaks, YouTube instead.
+pub fn note_stream(id: &str, address: &str) {
+    if let Ok(mut s) = STREAMED_FROM.lock() {
+        s.get_or_insert_with(HashMap::new).insert(id.to_string(), address.to_string());
+    }
+}
+
+/// The server a YouTube song's stream came from, if it did; forgotten as it's asked (a break is told once).
+pub fn stream_from(id: &str) -> Option<String> {
+    STREAMED_FROM.lock().ok().and_then(|mut s| s.as_mut()?.remove(id))
+}
+
+/// A song's answer forgotten (its server's copy broke while playing).
+pub fn forget_answer(t: &Track) {
+    if let Ok(mut a) = ANSWERS.lock() {
+        if let Some(a) = a.as_mut() {
+            a.remove(&t.key());
+        }
+    }
 }
 
 /// A song in a server's split queue.
@@ -1222,6 +1331,69 @@ mod tests {
 
     fn server() -> Joined {
         Joined::new("https://music.example.com", "ab12", "Bassi's server", Some("srv-1".into()))
+    }
+
+    fn yt(artist: &str, title: &str, id: &str) -> Track {
+        Track { source: Source::YouTube, id: id.into(), title: title.into(), artist: artist.into(), album: String::new(), seconds: 200, art: String::new(), format: String::new(), file: None, video: false, genres: None }
+    }
+
+    /// /api/library's answer with these (id, artist, title, split).
+    fn library_json(songs: &[(i64, &str, &str, bool)]) -> String {
+        let list: Vec<Value> = songs
+            .iter()
+            .map(|(id, a, t, split)| {
+                let file = format!("{a} - {t}.opus");
+                let mut files = json!({ "song": { "name": file, "size": 4, "url": format!("/files/{id}.opus") } });
+                if *split {
+                    for p in crate::split::PARTS {
+                        files[p] = json!({ "name": format!("{a} - {t}.{p}.ogg"), "size": 4, "url": format!("/files/{id}.{p}.ogg") });
+                    }
+                }
+                json!({ "id": id, "artist": a, "title": t, "file": file, "url": format!("/files/{id}.opus"), "split": split, "files": files })
+            })
+            .collect();
+        json!({ "server": "Bassi's server", "count": list.len(), "songs": list }).to_string()
+    }
+
+    /// Rule 1 (owner, 2026-11-09): the same version on a joined server (title to the letter, plain artist),
+    /// asked for by its title (brackets as spaces), the answer kept 10 minutes.
+    #[test]
+    fn rule_one_finds_the_same_version_on_a_server() {
+        let (address, seen) = stand_in(1, |_, path, _, _| {
+            if path.starts_with("/api/library?") {
+                (200, library_json(&[(4, "Maki", "Dilaw", true), (5, "Maki (PH)", "Dilaw [Live]", false)]))
+            } else {
+                (404, "{}".into())
+            }
+        });
+        let s = Joined::new(&address, "tok-1", "Bassi's server", None);
+        let t = yt("Maki", "Dilaw [Live]", "yt-dilaw-live");
+        let (on, song) = copy_among(&[s.clone()], &t).expect("its copy");
+        assert_eq!((on.address.as_str(), song.id), (address.as_str(), 5));
+        let seen = seen.join().unwrap();
+        assert!(seen[0].0.starts_with("GET /api/library?q=Dilaw"), "{:?}", seen[0].0);
+        assert!(!seen[0].0.contains("%5B") && !seen[0].0.contains('['), "brackets go as spaces: {:?}", seen[0].0);
+        assert!(seen[0].1.contains("Bearer tok-1"));
+        // asked again: the answer kept (the stand-in is gone, so a second call couldn't be answered)
+        assert_eq!(copy_among(&[s.clone()], &t).map(|(_, s)| s.id), Some(5));
+        assert_eq!(copy_stream(&s, &song), format!("{address}/files/5.opus?t=tok-1"));
+    }
+
+    /// The first server joined that has it is the one; one that doesn't answer is passed over for a minute.
+    #[test]
+    fn rule_one_asks_in_joined_order_and_passes_over_one_away() {
+        let (first, seen_first) = stand_in(1, |_, _, _, _| (200, library_json(&[(1, "Moira", "Dilaw", true)])));
+        let (second, seen_second) = stand_in(1, |_, _, _, _| (200, library_json(&[(9, "Maki", "Dilaw", true)])));
+        let away = stand_in(1, |_, _, _, _| (503, r#"{"error":"busy"}"#.into())).0;
+        let (a, b, c) = (Joined::new(&away, "t", "Away", None), Joined::new(&first, "t", "First", None), Joined::new(&second, "t", "Second", None));
+        let t = yt("Maki", "Dilaw", "yt-dilaw-order");
+        assert_eq!(copy_among(&[a.clone(), b, c], &t).map(|(s, song)| (s.name, song.id)), Some(("Second".into(), 9)));
+        assert_eq!((seen_first.join().unwrap().len(), seen_second.join().unwrap().len()), (1, 1));
+        assert!(is_away(&away), "a server that said 503 is passed over for a minute");
+        // not a YouTube song: never looked up
+        let mut lossless = yt("Maki", "Dilaw", "https://archive.org/x.flac");
+        lossless.source = Source::Archive;
+        assert_eq!(copy_among(&[a], &lossless), None);
     }
 
     #[test]
