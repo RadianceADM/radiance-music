@@ -1,6 +1,6 @@
 # Changelog
 
-## Not released yet
+## v0.7.23 — 2026-11-10
 
 - **Your Radiance Music Server first (#75):** joined to a server, the app asks it before YouTube.
   - **If the server has the song:**

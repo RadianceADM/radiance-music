@@ -4,7 +4,7 @@ The same features on the computer (Linux and Windows) and the phone (Android). T
 screens are made for a phone, so they look and work differently; this list is about what each
 one **can do**, not how it looks. Kept in step with every change (owner, 2026-11-02).
 
-As of: computer **0.7.21**, phone **0.5.15** (released versions). Built but not released yet:
+As of: computer **0.7.23**, phone **0.5.15** (released versions). Built but not released yet:
 marked 🔜.
 
 ✅ has it · ❌ missing (a gap to close) · ➖ not needed there (the platform does it its own way)
@@ -106,6 +106,8 @@ marked 🔜.
 | Join a server, browse, save, add your songs | ✅ | ✅ | ✅ | ✅ | the beta: beta.9 (join, browse, play) and beta.11 (Save to Your Library, Add to NAME, Split on NAME) |
 | radiancemusic:// invite links | ✅ | ✅ | ✅ | ✅ | the beta: an invite opens the Servers dialog; a clicked link opens today's Windows app until the beta replaces it (stage 5) |
 | Listening parties: in sync, reactions, host controls | ✅ | ✅ | ✅ | ✅ | the beta: beta.10 |
+| Your server first: a joined server's copy plays, is saved and gives its parts before YouTube (rule 1) | ✅ | ✅ | ✅ | 🔜 1.3.0 | computer: 0.7.23 (#75); the same title to the letter and the same artist; a server that doesn't answer in 3 s is passed over for a minute |
+| Songs split here go up to your servers by themselves (rule 2) | ✅ | ✅ | ✅ | 🔜 1.3.0 | computer: 0.7.23 (#75); four-part splits only, at 128 KB/s, waiting while offline; nothing is sent if the server's owner hasn't let you add songs |
 
 ## The app itself
 
