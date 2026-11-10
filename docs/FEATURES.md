@@ -9,7 +9,7 @@ marked 🔜.
 
 ✅ has it · ❌ missing (a gap to close) · ➖ not needed there (the platform does it its own way)
 
-**iPhone**: Radiance Music for iPhone and iPad (RadianceADM/radiance-music-ios, Swift and SwiftUI, built on Linux with xtool), 0.1.0 being built: 🔜 built and on the test iPhone, not released yet. Free-signed for now, so a copy opens for 7 days.
+**iPhone**: Radiance Music for iPhone and iPad (RadianceADM/radiance-music-ios, Swift and SwiftUI, built on Linux with xtool), 0.1.0 being built: 🔜 built, not released yet (installed on the test iPhone stage by stage). Free-signed for now, so a copy opens for 7 days.
 
 **Windows beta**: the native Windows app (WinUI 3, #45), growing stage by stage beside today's Windows app: ✅ in it now, 🔜 N comes in stage N (2: library, queue, videos, word-by-word lyrics; 3: parts and splitting; 4: servers, sharing, pop-ups, settings). It replaces today's Windows app only once its column matches the Windows one.
 
@@ -26,7 +26,7 @@ marked 🔜.
 | Albums, Artists, Genres pages | ✅ | ✅ | ✅ | ❌ | 🔜 | |
 | Playlists (make, add, rename, delete) | ✅ | ✅ | ✅ | ❌ | ❌ | |
 | History | ✅ | ✅ | ✅ | ✅ | 🔜 | computer keeps 1000, phone 300; iPhone: 300 |
-| Liked Songs: A to Z rail, own search, Play, Shuffle | ✅ | ✅ | ✅ | ✅ | ❌ | iPhone: own search, Play, Shuffle; no A to Z rail yet |
+| Liked Songs: A to Z rail, own search, Play, Shuffle | ✅ | ✅ | ✅ | ✅ | 🔜 | |
 | Downloading: the liked songs not saved yet, with how many, in the sidebar | 🔜 | 🔜 | ✅ | ❌ | ❌ | always there; the ones saving now first, Fix missing on its page (#66) |
 | Music videos: watch in the app | ✅ | ✅ | ✅ | ➖ | ➖ | phone: none, by the owner's ruling (2026-11-08, "final na walang music video sa mobile"; 🔜 1.0.5 takes out the Video button and deletes the kept videos, android#32); beta: on the compositor, 16:9, fullscreen; some streamed videos are refused by YouTube (#48); iPhone: none, as on Android |
 | Songs from a Radiance Music Server | ✅ | ✅ | 🔜 4 | ✅ | 🔜 | |
@@ -95,7 +95,7 @@ marked 🔜.
 
 | Feature | Linux | Windows | Windows beta | Phone | iPhone | Notes |
 |---|---|---|---|---|---|---|
-| Copy or share a song's link | ✅ | ✅ | ✅ | ✅ | ❌ | the beta: Copy Link in a song's menu (stage 4b) |
+| Copy or share a song's link | ✅ | ✅ | ✅ | ✅ | 🔜 | the beta: Copy Link in a song's menu (stage 4b); iPhone: Share link and Copy link in a song's menu |
 | Story cards and story videos with lyrics (Instagram, Facebook…) | ❌ | ❌ | ❌ | ✅ | 🔜 | sharing is the main way people find us; iPhone: story cards; no story videos yet |
 | Share songs with a phone (QR, both ways, only what's missing) | ✅ | ✅ | ✅ | ✅ | 🔜 | a song's parts go along; the two-part split's Music too (🔜 next computer release, #43) |
 | Gentle transfer while Bluetooth audio plays | ✅ | ❌ | ❌ | ✅ | ❌ | |
@@ -106,8 +106,8 @@ marked 🔜.
 | Feature | Linux | Windows | Windows beta | Phone | iPhone | Notes |
 |---|---|---|---|---|---|---|
 | Join a server, browse, save, add your songs | ✅ | ✅ | 🔜 4 | ✅ | 🔜 | iPhone: your songs go up after a split here |
-| radiancemusic:// invite links | ✅ | ✅ | 🔜 4c | ✅ | ❌ | the beta: with servers (an invite opens the Servers dialog); iPhone: paste or scan the invite |
-| Listening parties: in sync, reactions, host controls | ✅ | ✅ | 🔜 4 | ✅ | ❌ | |
+| radiancemusic:// invite links | ✅ | ✅ | 🔜 4c | ✅ | 🔜 | the beta: with servers (an invite opens the Servers dialog); iPhone: an invite link asks to join in Settings, and a share QR read by the Camera starts the share |
+| Listening parties: in sync, reactions, host controls | ✅ | ✅ | 🔜 4 | ✅ | 🔜 | iPhone: songs saved as Opus don't play there yet |
 
 ## The app itself
 
@@ -115,13 +115,13 @@ marked 🔜.
 |---|---|---|---|---|---|---|
 | Update pop-up: Update now, Remind me later, Skip | ✅ | ✅ | ✅ | ✅ | ➖ | the beta: its own installer, its version on the release's asset label; iPhone: free-signed: installed again every 7 days |
 | Installs its own update | ✅ | ✅ | ✅ | ✅ | ➖ | Linux download / Flatpak / Windows installer / Android installer; the beta: its own installer where it is (checked on ribs03 from a local feed, 2026-11-07) |
-| What's New | ✅ | ✅ | ✅ | ✅ | ❌ | |
-| How to Use It guide | ✅ | ✅ | ✅ | ✅ | ❌ | |
+| What's New | ✅ | ✅ | ✅ | ✅ | 🔜 | |
+| How to Use It guide | ✅ | ✅ | ✅ | ✅ | 🔜 | |
 | Start screen with first-open setup and progress | ✅ | ✅ | ✅ | ✅ | ❌ | the beta: the sunrise holds while splitting gets ready, offline it offers Try Again or Open Radiance Music Now |
 | Looks: Stone, True Black | ✅ | ✅ | Windows' light/dark | ✅ | 🔜 | |
 | Offline sign, things retry when back online | ✅ | ✅ | ✅ | ✅ | 🔜 | |
-| Report a problem: link to GitHub Issues | ✅ | ✅ | ✅ | ✅ | ❌ | |
-| Email us from the app | ❌ | ❌ | ❌ | ✅ | ❌ | the computer shows the address only in the README |
+| Report a problem: link to GitHub Issues | ✅ | ✅ | ✅ | ✅ | ➖ | iPhone: closed source, so Email us instead |
+| Email us from the app | ❌ | ❌ | ❌ | ✅ | 🔜 | the computer shows the address only in the README |
 | Report a Problem with the app's log (names removed) | ✅ | ✅ | ✅ | 🔜 | ❌ | computer since 0.7.15; the phone's comes with 0.5.16 |
 | Rating pop-up ("Are you enjoying…?") | ✅ | ✅ | ✅ | 🔜 | ❌ | computer since 0.7.15; the phone's comes with 0.5.16 |
 
