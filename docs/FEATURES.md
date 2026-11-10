@@ -63,7 +63,7 @@ marked 🔜.
 | Split a song on this device | ✅ | ✅ | ✅ | ✅ | 🔜 | computer: Python Demucs, 4 parts (no-Python version in testing, #31); phone: 2 parts (Music + Vocals) with Spleeter, about 16× real time (🔜 0.5.17, #43; Demucs before), 4 parts only from the computer or a server |
 | Liked songs are split by themselves | ✅ | ✅ | ✅ | ❌ | ❌ | the phone splits when you ask |
 | Split queue, pause / stop splitting | ✅ | ✅ | ✅ | ✅ | 🔜 | |
-| Cores it may use | ✅ | ✅ | ✅ | ✅ | ❌ | |
+| Cores it may use | ✅ | ✅ | ✅ | ✅ | 🔜 | |
 | Pauses for low battery or heat | ➖ | ➖ | ➖ | ✅ | 🔜 | |
 | Split on a Radiance Music Server | ✅ | ✅ | 🔜 4 | ✅ | 🔜 | |
 | Six parts (piano, guitar) | off | off | off | off | ❌ | songs already split in six play, piano and guitar follow Other |
@@ -98,7 +98,7 @@ marked 🔜.
 | Copy or share a song's link | ✅ | ✅ | ✅ | ✅ | 🔜 | the beta: Copy Link in a song's menu (stage 4b); iPhone: Share link and Copy link in a song's menu |
 | Story cards and story videos with lyrics (Instagram, Facebook…) | ❌ | ❌ | ❌ | ✅ | 🔜 | sharing is the main way people find us; iPhone: story cards; no story videos yet |
 | Share songs with a phone (QR, both ways, only what's missing) | ✅ | ✅ | ✅ | ✅ | 🔜 | a song's parts go along; the two-part split's Music too (🔜 next computer release, #43) |
-| Gentle transfer while Bluetooth audio plays | ✅ | ❌ | ❌ | ✅ | ❌ | |
+| Gentle transfer while Bluetooth audio plays | ✅ | ❌ | ❌ | ✅ | 🔜 | |
 | Works without shared Wi-Fi (Wi-Fi Direct) | ➖ | ➖ | ➖ | ✅ | ➖ | iPhone: no Wi-Fi Direct on iPhone; its Personal Hotspot works |
 
 ## Servers and listening parties
