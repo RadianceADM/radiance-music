@@ -242,10 +242,25 @@ pub struct ListQuery {
     limit: Option<usize>,
 }
 
-/// A song matches a search when every word of it is in its artist, title or file name.
+/// A song matches a search when every word of it is in its artist, title or file name (case, accents and
+/// curly quotes aside: the apps look a song up by its title as they know it, owner's rule 1).
 fn matches(s: &Song, words: &[String]) -> bool {
-    let hay = format!("{} {} {}", s.artist, s.title, s.file).to_lowercase();
-    words.iter().all(|w| hay.contains(w.as_str()))
+    let hay = fold(&format!("{} {} {}", s.artist, s.title, s.file));
+    words.iter().all(|w| hay.contains(fold(w).as_str()))
+}
+
+/// Lowercase, accents taken off (NFD, its combining marks left out), curly quotes made straight.
+fn fold(text: &str) -> String {
+    use unicode_normalization::{char::is_combining_mark, UnicodeNormalization};
+    text.nfd()
+        .filter(|c| !is_combining_mark(*c))
+        .map(|c| match c {
+            '\u{2018}' | '\u{2019}' | '\u{02BC}' => '\'',
+            '\u{201C}' | '\u{201D}' => '"',
+            c => c,
+        })
+        .flat_map(char::to_lowercase)
+        .collect()
 }
 
 /// GET /api/library?q=&offset=&limit=: the songs, with their parts, lyrics,
@@ -603,4 +618,26 @@ fn find(app: &Shared, v: &Value) -> Result<Option<Song>, ApiError> {
         _ => None,
     };
     Ok(found)
+}
+
+#[cfg(test)]
+mod search_tests {
+    use super::*;
+
+    fn song(artist: &str, title: &str) -> Song {
+        Song { id: 1, file: format!("{artist} - {title}.opus"), artist: artist.into(), title: title.into(), added_by: None, added_ms: 0, duration_ms: None }
+    }
+
+    fn words(q: &str) -> Vec<String> {
+        q.split_whitespace().map(str::to_lowercase).collect()
+    }
+
+    /// Accents and curly quotes aside: the apps look a song up by its title as they know it (rule 1).
+    #[test]
+    fn a_search_finds_it_with_or_without_accents() {
+        assert!(matches(&song("Mäki", "Dílaw"), &words("Dilaw")));
+        assert!(matches(&song("Maki", "Dilaw"), &words("dílaw mäki")));
+        assert!(matches(&song("Moira", "Don’t Go"), &words("don't")));
+        assert!(!matches(&song("Maki", "Dilaw"), &words("saan")));
+    }
 }
