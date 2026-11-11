@@ -2,7 +2,7 @@
 
 Status: design, for the owner's review. Issue: radiance-music#50 (the web version). Date: 2026-11-12.
 Checked by a fresh builder read against the code. Its findings are folded in below; my calls are marked
-**(my call)** and listed at the end. Two choices are the owner's (marked **(owner)**).
+**(my call)** and listed at the end. The owner's two answers (dialog, 2026-11-12) are marked **(owner)**.
 
 ## Why
 
@@ -19,6 +19,8 @@ His choices, from dialogs on 2026-11-10 (settled; not to be asked again):
 | What, first version | Player bar + queue · Now Playing + word lyrics · No vocals / Vocals only · Mixer sliders |
 | How | "Yes, Rust core as WASM": the apps' own Rust core runs in the browser |
 | Offline | "Yes, Save to this browser": songs kept in the browser and played without the server |
+| A split song's sound (2026-11-12) | "Always from its parts": the Mixer and voice buttons answer at once on every song, at about 4× the data |
+| iPhone Home Screen sign-in (2026-11-12) | "Code from their own page": a one-time code, good for 10 minutes, signs in the person's own Home Screen app |
 
 ## Goals
 
@@ -62,11 +64,10 @@ His choices, from dialogs on 2026-11-10 (settled; not to be asked again):
   itself.
 - **Parts out of step.** Parts must be summed sample-aligned. Several `<audio>` elements nudged into step is not
   acceptable: drums and bass a few milliseconds apart sound hollow.
-- **The song file and its parts heard together.** Switching between the song file and its parts follows the apps'
-  rule for sources that don't play in step (engine/src/player.rs:440-449): fade out 0.6 s, a moment of quiet,
-  fade in 1.2 s, never both at once.
-- **A slider that answers late.** Once a song plays from its parts, a slider move or a voice pick is heard within
-  about 50 ms, as in the apps.
+- **The song file and its parts heard together.** A split song plays from its parts from start to end; the song
+  file and its parts never play at once.
+- **A slider that answers late.** A slider move or a voice pick on a split song is heard within about 50 ms, as in
+  the apps.
 - **Losing the owner's content.** The page today stays as it is: library, search, upload, people, invites, split
   queue, devices, party card and sign out. The player adds. It replaces only the library row's preview Play.
 - **Bluetooth stutter on his laptop.** Save to this browser downloads one song at a time.
@@ -155,7 +156,8 @@ core's, and the apps' tests pass unchanged):
    - the make-up gain sqrt(Σpower / Σpower·g²), clamped to 1..2, and the look-ahead limiter: 0.97 ceiling, 8 ms
      look-ahead, 250 ms release (engine/src/limiter.rs);
    - the fade of the make-up gain and ceiling toward the song file's own 1.0 as the song file is heard
-     (engine/src/player.rs:638-645).
+     (engine/src/player.rs:638-645). The browser never blends to the song file (owner: always from its parts), but
+     core keeps the piece so the apps' copy stays one.
 2. **The voice and slider rules:**
    - which parts make the mix: six if there, else four, else music + vocals (engine/src/split.rs:172-182);
    - a voice pick writes its preset into the sliders, and the sliders carry on to later songs until Reset
@@ -173,16 +175,16 @@ Two sources, as in the apps:
   - Mixing in the audio thread keeps the parts sample-aligned and makes slider moves heard at once.
   - Seeking works on both sources.
 
-**When a split song uses which source (owner):**
-- **Recommended:** it starts from the song file. The first No vocals, Vocals only or slider move on that song fetches
-  its parts, shown as "Getting the parts…", and then switches by the rule above. Because a voice pick carries on, the
-  next songs then start straight from their parts.
-- **The other way:** every split song starts from its parts, so the Mixer is instant always. That costs about four
-  times the data from the owner's home internet: about 20 MB a song with Vorbis parts, over 100 MB with FLAC parts.
+**Which source (owner: "Always from its parts"):**
+- **A split song** (four or six parts, or music + vocals) always plays from its parts, from its first second. So
+  No vocals, Vocals only and every slider answer at once, on every song. All sliders at full is the song itself.
+  - It costs about four times the data of the song file from the owner's home internet: about 20 MB a song with
+    Vorbis parts, over 100 MB with FLAC parts. The owner chose this knowing the cost.
+- **A song not split yet** plays from its file. If its split lands while it plays, the parts take over at the next
+  play, not mid-song.
 
-**A song the browser can't play as it is** (an older browser and an .opus song) plays from its parts at full, since
-their sum is the song. A song that's neither playable nor split says so, with Split on this server when the person
-may split.
+**A song not split yet that the browser can't play** (an older browser and an .opus song) says so, with Split on this
+server when the person may split.
 
 **Memory:** parts are decoded a little ahead, never as whole-song buffers. Four parts of a 4-minute song as whole
 buffers would be about 340 MB.
@@ -230,12 +232,20 @@ buffers would be about 340 MB.
   (401, or the `me` event), it deletes its saved songs and queue, and shows "You're no longer on SERVER" **(my call:
   the server is invite-only; the owner chooses who has his songs)**.
 
-**On iPhone and iPad (owner):**
-- Safari can clear a site's storage after 7 days without a visit, unless the page is on the Home Screen.
-- But a Home Screen app on iOS has its own storage, apart from Safari's: no sign-in and no saved songs carry over
-  (to be confirmed on iOS 27 in the first proof).
-- Invites work once, and only the owner can add devices today (index.html:131). How the Home Screen app signs in is
-  his call. Then the first save on an iPhone suggests the Home Screen before it saves.
+**On iPhone and iPad (owner: "Code from their own page"):**
+- Safari can clear a site's storage after 7 days without a visit, unless the page is on the Home Screen. A Home Screen
+  app on iOS has its own storage, apart from Safari's (to be confirmed on iOS 27 in the first proof), so it starts
+  signed out.
+- **A one-time code from the person's own page signs it in.**
+  - In Safari, the page's "Use on your Home Screen" shows the steps and a code that's good for 10 minutes.
+  - The Home Screen app opens to "Enter your code", and the code gives it a device of the same person.
+- **On the server, two new calls:**
+  - a signed-in device asks for a code for its own person. The code is short, one-time, lasts 10 minutes, and only
+    its hash is stored, as tokens are;
+  - the code is traded for a new device token, as an invite is.
+  - The new device shows under that person on the owner's People page, where he can remove it as any device.
+  - A removed person's code stops working.
+- **The first save on an iPhone suggests the Home Screen** before it saves.
 
 ### Serving it
 
@@ -275,6 +285,8 @@ buffers would be about 340 MB.
   - removed by the owner: the saved songs go;
   - over http: the song plays and the Mixer says it needs https.
 - **Phone memory:** a 6-minute song with FLAC parts plays on the iPhone without the tab reloading.
+- **The Home Screen code:** made in Safari, used in the Home Screen app within 10 minutes; refused after use, after
+  10 minutes, and for a removed person; the new device is listed on the owner's People page.
 - **The server's load,** measured on bassrms01 while two browsers play: Range reads only, no CPU worth noting.
 - **Screenshots** at laptop, tablet and phone sizes for every panel and state, through the owner-ui-gate before
   "done".
