@@ -211,9 +211,34 @@ pub struct Release {
 }
 
 impl Release {
-    /// Its notes' "- " lines, the first few, plainly.
+    /// What's new, the first few items, plainly: the top-level items of the newest version's part ("## v0.7.23 …"),
+    /// each read whole (its wrapped lines joined), not the download steps the release page puts first (#76).
+    /// Notes with no such heading: their "- " lines as they come.
     pub fn bullets(&self, most: usize) -> Vec<String> {
-        self.notes.lines().map(str::trim).filter_map(|l| l.strip_prefix("- ")).map(|l| l.replace("**", "")).take(most).collect()
+        let lines: Vec<&str> = self.notes.lines().collect();
+        let version = |l: &str| l.strip_prefix("## ").and_then(|h| h.trim_start().strip_prefix('v')).is_some_and(|v| v.starts_with(|c: char| c.is_ascii_digit()));
+        let Some(at) = lines.iter().position(|l| version(l)) else {
+            return lines.iter().map(|l| l.trim()).filter_map(|l| l.strip_prefix("- ")).map(|l| l.replace("**", "")).take(most).collect();
+        };
+        let mut items: Vec<String> = Vec::new();
+        let mut open = false; // the line before was a top-level item's: an indented line after it is its wrapped rest
+        for l in &lines[at + 1..] {
+            if l.starts_with("## ") {
+                break; // the version before it
+            }
+            if let Some(item) = l.strip_prefix("- ") {
+                items.push(item.trim().to_string());
+                open = true;
+            } else if open && l.starts_with(' ') && !l.trim().is_empty() && !l.trim_start().starts_with("- ") {
+                if let Some(last) = items.last_mut() {
+                    last.push(' ');
+                    last.push_str(l.trim());
+                }
+            } else {
+                open = false; // a blank line, a nested item ("  - …") or other text
+            }
+        }
+        items.into_iter().map(|i| i.replace("**", "")).take(most).collect()
     }
 
     fn to_json(&self) -> Value {
@@ -1119,6 +1144,30 @@ mod tests {
         let o = release_from(&j, &Install::Other).unwrap();
         assert!(o.url.is_empty());
         assert_eq!(Release::from_json(&r.to_json()), Some(r));
+    }
+
+    #[test]
+    fn the_pop_up_lists_whats_new_not_the_download_steps() {
+        // the release page's body (#76): its download steps first, then the version's changes, nested and wrapped
+        let notes = "**Open beta:** Radiance Music is new.\n\n**Download**, or get it at music.radianceph.com.\n\
+            - **Windows:** `RadianceMusic-Setup.exe` (about 180 MB), the new Windows app.\n\
+            - **Linux:** `RadianceMusic-linux-x86_64.tar.gz`: unpack it and run `./install.sh`.\n\
+            - **Linux, any, the Flatpak:** install it with one click.\n\n## v0.7.23 — 2026-11-10\n\n\
+            - **Your Radiance Music Server first (#75):** joined to a server, the app asks it before YouTube.\n\
+            \x20 - **If the server has the song:**\n\
+            \x20   - it plays from the server;\n\
+            - **Songs you split go up to your server by themselves (#75):** a song split here goes to each joined server,\n\
+            \x20 with its four parts.\n\
+            \x20 - Offline or away, it waits.\n\n## v0.7.22 — 2026-11-09\n\n- **Older:** not this one.";
+        let r = Release { version: "0.7.23".into(), notes: notes.into(), page: String::new(), url: String::new(), size: 0, sha256: String::new() };
+        assert_eq!(
+            r.bullets(4),
+            vec![
+                "Your Radiance Music Server first (#75): joined to a server, the app asks it before YouTube.",
+                "Songs you split go up to your server by themselves (#75): a song split here goes to each joined server, with its four parts.",
+            ]
+        );
+        assert_eq!(r.bullets(1).len(), 1);
     }
 
     #[test]
