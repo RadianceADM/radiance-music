@@ -143,6 +143,15 @@ public sealed partial class SearchPage : Page
     private void Fill(ListView list, SongView[] songs)
     {
         list.Items.Clear();
-        foreach (var song in songs) list.Items.Add(new SongRow(hub!.Engine, song));
+        var kind = (string)list.Tag switch { "Mine" => ListKind.Mine, _ => ListKind.Songs };
+        for (var i = 0; i < songs.Length; i++)
+        {
+            var song = songs[i];
+            var index = (uint)i;
+            var row = new SongRow(hub!.Engine, song);
+            // right-click, long-press, the Menu key: Add to Queue, Play Next… as every other list's
+            SongMenu.Attach(row, hub!, song.Key, index, new MenuPlace.Row(), () => hub!.Engine.PlayFrom(kind, index, song.Key));
+            list.Items.Add(row);
+        }
     }
 }
