@@ -1,6 +1,6 @@
 # Changelog
 
-## Not released yet
+## v0.7.24 — 2026-11-12
 
 - **Remove from library:** a liked song's menu says Remove from library (it said Remove from Liked) and asks first; its saved file, parts, lyrics and cover go to the Trash, as before (#77).
 - **Search no longer lists free lossless recordings from the Internet Archive:** your own and your servers' songs come first, then YouTube Music. Songs you already liked from there stay and still play (#78).
