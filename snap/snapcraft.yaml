@@ -10,10 +10,10 @@ name: radiance-music
 title: Radiance Music
 base: core26
 adopt-info: radiance-music
-summary: Search any song and play it, lossless first, with lyrics and its parts
+summary: Search any song and play it, with lyrics and its parts
 description: |
-  Radiance Music plays any song you search for: lossless from free libraries first,
-  YouTube Music as the fallback. Liked songs are saved on your computer, with synced
+  Radiance Music plays any song you search for: your own songs and your servers' first,
+  then YouTube Music. Liked songs are saved on your computer, with synced
   lyrics (word by word), album art and the music video.
 
   Split any song into its parts (vocals, drums, bass and the rest) right on your

@@ -115,7 +115,7 @@ public sealed partial class SearchPage : Page
     private void OnPlay(object sender, ItemClickEventArgs e)
     {
         if (hub == null || sender is not ListView list || e.ClickedItem is not SongRow row) return;
-        var kind = (string)list.Tag switch { "Mine" => ListKind.Mine, "Lossless" => ListKind.Lossless, _ => ListKind.Songs };
+        var kind = (string)list.Tag switch { "Mine" => ListKind.Mine, _ => ListKind.Songs };
         hub.Engine.PlayFrom(kind, (uint)list.Items.IndexOf(row), row.Key);
     }
 
@@ -129,17 +129,14 @@ public sealed partial class SearchPage : Page
         if (!typed) return;
         MineSection.Visibility = r.Mine.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
         MineNote.Text = r.MineNote;
-        LosslessNote.Text = r.LosslessNote;
         SongsNote.Text = r.SongsNote;
-        LosslessSpin.IsActive = r.Lossless == null;
         SongsSpin.IsActive = r.Songs == null;
         // (the hearts too: a like from here, or from anywhere, fills or empties its row's)
-        var liked = string.Concat(r.Mine.Concat(r.Lossless ?? Array.Empty<SongView>()).Concat(r.Songs ?? Array.Empty<SongView>()).Select(s => s.Liked ? '1' : '0'));
-        var key = r.Query + "|" + r.Mine.Length + "|" + (r.Lossless?.Length ?? -1) + "|" + (r.Songs?.Length ?? -1) + "|" + liked;
+        var liked = string.Concat(r.Mine.Concat(r.Songs ?? Array.Empty<SongView>()).Select(s => s.Liked ? '1' : '0'));
+        var key = r.Query + "|" + r.Mine.Length + "|" + (r.Songs?.Length ?? -1) + "|" + liked;
         if (key == shown) return;
         shown = key;
         Fill(MineList, r.Mine);
-        Fill(LosslessList, r.Lossless ?? Array.Empty<SongView>());
         Fill(SongsList, r.Songs ?? Array.Empty<SongView>());
     }
 

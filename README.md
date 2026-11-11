@@ -20,8 +20,7 @@ unpack it and run `./install.sh`. On an older Linux, or one it doesn't run on, t
 
 ## What it does
 
-- **Search any song.** Lossless FLAC from the Internet Archive first, YouTube Music when it's
-  not there. Search suggestions as you type, with your liked songs first.
+- **Search any song.** Your own songs and your servers' first, then YouTube Music. Search suggestions as you type, with your liked songs first.
 - **Liked songs are saved** to `~/Music/Radiance Music`: the song (FLAC when it's lossless),
   its cover, its lyrics file and its official music video (720p). "Fix missing" saves whatever
   a liked song still lacks.
@@ -183,7 +182,7 @@ speaker, nothing else to install.
 
 ## YouTube
 
-YouTube Music is the fallback when a song isn't on the Internet Archive. It plays through
+YouTube Music plays through
 yt-dlp, which keeps up with YouTube's changes, so keep yt-dlp updated. If YouTube asks to
 "confirm you're not a bot", updating yt-dlp usually fixes it. You can also let yt-dlp use your
 browser's YouTube sign-in.

@@ -96,7 +96,6 @@ pub struct Fake {
 
 fn kind_name(k: Kind) -> &'static str {
     match k {
-        Kind::Lossless => "lossless",
         Kind::Songs => "songs",
         Kind::Videos => "videos",
     }
@@ -298,23 +297,40 @@ fn ids(v: &Option<Vec<Track>>) -> Vec<String> {
 }
 
 #[test]
-fn a_search_fills_both_lists() {
+fn a_search_fills_its_list() {
     let _l = setup();
     let fake = Arc::new(Fake::default());
-    fake.finds(Kind::Lossless, "binhi", vec![song(Source::Archive, "https://archive.example/a.flac", "Binhi Acoustic")]);
     fake.finds(Kind::Songs, "binhi", vec![song(Source::YouTube, "y1", "Binhi"), song(Source::YouTube, "y2", "Binhi Cover")]);
     let (heard, rx) = listener();
     let c = Controller::start(heard, fake.clone()).unwrap();
     c.search("binhi");
     let end = Instant::now() + Duration::from_secs(5);
-    while (c.results().lossless.is_none() || c.results().songs.is_none()) && Instant::now() < end {
+    while c.results().songs.is_none() && Instant::now() < end {
         wait_for(&rx, Change::Results, 0.5);
     }
     let r = c.results();
     assert_eq!(r.query, "binhi");
-    assert_eq!(ids(&r.lossless), ["https://archive.example/a.flac"]);
     assert_eq!(ids(&r.songs), ["y1", "y2"]);
     assert!(r.mine.is_empty());
+    c.quit();
+}
+
+#[test]
+fn a_search_asks_only_youtube_music() {
+    let _l = setup();
+    let fake = Arc::new(Fake::default());
+    fake.finds(Kind::Songs, "binhi", vec![song(Source::YouTube, "y1", "Binhi")]);
+    let (heard, rx) = listener();
+    let c = Controller::start(heard, fake.clone()).unwrap();
+    c.search("binhi");
+    let end = Instant::now() + Duration::from_secs(5);
+    while c.results().songs.is_none() && Instant::now() < end {
+        wait_for(&rx, Change::Results, 0.5);
+    }
+    std::thread::sleep(Duration::from_millis(300));
+    // one search: YouTube Music's; the Internet Archive is no longer asked
+    assert_eq!(fake.searches.load(Ordering::SeqCst), 1);
+    assert_eq!(ids(&c.results().songs), ["y1"]);
     c.quit();
 }
 
@@ -345,7 +361,7 @@ fn one_letter_clears_the_results() {
     c.search("b");
     assert!(wait_for(&rx, Change::Results, 2.0));
     let r = c.results();
-    assert_eq!((r.lossless.map(|v| v.len()), r.songs.map(|v| v.len())), (Some(0), Some(0)));
+    assert_eq!(r.songs.map(|v| v.len()), Some(0));
     std::thread::sleep(Duration::from_millis(200));
     assert_eq!(fake.searches.load(Ordering::SeqCst), 0);
     c.quit();
@@ -736,15 +752,15 @@ fn saved_files(title: &str) -> usize {
     std::fs::read_dir(radiance_engine::library::music_dir()).map(|d| d.flatten().filter(|e| e.file_name().to_string_lossy().contains(title)).count()).unwrap_or(0)
 }
 
-/// A controller whose Search's lossless list is `songs` (searched as `q`).
-fn with_lossless(q: &str, songs: Vec<Track>) -> (Controller, Arc<Fake>, Receiver<(Change, Instant)>) {
+/// A controller whose Search's YouTube Music list is `songs` (searched as `q`).
+fn with_found(q: &str, songs: Vec<Track>) -> (Controller, Arc<Fake>, Receiver<(Change, Instant)>) {
     let fake = Arc::new(Fake::default());
-    fake.finds(Kind::Lossless, q, songs);
+    fake.finds(Kind::Songs, q, songs);
     let (heard, rx) = listener();
     let c = Controller::start(heard, fake.clone()).unwrap();
     c.search(q);
     let end = Instant::now() + Duration::from_secs(5);
-    while c.results().lossless.as_ref().is_none_or(|v| v.is_empty()) && Instant::now() < end {
+    while c.results().songs.as_ref().is_none_or(|v| v.is_empty()) && Instant::now() < end {
         std::thread::sleep(Duration::from_millis(20));
     }
     (c, fake, rx)
@@ -754,7 +770,7 @@ fn with_lossless(q: &str, songs: Vec<Track>) -> (Controller, Arc<Fake>, Receiver
 fn liking_puts_the_song_first_and_says_so() {
     let _g = setup();
     let one = song(Source::Archive, "https://example.invalid/liked-one.flac", "Liked One");
-    let (c, _fake, rx) = with_lossless("liking one", vec![one.clone()]);
+    let (c, _fake, rx) = with_found("liking one", vec![one.clone()]);
     c.toggle_like(&one.key());
     assert!(wait_for(&rx, Change::Liked, 5.0), "Liked Songs changed");
     assert!(until(3.0, || c.liked().first().is_some_and(|(t, _)| t.key() == one.key())), "first in Liked Songs");
@@ -781,7 +797,7 @@ fn liking_puts_the_song_first_and_says_so() {
 fn unliking_removes_it_and_says_so() {
     let _g = setup();
     let two = song(Source::Archive, "https://example.invalid/liked-two.flac", "Liked Two");
-    let (c, _fake, rx) = with_lossless("liking two", vec![two.clone()]);
+    let (c, _fake, rx) = with_found("liking two", vec![two.clone()]);
     c.toggle_like(&two.key());
     assert!(toasts_for(&c, &rx, 3.0).contains(&"Saved “Liked Two”".to_string()));
     c.toggle_like(&two.key());
@@ -795,7 +811,7 @@ fn unliking_removes_it_and_says_so() {
 fn unliking_while_saving_leaves_nothing() {
     let _g = setup();
     let three = song(Source::Archive, "https://example.invalid/liked-three.flac", "Liked Three");
-    let (c, fake, rx) = with_lossless("liking three", vec![three.clone()]);
+    let (c, fake, rx) = with_found("liking three", vec![three.clone()]);
     *fake.download_wait.lock().unwrap() = Duration::from_millis(1500);
     c.toggle_like(&three.key());
     assert!(until(1.0, || c.liked().first().is_some_and(|(_, s)| *s == radiance_core::library::Saved::Saving)), "it shows as saving");
@@ -810,7 +826,7 @@ fn unliking_while_saving_leaves_nothing() {
 fn downloading_lists_a_liked_song_until_its_saved() {
     let _g = setup();
     let four = song(Source::Archive, "https://example.invalid/liked-four.flac", "Liked Four");
-    let (c, fake, rx) = with_lossless("liking four", vec![four.clone()]);
+    let (c, fake, rx) = with_found("liking four", vec![four.clone()]);
     *fake.download_wait.lock().unwrap() = Duration::from_millis(800);
     assert!(c.downloading().iter().all(|(t, _)| t.key() != four.key()));
     c.toggle_like(&four.key());

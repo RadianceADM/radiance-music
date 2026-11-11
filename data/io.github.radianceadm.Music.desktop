@@ -1,7 +1,7 @@
 [Desktop Entry]
 Type=Application
 Name=Radiance Music
-Comment=Search any song and play it: lossless first, with lyrics, album art and your EQ
+Comment=Search any song and play it, with lyrics, album art and your EQ
 Exec=radiance-music %u
 Icon=io.github.radianceadm.Music
 Categories=AudioVideo;Audio;Player;GTK;

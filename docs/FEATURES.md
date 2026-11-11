@@ -15,7 +15,7 @@ marked 🔜.
 
 | Feature | Linux | Windows | Windows beta | Phone | Notes |
 |---|---|---|---|---|---|
-| Search songs: lossless (Internet Archive) first, YouTube Music after | ✅ | ✅ | ✅ | ✅ | |
+| Search songs: your own and your servers' first, then YouTube Music | ✅ | ✅ | ✅ | ✅ | the free Internet Archive source is gone (#78); songs already liked from it stay and play |
 | A song played from Search plays, then songs like it (its radio) | ✅ | ✅ | ✅ | ✅ | as YouTube Music; before, the other search results played after it (#47) |
 | Search suggestions as you type | ✅ | ✅ | ✅ | ✅ | the beta: in the box's own list, yours (a heart) first |
 | Genre tiles before you type | ✅ | ✅ | ✅ | ❌ | |
@@ -87,6 +87,7 @@ marked 🔜.
 | Like = save the song, its cover and lyrics | ✅ | ✅ | ✅ | ✅ | |
 | Likes that couldn't be saved are saved later | ✅ | ✅ | ✅ | ✅ | |
 | Unlike removes the saved files | ✅ | ✅ | ✅ | ❌ | the phone keeps the files |
+| Remove from library (asks first) | ✅ | ✅ | ✅ | 🔜 1.3.0 | a liked song's menu item (it said Remove from Liked); its saved file, parts, lyrics and cover go to the Trash; the heart doesn't ask (#77); iPhone: 🔜 |
 | Storage page, move the music folder | ✅ | ✅ | ✅ | ❌ | the beta: Settings → Storage |
 
 ## Sharing

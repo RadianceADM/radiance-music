@@ -120,7 +120,7 @@ internal sealed class SongRow : Grid
         var (glyph, title, body, lossless) = s.Video
             ? ("\uE714", "Music video", "From YouTube; plays with its picture in Now Playing (up to 720p).", false)
             : s.Lossless
-                ? ("\uE8D6", "Lossless · FLAC", "The full recording from the Internet Archive, nothing thrown away. Played first.", true)
+                ? ("\uE8D6", "Lossless · FLAC", "The full recording, nothing thrown away.", true)
                 : ("\uE753", "Compressed · Opus", "Streams from YouTube Music, about 130–160 kbps. No lossless copy of this song was found.", false);
         var icon = new FontIcon { Glyph = glyph, FontSize = 14, VerticalAlignment = VerticalAlignment.Center };
         icon.Foreground = (Brush)Application.Current.Resources[lossless ? "SystemFillColorSuccessBrush" : "TextFillColorTertiaryBrush"];

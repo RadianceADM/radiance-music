@@ -49,8 +49,6 @@ pub fn mix_note(mix: usize, liked: usize) -> String {
 /// Search's lists.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
-    /// The free lossless libraries (Internet Archive).
-    Lossless,
     /// YouTube Music's songs.
     Songs,
     /// Music videos.
@@ -64,14 +62,10 @@ pub const OFFLINE_SEARCH: &str = "You're offline: searching needs the internet. 
 /// not), or what the list is.
 pub fn search_note(kind: Kind, found: Option<usize>, offline: bool, query: &str) -> String {
     match (kind, found) {
-        (Kind::Lossless, None) => "Searching the free lossless libraries (Internet Archive)…".to_string(),
-        (Kind::Lossless, Some(0)) if offline => OFFLINE_SEARCH.to_string(),
-        (Kind::Lossless, Some(0)) => format!("The free libraries have no lossless recording of “{query}”."),
-        (Kind::Lossless, Some(_)) => "Free FLAC from the Internet Archive. Played first.".to_string(),
         (Kind::Songs, None) => "Searching YouTube Music…".to_string(),
         (Kind::Songs, Some(0)) if offline => "YouTube Music too, once you're back online.".to_string(),
         (Kind::Songs, Some(0)) => format!("YouTube Music found no other songs for “{query}”."),
-        (Kind::Songs, Some(_)) => "Compressed (Opus). The fallback when there's no lossless copy.".to_string(),
+        (Kind::Songs, Some(_)) => "Compressed (Opus), from YouTube Music.".to_string(),
         (Kind::Videos, None) => "Searching music videos…".to_string(),
         (Kind::Videos, Some(0)) if offline => "Music videos too.".to_string(),
         (Kind::Videos, Some(0)) => format!("No music videos for “{query}”."),
@@ -130,6 +124,14 @@ pub fn added_to(playlist: &str) -> String {
 
 pub fn already_in(playlist: &str) -> String {
     format!("Already in “{playlist}”")
+}
+
+/// A liked song's menu item (Unlike: its saved file, parts, lyrics and cover go to the Trash), and the question it asks first.
+pub const REMOVE_FROM_LIBRARY: &str = "Remove from library";
+pub const REMOVE_FROM_LIBRARY_BODY: &str = "Its saved file, parts, lyrics and cover are removed too.";
+
+pub fn remove_from_library_title(title: &str) -> String {
+    format!("Remove “{title}” from your library?")
 }
 
 pub fn delete_playlist_title(name: &str) -> String {
@@ -342,14 +344,13 @@ mod tests {
 
     #[test]
     fn search_notes_say_what_the_gtk_app_says() {
-        assert_eq!(search_note(Kind::Lossless, None, false, "x"), "Searching the free lossless libraries (Internet Archive)…");
-        assert_eq!(search_note(Kind::Lossless, Some(0), true, "x"), OFFLINE_SEARCH);
-        assert_eq!(search_note(Kind::Lossless, Some(0), false, "binhi"), "The free libraries have no lossless recording of “binhi”.");
-        assert_eq!(search_note(Kind::Lossless, Some(3), false, "x"), "Free FLAC from the Internet Archive. Played first.");
+        assert_eq!(remove_from_library_title("Binhi"), "Remove “Binhi” from your library?");
+        assert_eq!(REMOVE_FROM_LIBRARY_BODY, "Its saved file, parts, lyrics and cover are removed too.");
+        assert_eq!(REMOVE_FROM_LIBRARY, "Remove from library");
         assert_eq!(search_note(Kind::Songs, None, false, "x"), "Searching YouTube Music…");
         assert_eq!(search_note(Kind::Songs, Some(0), true, "x"), "YouTube Music too, once you're back online.");
         assert_eq!(search_note(Kind::Songs, Some(0), false, "binhi"), "YouTube Music found no other songs for “binhi”.");
-        assert_eq!(search_note(Kind::Songs, Some(9), false, "x"), "Compressed (Opus). The fallback when there's no lossless copy.");
+        assert_eq!(search_note(Kind::Songs, Some(9), false, "x"), "Compressed (Opus), from YouTube Music.");
         assert_eq!(search_note(Kind::Videos, None, false, "x"), "Searching music videos…");
         assert_eq!(search_note(Kind::Videos, Some(0), true, "x"), "Music videos too.");
         assert_eq!(search_note(Kind::Videos, Some(0), false, "binhi"), "No music videos for “binhi”.");

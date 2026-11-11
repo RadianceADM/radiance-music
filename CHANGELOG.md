@@ -1,5 +1,10 @@
 # Changelog
 
+## Not released yet
+
+- **Remove from library:** a liked song's menu says Remove from library (it said Remove from Liked) and asks first; its saved file, parts, lyrics and cover go to the Trash, as before.
+- **Search no longer lists free lossless recordings from the Internet Archive:** your own and your servers' songs come first, then YouTube Music. Songs you already liked from there stay and still play.
+
 ## v0.7.23 — 2026-11-10
 
 - **Your Radiance Music Server first (#75):** joined to a server, the app asks it before YouTube.

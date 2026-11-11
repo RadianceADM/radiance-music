@@ -9,7 +9,7 @@
     <name>Radiance Innovation Centers</name>
   </developer>
   <description>
-    <p>An open beta. Search any song and play it, lossless first. Like it, and it's saved on your computer with its cover, its lyrics and its music video, so it plays with no internet.</p>
+    <p>An open beta. Search any song and play it: your own songs and your servers' first, then YouTube Music. Like it, and it's saved on your computer with its cover, its lyrics and its music video, so it plays with no internet.</p>
     <p>Split a liked song into drums, bass, other and vocals right on your computer, and turn each one up or down in the Mixer. The lyrics light up word by word as they're sung.</p>
   </description>
   <launchable type="desktop-id">io.github.radianceadm.Music.desktop</launchable>

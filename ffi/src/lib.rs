@@ -84,7 +84,6 @@ impl From<Change> for ChangeKind {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, uniffi::Enum)]
 pub enum ListKind {
     Mine,
-    Lossless,
     Songs,
     Mix,
     Recent,
@@ -96,7 +95,6 @@ impl From<ListKind> for ListRef {
     fn from(l: ListKind) -> Self {
         match l {
             ListKind::Mine => ListRef::Mine,
-            ListKind::Lossless => ListRef::Lossless,
             ListKind::Songs => ListRef::Songs,
             ListKind::Mix => ListRef::Mix,
             ListKind::Recent => ListRef::Recent,
@@ -173,10 +171,8 @@ fn results_view(r: controller::Results, off: bool, rows: &Rows) -> ResultsView {
     use radiance_core::words::{self, Kind};
     ResultsView {
         mine_note: words::liked_matches(r.mine.len()),
-        lossless_note: words::search_note(Kind::Lossless, r.lossless.as_ref().map(Vec::len), off, &r.query),
         songs_note: words::search_note(Kind::Songs, r.songs.as_ref().map(Vec::len), off, &r.query),
         mine: rows.songs(&r.mine),
-        lossless: r.lossless.as_deref().map(|v| rows.songs(v)),
         songs: r.songs.as_deref().map(|v| rows.songs(v)),
         query: r.query,
     }
@@ -228,9 +224,7 @@ pub struct ResultsView {
     pub query: String,
     pub mine: Vec<SongView>,
     pub mine_note: String,
-    pub lossless: Option<Vec<SongView>>,
     pub songs: Option<Vec<SongView>>,
-    pub lossless_note: String,
     pub songs_note: String,
 }
 
@@ -931,6 +925,10 @@ impl MusicEngine {
     /// Copy Link: the song's page on the web (stage 4b).
     pub fn song_link(&self, key: String, place: MenuPlace) -> Option<String> {
         self.inner.song_link(&key, place.into())
+    }
+    /// The song's title, for Remove from library's question.
+    pub fn song_title(&self, key: String, place: MenuPlace) -> Option<String> {
+        self.inner.song_title(&key, place.into())
     }
     /// Share Songs with a Phone (stage 4b).
     pub fn share_start(&self, to_phone: bool) {
@@ -2108,6 +2106,17 @@ pub struct PartyWords {
     pub reactions: Vec<PartyReactionView>,
 }
 
+/// The question a song's Remove from library asks first (its title, then its body).
+#[uniffi::export]
+pub fn remove_from_library_title(title: String) -> String {
+    radiance_core::words::remove_from_library_title(&title)
+}
+
+#[uniffi::export]
+pub fn remove_from_library_body() -> String {
+    radiance_core::words::REMOVE_FROM_LIBRARY_BODY.into()
+}
+
 #[uniffi::export]
 pub fn party_words() -> PartyWords {
     use radiance_core::server_words as w;
@@ -2502,7 +2511,7 @@ mod tests {
         let t = Track { source: Source::YouTube, id: "y1".into(), title: "Halo".into(), artist: "Ann".into(), album: String::new(), seconds: 200, art: String::new(), format: String::new(), file: None, video: false, genres: None };
         let mut rows = Rows::default();
         rows.liked.insert(t.key(), radiance_core::library::Saved::Streams);
-        let r = controller::Results { query: "halo".into(), mine: vec![t.clone()], lossless: None, songs: Some(vec![t]) };
+        let r = controller::Results { query: "halo".into(), mine: vec![t.clone()], songs: Some(vec![t]) };
         let v = results_view(r, false, &rows);
         assert!(v.mine[0].liked, "a liked song found in Search");
         assert!(v.songs.unwrap()[0].liked);

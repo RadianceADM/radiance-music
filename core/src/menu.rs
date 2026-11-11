@@ -125,7 +125,7 @@ pub fn song_menu(t: &Track, place: Place, liked: bool, saved: bool, playlists: &
     }
     lists.extend(playlists.iter().map(|(id, name)| item(name, Action::AddToPlaylist(*id))));
     lists.push(item("New Playlist…", Action::NewPlaylistWith));
-    let mut mine = vec![if liked { item("Remove from Liked", Action::Unlike) } else { item("Like", Action::Like) }, item("Song Radio", Action::Radio)];
+    let mut mine = vec![if liked { item(crate::words::REMOVE_FROM_LIBRARY, Action::Unlike) } else { item("Like", Action::Like) }, item("Song Radio", Action::Radio)];
     mine.extend(split_items(t, split));
     let mut menu = vec![play, lists, mine, go_items(t), lyrics_items()];
     if saved {
@@ -181,7 +181,7 @@ mod tests {
         assert_eq!(labels(&queued), vec![
             vec!["Remove from Queue", "Play", "Play Next", "Add to Queue"],
             vec!["New Playlist…"],
-            vec!["Remove from Liked", "Song Radio", "Split: Music + Vocals (Fast)", "Split: Four Parts"],
+            vec!["Remove from library", "Song Radio", "Split: Music + Vocals (Fast)", "Split: Four Parts"],
             vec!["Go to Ann", "Go to Bo"],
             vec!["Show Lyrics", "Edit Lyrics…", "Find Lyrics Again", "Copy Link"],
             vec!["Show in Files"],
