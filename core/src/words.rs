@@ -65,7 +65,7 @@ pub fn search_note(kind: Kind, found: Option<usize>, offline: bool, query: &str)
         (Kind::Songs, None) => "Searching YouTube Music…".to_string(),
         (Kind::Songs, Some(0)) if offline => "YouTube Music too, once you're back online.".to_string(),
         (Kind::Songs, Some(0)) => format!("YouTube Music found no other songs for “{query}”."),
-        (Kind::Songs, Some(_)) => "Compressed (Opus), from YouTube Music.".to_string(),
+        (Kind::Songs, Some(_)) => COMPRESSED_BADGE_BODY.to_string(),
         (Kind::Videos, None) => "Searching music videos…".to_string(),
         (Kind::Videos, Some(0)) if offline => "Music videos too.".to_string(),
         (Kind::Videos, Some(0)) => format!("No music videos for “{query}”."),
@@ -127,6 +127,8 @@ pub fn already_in(playlist: &str) -> String {
 }
 
 /// A liked song's menu item (Unlike: its saved file, parts, lyrics and cover go to the Trash), and the question it asks first.
+/// A YouTube song's badge body, and the Songs search note.
+pub const COMPRESSED_BADGE_BODY: &str = "Compressed (Opus), from YouTube Music.";
 pub const REMOVE_FROM_LIBRARY: &str = "Remove from library";
 pub const REMOVE_FROM_LIBRARY_BODY: &str = "Its saved file, parts, lyrics and cover are removed too.";
 

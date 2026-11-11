@@ -517,7 +517,7 @@ fn quality_badge(t: &Track) -> gtk::Widget {
         let what = if t.format == "24-bit FLAC" { "24-bit FLAC" } else { "FLAC" };
         badge("lossless-symbolic", "lossless", &format!("Lossless · {what}"), "The full recording, nothing thrown away.")
     } else {
-        badge("weather-overcast-symbolic", "compressed", "Compressed · Opus", "Streams from YouTube Music, about 130–160 kbps. No lossless copy of this song was found.")
+        badge("weather-overcast-symbolic", "compressed", "Compressed · Opus", words::COMPRESSED_BADGE_BODY)
     }
 }
 

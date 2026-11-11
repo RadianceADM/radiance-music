@@ -121,7 +121,7 @@ internal sealed class SongRow : Grid
             ? ("\uE714", "Music video", "From YouTube; plays with its picture in Now Playing (up to 720p).", false)
             : s.Lossless
                 ? ("\uE8D6", "Lossless · FLAC", "The full recording, nothing thrown away.", true)
-                : ("\uE753", "Compressed · Opus", "Streams from YouTube Music, about 130–160 kbps. No lossless copy of this song was found.", false);
+                : ("\uE753", "Compressed · Opus", "Compressed (Opus), from YouTube Music.", false);
         var icon = new FontIcon { Glyph = glyph, FontSize = 14, VerticalAlignment = VerticalAlignment.Center };
         icon.Foreground = (Brush)Application.Current.Resources[lossless ? "SystemFillColorSuccessBrush" : "TextFillColorTertiaryBrush"];
         ToolTipService.SetToolTip(icon, title + "\n" + body);
