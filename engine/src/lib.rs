@@ -11,7 +11,6 @@ pub const APP_ID: &str = "io.github.radianceadm.Music";
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub mod align;
-pub mod archive;
 pub mod art;
 pub mod comref;
 pub mod audio_io;

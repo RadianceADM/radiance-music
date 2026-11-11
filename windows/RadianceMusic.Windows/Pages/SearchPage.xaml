@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Search: the box; before typing, the GTK app's browse picks; then your liked songs that match,
-     Lossless and YouTube Music, each with the GTK app's note. Windows' own look. -->
+     and YouTube Music, each with the GTK app's note. Windows' own look. -->
 <Page
     x:Class="RadianceMusic.Pages.SearchPage"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
@@ -34,14 +34,6 @@
                         <TextBlock Text="Liked Songs" Style="{StaticResource SubtitleTextBlockStyle}" />
                         <TextBlock x:Name="MineNote" Style="{StaticResource CaptionTextBlockStyle}" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                         <ListView x:Name="MineList" SelectionMode="None" IsItemClickEnabled="True" ItemClick="OnPlay" Tag="Mine" Margin="-16,4,-16,0" />
-                    </StackPanel>
-                    <StackPanel Spacing="4">
-                        <StackPanel Orientation="Horizontal" Spacing="10">
-                            <TextBlock Text="Lossless" Style="{StaticResource SubtitleTextBlockStyle}" />
-                            <ProgressRing x:Name="LosslessSpin" Width="16" Height="16" IsActive="False" />
-                        </StackPanel>
-                        <TextBlock x:Name="LosslessNote" Style="{StaticResource CaptionTextBlockStyle}" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-                        <ListView x:Name="LosslessList" SelectionMode="None" IsItemClickEnabled="True" ItemClick="OnPlay" Tag="Lossless" Margin="-16,4,-16,0" />
                     </StackPanel>
                     <StackPanel Spacing="4">
                         <StackPanel Orientation="Horizontal" Spacing="10">

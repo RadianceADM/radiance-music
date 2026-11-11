@@ -13,7 +13,7 @@ license = "GPL-3.0-or-later"
 name = "radiance-music"
 version.workspace = true
 edition.workspace = true
-description = "Search any song and play it: lossless from free libraries first, YouTube Music as the fallback; likes are saved, with synced lyrics, album art and your EQ"
+description = "Search any song and play it: your own songs and your servers' first, then YouTube Music; likes are saved, with synced lyrics, album art and your EQ"
 license.workspace = true
 
 [dependencies]

@@ -1,4 +1,4 @@
-//! The window: Search (lossless first, YouTube Music as the fallback), Liked
+//! The window: Search (your own songs and your servers' first, then YouTube Music), Liked
 //! (with "For you", songs like the ones you liked), Now playing (album art over
 //! its own blurred colours, and synced lyrics) and EQ; the player bar below, and
 //! the queue in a side panel. Every song has a menu: right-click, long-press or
@@ -47,7 +47,7 @@ use radiance_core::library::{self as shelf, GroupKind as LikedView, Saved, AZ, R
 use radiance_core::sing;
 use radiance_core::trouble::{self, sound_device_gone, After};
 use radiance_core::words::{self, Kind};
-use crate::{archive, art, genre, library, mix, servers, storage, youtube, APP_ID};
+use crate::{art, genre, library, mix, servers, storage, youtube, APP_ID};
 
 
 /// Same pause as every search-as-you-type: no request per keystroke.
@@ -515,9 +515,9 @@ fn quality_badge(t: &Track) -> gtk::Widget {
         badge("network-server-symbolic", if t.lossless() { "lossless" } else { "compressed" }, &radiance_core::server_words::from_server(&name, &t.format), radiance_core::server_words::SERVER_SONG_BODY)
     } else if t.lossless() {
         let what = if t.format == "24-bit FLAC" { "24-bit FLAC" } else { "FLAC" };
-        badge("lossless-symbolic", "lossless", &format!("Lossless · {what}"), "The full recording from the Internet Archive, nothing thrown away. Played first.")
+        badge("lossless-symbolic", "lossless", &format!("Lossless · {what}"), "The full recording, nothing thrown away.")
     } else {
-        badge("weather-overcast-symbolic", "compressed", "Compressed · Opus", "Streams from YouTube Music, about 130–160 kbps. No lossless copy of this song was found.")
+        badge("weather-overcast-symbolic", "compressed", "Compressed · Opus", words::COMPRESSED_BADGE_BODY)
     }
 }
 
@@ -585,15 +585,12 @@ pub struct Ui {
     // search
     search: gtk::SearchEntry,
     search_view: gtk::Stack,
-    lossless: adw::PreferencesGroup,
-    lossless_spin: gtk::Spinner,
     fallback: adw::PreferencesGroup,
     fallback_spin: gtk::Spinner,
     videos: adw::PreferencesGroup,
     videos_spin: gtk::Spinner,
     found_videos: RefCell<Option<Vec<Track>>>,
     result_rows: RefCell<Vec<(adw::PreferencesGroup, adw::ActionRow)>>,
-    found_lossless: RefCell<Option<Vec<Track>>>,
     found_youtube: RefCell<Option<Vec<Track>>>,
     search_gen: Cell<u64>,
     debounce: RefCell<Option<glib::SourceId>>,
@@ -908,15 +905,12 @@ impl Ui {
                 .build(),
             search: gtk::SearchEntry::builder().placeholder_text("Search any song or artist").hexpand(true).build(),
             search_view: gtk::Stack::new(),
-            lossless: adw::PreferencesGroup::builder().title("Lossless").build(),
-            lossless_spin: spinner(),
             fallback: adw::PreferencesGroup::builder().title("YouTube Music").build(),
             fallback_spin: spinner(),
             videos: adw::PreferencesGroup::builder().title("Videos").build(),
             videos_spin: spinner(),
             found_videos: RefCell::default(),
             result_rows: RefCell::default(),
-            found_lossless: RefCell::default(),
             found_youtube: RefCell::default(),
             search_gen: Cell::new(0),
             debounce: RefCell::default(),
@@ -1709,10 +1703,9 @@ impl Ui {
         search_box.append(&suggest);
         let empty = self.browse_page();
 
-        self.lossless.set_header_suffix(Some(&self.lossless_spin));
         self.fallback.set_header_suffix(Some(&self.fallback_spin));
         self.videos.set_header_suffix(Some(&self.videos_spin));
-        let results = wide_page(&[&self.in_liked, &self.lossless, &self.fallback, &self.videos]);
+        let results = wide_page(&[&self.in_liked, &self.fallback, &self.videos]);
         self.search_view.add_named(&empty, Some("empty"));
         self.search_view.add_named(&results, Some("results"));
         search_box.append(&self.search_view);
@@ -3654,11 +3647,7 @@ impl Ui {
             .issue_url("https://github.com/RadianceADM/radiance-music/issues")
             .license_type(gtk::License::Gpl30)
             .copyright("© 2026 Radiance Innovation Centers")
-            .comments(
-                "Search any song and play it. Lossless recordings from the free libraries come first; \
-                 YouTube Music fills in the rest. Like a song to keep it, with its synced lyrics and \
-                 album art, and shape the sound with your EQ.",
-            )
+            .comments(radiance_core::help_words::ABOUT_TEXT)
             .developers(vec!["Bassi https://github.com/RadianceADM"])
             .release_notes(radiance_core::release_notes::html(include_str!("../CHANGELOG.md"), 3))
             .release_notes_version(env!("CARGO_PKG_VERSION"))
@@ -3737,7 +3726,6 @@ impl Ui {
         let q = self.search.text().trim().to_string();
         let gen = self.search_gen.get() + 1;
         self.search_gen.set(gen);
-        *self.found_lossless.borrow_mut() = None;
         *self.found_youtube.borrow_mut() = None;
         *self.found_videos.borrow_mut() = None;
         if q.chars().count() < 2 {
@@ -3745,31 +3733,29 @@ impl Ui {
             return;
         }
         self.render_results(&q);
-        for kind in 0..3 {
+        for kind in 0..2 {
             let me = Rc::downgrade(self);
             let (q1, q2) = (q.clone(), q.clone());
             bg(
                 move || {
                     let found = match kind {
-                        0 => archive::search(&q1),
-                        1 => youtube::search(&q1),
+                        0 => youtube::search(&q1),
                         _ => youtube::search_videos(&q1),
                     };
                     // YouTube Music found nothing: is it the song, or the internet? (see net::reachable)
-                    let reached = (kind != 1 || !found.is_empty()).then_some(true).unwrap_or_else(crate::net::reachable);
+                    let reached = (kind != 0 || !found.is_empty()).then_some(true).unwrap_or_else(crate::net::reachable);
                     (found, reached)
                 },
                 move |(found, reached)| {
                     let Some(me) = me.upgrade() else { return };
-                    if kind == 1 {
+                    if kind == 0 {
                         me.set_online(reached, true);
                     }
                     if me.search_gen.get() != gen {
                         return; // typed on since
                     }
                     let slot = match kind {
-                        0 => &me.found_lossless,
-                        1 => &me.found_youtube,
+                        0 => &me.found_youtube,
                         _ => &me.found_videos,
                     };
                     *slot.borrow_mut() = Some(found);
@@ -3795,20 +3781,17 @@ impl Ui {
             return;
         }
         self.search_view.set_visible_child_name("results");
-        // your own first, then lossless, YouTube Music and videos, a song never twice (core's search)
+        // your own first, then YouTube Music and videos, a song never twice (core's search)
         let arranged = radiance_core::search::arrange(
             &self.liked.borrow(),
-            self.found_lossless.borrow().clone(),
             self.found_youtube.borrow().clone(),
             self.found_videos.borrow().clone(),
             q,
         );
-        let (mine, lossless, youtube, videos) = (arranged.mine, arranged.lossless, arranged.youtube, arranged.videos);
-        self.lossless_spin.set_visible(lossless.is_none());
+        let (mine, youtube, videos) = (arranged.mine, arranged.youtube, arranged.videos);
         self.fallback_spin.set_visible(youtube.is_none());
         // offline, nothing is found anywhere: say that, not "no songs" (2026-10-31 audit)
         let off = !self.online.get();
-        self.lossless.set_description(Some(&words::search_note(Kind::Lossless, lossless.as_ref().map(Vec::len), off, q)));
         self.fallback.set_description(Some(&words::search_note(Kind::Songs, youtube.as_ref().map(Vec::len), off, q)));
         self.videos_spin.set_visible(videos.is_none());
         self.videos.set_description(Some(&words::search_note(Kind::Videos, videos.as_ref().map(Vec::len), off, q)));
@@ -3823,13 +3806,11 @@ impl Ui {
             }
         }
         let list: Rc<Vec<Track>> =
-            Rc::new(lossless.unwrap_or_default().into_iter().chain(youtube.unwrap_or_default()).chain(videos.unwrap_or_default()).collect());
+            Rc::new(youtube.unwrap_or_default().into_iter().chain(videos.unwrap_or_default()).collect());
         for (i, t) in list.iter().enumerate() {
             let row = self.track_row(t, Place::Search(list.clone(), i));
             let group = if t.video {
                 &self.videos
-            } else if t.lossless() {
-                &self.lossless
             } else {
                 &self.fallback
             };
@@ -4045,7 +4026,8 @@ impl Ui {
         let mine = gio::Menu::new();
         let liked = self.is_liked(&t.key());
         let t1 = t.clone();
-        add(&mine, if liked { "Remove from Liked" } else { "Like" }, "like", Box::new(move |me| me.toggle_like(&t1)));
+        // a liked song's item asks first (its saved file, parts, lyrics and cover go to the Trash); the heart doesn't
+        add(&mine, if liked { words::REMOVE_FROM_LIBRARY } else { "Like" }, "like", Box::new(move |me| if liked { me.confirm_remove(&t1) } else { me.toggle_like(&t1) }));
         let t1 = t.clone();
         add(&mine, "Song Radio", "radio", Box::new(move |me| me.start_radio(&t1)));
         if let Some(s) = self.splits_on_server(&t) {
@@ -4574,6 +4556,26 @@ impl Ui {
         });
         let key = self.current.borrow().as_ref().map(|t| t.key());
         self.paint_heart(&self.bar_heart, key.is_some_and(|k| self.is_liked(&k)));
+    }
+
+    /// "Remove from library": asks first, then does what unliking does (the file, parts, lyrics and cover to the Trash).
+    fn confirm_remove(self: &Rc<Self>, t: &Track) {
+        let ask = adw::AlertDialog::new(Some(&words::remove_from_library_title(&t.title)), Some(words::REMOVE_FROM_LIBRARY_BODY));
+        ask.add_response("cancel", "Cancel");
+        ask.add_response("remove", "Remove");
+        ask.set_response_appearance("remove", adw::ResponseAppearance::Destructive);
+        ask.set_close_response("cancel");
+        let (weak, t) = (Rc::downgrade(self), t.clone());
+        ask.connect_response(None, move |_, response| {
+            if response == "remove" {
+                if let Some(me) = weak.upgrade() {
+                    if me.is_liked(&t.key()) {
+                        me.toggle_like(&t);
+                    }
+                }
+            }
+        });
+        ask.present(Some(&self.window));
     }
 
     fn toggle_like(self: &Rc<Self>, t: &Track) {

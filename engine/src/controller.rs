@@ -257,8 +257,6 @@ pub trait Listener: Send + Sync + 'static {
 pub enum ListRef {
     /// Search: your liked songs that match.
     Mine,
-    /// Search: the free lossless libraries.
-    Lossless,
     /// Search: YouTube Music.
     Songs,
     /// Home: Made for you.
@@ -286,7 +284,6 @@ pub enum ListRef {
 pub struct Results {
     pub query: String,
     pub mine: Vec<Track>,
-    pub lossless: Option<Vec<Track>>,
     pub songs: Option<Vec<Track>>,
 }
 
@@ -616,7 +613,7 @@ impl Controller {
         }
     }
 
-    /// Searches (the free lossless libraries and YouTube Music); fewer than 2 letters clear it.
+    /// Searches (YouTube Music; your own songs are matched on top); fewer than 2 letters clear it.
     pub fn search(&self, q: &str) {
         let q = q.to_string();
         self.post(move |e| e.search(q));
@@ -886,6 +883,11 @@ impl Controller {
         self.menu_song(key, place).map(|(t, _)| crate::share::song_link(&t))
     }
 
+    /// The title of the song a menu was opened on (Remove from library's question names it).
+    pub fn song_title(&self, key: &str, place: Place) -> Option<String> {
+        self.menu_song(key, place).map(|(t, _)| t.title)
+    }
+
     /// The song a menu was opened on, and whether it's liked: wherever it's shown, else its playlist's copy.
     fn menu_song(&self, key: &str, place: Place) -> Option<(Track, bool)> {
         let (t, liked) = self.shared.view(|v| {
@@ -894,7 +896,6 @@ impl Controller {
             let t = v.liked.iter().map(|(t, _)| t).find(|t| t.key() == key).cloned()
                 .or_else(|| hit(&v.queue.0))
                 .or_else(|| hit(&v.results.mine))
-                .or_else(|| v.results.lossless.as_deref().and_then(hit))
                 .or_else(|| v.results.songs.as_deref().and_then(hit))
                 .or_else(|| hit(&v.home.mix))
                 .or_else(|| hit(&v.home.recent))
@@ -1537,8 +1538,8 @@ struct Engine {
     search_gen: Cell<u64>,
     suggest_gen: Cell<u64>,
     query: RefCell<String>,
-    /// What the search found, as found: (lossless, YouTube Music).
-    found: RefCell<(Option<Vec<Track>>, Option<Vec<Track>>)>,
+    /// What the search found, as found (YouTube Music's).
+    found: RefCell<Option<Vec<Track>>>,
     liked: RefCell<Vec<Track>>,
     /// Liked songs being saved now.
     saving: RefCell<HashSet<String>>,
@@ -1662,7 +1663,7 @@ impl Engine {
             search_gen: Cell::new(0),
             suggest_gen: Cell::new(0),
             query: RefCell::default(),
-            found: RefCell::new((Some(Vec::new()), Some(Vec::new()))),
+            found: RefCell::new(Some(Vec::new())),
             liked: RefCell::default(),
             saving: RefCell::default(),
             genres_busy: Cell::new(false),
@@ -1855,7 +1856,6 @@ impl Engine {
         }
         self.shared.view(|v| match list {
             ListRef::Mine => v.results.mine.clone(),
-            ListRef::Lossless => v.results.lossless.clone().unwrap_or_default(),
             ListRef::Songs => v.results.songs.clone().unwrap_or_default(),
             ListRef::Mix => v.home.mix.clone(),
             ListRef::Recent => v.home.recent.clone(),
@@ -1889,7 +1889,7 @@ impl Engine {
             self.play_current();
             return;
         }
-        if matches!(list, ListRef::Songs | ListRef::Lossless | ListRef::Mine) {
+        if matches!(list, ListRef::Songs | ListRef::Mine) {
             self.play_with_radio(tracks[i].clone());
             return;
         }
@@ -2296,8 +2296,7 @@ impl Engine {
         let found = self.found.borrow();
         hit(self.queue.borrow().tracks())
             .or_else(|| hit(&self.liked.borrow()))
-            .or_else(|| found.0.as_deref().and_then(hit))
-            .or_else(|| found.1.as_deref().and_then(hit))
+            .or_else(|| found.as_deref().and_then(hit))
             .or_else(|| hit(&self.mix.borrow()))
             .or_else(|| self.history.borrow().iter().map(|(t, _)| t).find(|t| t.key() == key).cloned())
             // a playlist's song found nowhere else (its page's menu, heart, Play Next)
@@ -4396,49 +4395,37 @@ impl Engine {
         self.search_gen.set(gen);
         *self.query.borrow_mut() = q.clone();
         if q.chars().count() < 2 {
-            *self.found.borrow_mut() = (Some(Vec::new()), Some(Vec::new()));
+            *self.found.borrow_mut() = Some(Vec::new());
             self.publish_results();
             return;
         }
-        *self.found.borrow_mut() = (None, None);
+        *self.found.borrow_mut() = None;
         self.publish_results();
-        for kind in [Kind::Lossless, Kind::Songs] {
-            let sources = self.shared.sources.clone();
-            let q = q.clone();
-            self.bg(
-                move || {
-                    let found = sources.search(kind, &q);
-                    // YouTube Music found nothing: is it the song, or the internet?
-                    let reached = kind != Kind::Songs || !found.is_empty() || sources.reachable();
-                    (found, reached)
-                },
-                move |e, (found, reached)| {
-                    if kind == Kind::Songs {
-                        e.set_online_by(reached, true);
-                    }
-                    if e.search_gen.get() != gen {
-                        return; // typed on since
-                    }
-                    {
-                        let mut f = e.found.borrow_mut();
-                        if kind == Kind::Lossless {
-                            f.0 = Some(found);
-                        } else {
-                            f.1 = Some(found);
-                        }
-                    }
-                    e.publish_results();
-                },
-            );
-        }
+        let sources = self.shared.sources.clone();
+        self.bg(
+            move || {
+                let found = sources.search(Kind::Songs, &q);
+                // YouTube Music found nothing: is it the song, or the internet?
+                let reached = !found.is_empty() || sources.reachable();
+                (found, reached)
+            },
+            move |e, (found, reached)| {
+                e.set_online_by(reached, true);
+                if e.search_gen.get() != gen {
+                    return; // typed on since
+                }
+                *e.found.borrow_mut() = Some(found);
+                e.publish_results();
+            },
+        );
     }
 
     fn publish_results(&self) {
         let query = self.query.borrow().clone();
-        let (lossless, songs) = self.found.borrow().clone();
-        let a = search::arrange(&self.liked.borrow(), lossless, songs, None, &query);
+        let songs = self.found.borrow().clone();
+        let a = search::arrange(&self.liked.borrow(), songs, None, &query);
         let mine = if query.chars().count() < 2 { Vec::new() } else { a.mine };
-        self.shared.view(|v| v.results = Results { query, mine, lossless: a.lossless, songs: a.youtube });
+        self.shared.view(|v| v.results = Results { query, mine, songs: a.youtube });
         self.shared.tell(Change::Results);
     }
 

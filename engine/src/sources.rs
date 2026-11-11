@@ -137,13 +137,12 @@ pub trait Sources: Send + Sync + 'static {
     }
 }
 
-/// The real ones: the Internet Archive, YouTube Music (yt-dlp), LRCLIB.
+/// The real ones: YouTube Music (yt-dlp), LRCLIB.
 pub struct Real;
 
 impl Sources for Real {
     fn search(&self, kind: Kind, q: &str) -> Vec<Track> {
         match kind {
-            Kind::Lossless => crate::archive::search(q),
             Kind::Songs => crate::youtube::search(q),
             Kind::Videos => crate::youtube::search_videos(q),
         }

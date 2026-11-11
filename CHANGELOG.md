@@ -2,6 +2,9 @@
 
 ## Not released yet
 
+- **Remove from library:** a liked song's menu says Remove from library (it said Remove from Liked) and asks first; its saved file, parts, lyrics and cover go to the Trash, as before (#77).
+- **Search no longer lists free lossless recordings from the Internet Archive:** your own and your servers' songs come first, then YouTube Music. Songs you already liked from there stay and still play (#78).
+- **Windows: search results have their menu again:** right-click (or long-press, or the Menu key) a result for Play Next, Add to Queue, Add to Playlist and the rest (#79).
 - **The update pop-up says what's new:** it listed the release page's download steps (Windows, Linux, the Flatpak) instead of the new version's changes. It now shows the new version's own items, each in full (#76).
 
 ## v0.7.23 — 2026-11-10

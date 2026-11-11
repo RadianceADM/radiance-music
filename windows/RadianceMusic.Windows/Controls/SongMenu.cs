@@ -125,10 +125,30 @@ internal static class SongMenu
             case MenuAction.GoToAlbum g:
                 App.Window?.SearchFor(g.Q);
                 break;
+            case MenuAction.Unlike:
+                // Remove from library: asks first; the file, parts, lyrics and cover go to the Trash, as unliking does
+                _ = RemoveFromLibrary(hub, row.XamlRoot, key, index, action, place);
+                break;
             default:
                 hub.Engine.DoMenu(key, index, action);
                 break;
         }
+    }
+
+    private static async Task RemoveFromLibrary(EngineHub hub, XamlRoot root, string key, uint index, MenuAction action, MenuPlace place)
+    {
+        var title = hub.Engine.SongTitle(key, place) ?? "";
+        var ask = new ContentDialog
+        {
+            XamlRoot = root,
+            Title = Ffi.RemoveFromLibraryTitle(title),
+            Content = Ffi.RemoveFromLibraryBody(),
+            PrimaryButtonText = "Remove",
+            CloseButtonText = "Cancel",
+            DefaultButton = ContentDialogButton.Close,
+        };
+        if (await ask.ShowAsync() != ContentDialogResult.Primary) return;
+        hub.Engine.DoMenu(key, index, action);
     }
 
     /// <summary>Each item's icon (Segoe Fluent Icons).</summary>

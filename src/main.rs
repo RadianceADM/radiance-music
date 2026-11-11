@@ -1,5 +1,5 @@
-//! Radiance Music: search any song and play it. Lossless recordings from the free
-//! libraries (Internet Archive) come first; YouTube Music is the fallback. A liked
+//! Radiance Music: search any song and play it: your own songs and your servers' first,
+//! then YouTube Music. A liked
 //! song is saved (with its synced lyrics and album art), and the Mixer has its
 //! own low cut, high cut and reverb (fx.rs).
 //!
@@ -9,7 +9,6 @@
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
 use radiance_engine::align;
-use radiance_engine::archive;
 use radiance_engine::art;
 use radiance_engine::beat;
 use radiance_engine::db;
@@ -125,16 +124,11 @@ fn install_icons() {
     }
 }
 
-/// `radiance-music --probe QUERY`: searches both sources, then decodes the first
-/// lossless and the first YouTube result into nothing (no sound), seeking once,
-/// and looks up their lyrics. Checks everything but the speakers.
+/// `radiance-music --probe QUERY`: searches YouTube Music, then decodes the first
+/// result into nothing (no sound), seeking once, and looks up its lyrics. Checks everything but the speakers.
 fn probe(query: &str) -> glib::ExitCode {
     use gst::prelude::*;
     use std::time::{Duration, Instant};
-    let found = archive::search(query);
-    for t in &found {
-        println!("lossless | {} | {} | {} | {} | {}", t.title, t.artist, t.album, t.length(), t.format);
-    }
     let yt = youtube::search(query);
     for t in yt.iter().take(5) {
         println!("youtube  | {} | {} | {} | {}", t.title, t.artist, t.album, t.length());
@@ -144,10 +138,6 @@ fn probe(query: &str) -> glib::ExitCode {
         return glib::ExitCode::FAILURE;
     }
     let mut tries = vec![];
-    if let Some(t) = found.first() {
-        // as the app plays it: on Windows through the relay (see relay::add_web)
-        tries.push((if cfg!(windows) { relay.add_web(&t.id) } else { t.id.clone() }, t.clone()));
-    }
     if let Some(t) = yt.first() {
         let at = Instant::now();
         match youtube::stream(&t.id) {
