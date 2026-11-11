@@ -30,3 +30,5 @@ $H "mv -f $R/$repo/latest.json.new $R/$repo/latest.json && ln -sfn $tag $R/$repo
 # Hostinger's CDN may hold the old /latest/ files: cleared (they're kept 5 minutes at most anyway)
 hostinger hosting cdn purge-cache u302998808 radianceph.com >/dev/null 2>&1 && echo "CDN cleared" || echo "CDN not cleared (it expires within 5 minutes)"
 rm -rf "$work"
+# every release, for the admin's downloads matrix (radianceph#72): /<repo>/releases.json
+bash "$(dirname "$0")/releases-json.sh" "$repo"
