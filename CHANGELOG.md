@@ -1,6 +1,6 @@
 # Changelog
 
-## Not released yet
+## v0.7.25 — 2026-11-12
 
 - **Windows: the app opens after an update:** on a slower PC the first open after an update (or a new install) could close by itself before its window showed, while GStreamer went through its new files; the next open usually worked. The installer now does that step, and the app waits longer for it (#81).
 
