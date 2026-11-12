@@ -1,5 +1,9 @@
 # Changelog
 
+## Not released yet
+
+- **Windows: the app opens after an update:** on a slower PC the first open after an update (or a new install) could close by itself before its window showed, while GStreamer went through its new files; the next open usually worked. The installer now does that step, and the app waits longer for it (#81).
+
 ## v0.7.24 — 2026-11-12
 
 - **Remove from library:** a liked song's menu says Remove from library (it said Remove from Liked) and asks first; its saved file, parts, lyrics and cover go to the Trash, as before (#77).

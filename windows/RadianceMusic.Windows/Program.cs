@@ -6,6 +6,7 @@ namespace RadianceMusic;
 /// <summary>
 /// The app's start. Its own bin\ (the engine's DLL, GStreamer, yt-dlp, Deno, FFmpeg) goes on this
 /// process's PATH first (no system setting changes). Then:
+///   RadianceMusic.exe --warm-up               GStreamer's list of its plugins made, no window (the installer, #81)
 ///   RadianceMusicBeta.exe --self-check FILE   the self-check, no window (over SSH on ribs03)
 ///   RadianceMusicBeta.exe --probe-video VIDEO FILE   a video played the app's way, no window: the report
 ///   RadianceMusicBeta.exe [developer switches] the app (Dev: --shot, --page, --size, --search, --wait,
@@ -24,6 +25,8 @@ public static class Program
         var bin = Path.Combine(AppContext.BaseDirectory, "bin");
         if (Directory.Exists(bin))
             Environment.SetEnvironmentVariable("PATH", bin + Path.PathSeparator + Environment.GetEnvironmentVariable("PATH"));
+        if (args.Length == 1 && args[0] == "--warm-up")
+            return RadianceMusic.Native.Native.WarmUp() ? 0 : 1;
         if (args.Length == 2 && args[0] == "--self-check")
         {
             var (text, ok) = SelfCheck.Run();

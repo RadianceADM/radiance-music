@@ -1143,6 +1143,13 @@ pub fn browse_tiles() -> Vec<BrowseTile> {
     radiance_core::words::BROWSE.iter().map(|(label, query)| BrowseTile { label: label.to_string(), query: query.to_string() }).collect()
 }
 
+/// `--warm-up` (the installer, #81): GStreamer's list of its plugins made now, so the first open after an install or
+/// an update doesn't wait for it. True when GStreamer started.
+#[uniffi::export]
+pub fn warm_up() -> bool {
+    radiance_engine::check::warm_up()
+}
+
 /// The self-check's lines (the beta's version first).
 #[uniffi::export]
 pub fn self_check() -> Vec<String> {

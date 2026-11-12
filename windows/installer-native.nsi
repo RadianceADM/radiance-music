@@ -70,6 +70,10 @@ Section "Radiance Music"
   WriteRegStr HKCU "Software\Classes\radiancemusic" "URL Protocol" ""
   WriteRegStr HKCU "Software\Classes\radiancemusic\DefaultIcon" "" "$INSTDIR\radiance-music.ico"
   WriteRegStr HKCU "Software\Classes\radiancemusic\shell\open\command" "" '"$INSTDIR\RadianceMusic.exe" "%1"'
+  ; GStreamer's list of its plugins, made now: otherwise the first open after an install or an update makes it, and on
+  ; a slower PC (the antivirus looking at each new file) that took longer than the app waited for its engine (#81)
+  nsExec::Exec '"$INSTDIR\RadianceMusic.exe" --warm-up'
+  Pop $0
 SectionEnd
 Function TrimNewline
   Exch $R0

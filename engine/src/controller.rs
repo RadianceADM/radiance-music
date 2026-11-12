@@ -520,6 +520,12 @@ fn host() -> &'static async_channel::Sender<Job> {
     })
 }
 
+/// How long the app waits for its engine to start. The first start after an install or an update goes through
+/// GStreamer's plugins (every file is new); on a slower Windows PC, with the antivirus looking at each one, that took
+/// longer than the 30 s it waited before, and the app closed before its window showed (#81). The installer makes
+/// that list now; this is for when it couldn't.
+const START_LIMIT: Duration = Duration::from_secs(180);
+
 /// Each engine started gets a number: answers meant for an earlier one are dropped.
 static EPOCH: AtomicU64 = AtomicU64::new(0);
 
@@ -598,7 +604,7 @@ impl Controller {
             engine.start_up();
             let _ = ready_tx.send(());
         }));
-        if sent.is_err() || ready_rx.recv_timeout(std::time::Duration::from_secs(30)).is_err() {
+        if sent.is_err() || ready_rx.recv_timeout(START_LIMIT).is_err() {
             RUNNING.store(false, Ordering::SeqCst);
             return Err("Radiance Music's engine didn't start".into());
         }

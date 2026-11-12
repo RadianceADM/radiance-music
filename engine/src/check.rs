@@ -21,6 +21,13 @@ pub fn expected() -> Vec<String> {
     PLUGINS.lines().filter(|l| !l.trim().is_empty()).map(plugin_name).filter(|p| !NOT_IN_MSYS2.contains(&p.as_str())).collect()
 }
 
+/// GStreamer started once, as the installer does it (#81): after an install or an update every plugin file is new, and
+/// GStreamer's first start goes through them all and writes its list of them (its registry, in the cache folder). Done
+/// here, the app's first open finds the list made. True when GStreamer started.
+pub fn warm_up() -> bool {
+    gst::init().is_ok()
+}
+
 /// One line each: the engine's version, the data folder, GStreamer's version, the plugins it
 /// can't find, yt-dlp, and how many songs the history has.
 pub fn lines() -> Vec<String> {
@@ -42,6 +49,13 @@ pub fn lines() -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #81: the installer's warm-up starts GStreamer (its plugin list made and written then, not at the first open).
+    #[test]
+    fn the_warm_up_starts_gstreamer() {
+        assert!(warm_up(), "GStreamer started");
+        assert!(gst::Registry::get().find_plugin("coreelements").is_some(), "its plugin list is there");
+    }
 
     #[test]
     fn the_plugins_expected_are_the_ones_todays_windows_app_ships() {

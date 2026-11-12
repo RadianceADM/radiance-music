@@ -92,6 +92,8 @@ pub struct Fake {
     pub network_down: std::sync::atomic::AtomicBool,
     pub suggestions: Mutex<HashMap<String, (Duration, Vec<String>)>>,
     pub two_part_fetches: AtomicUsize,
+    /// How long the start's first look (is the network there?) takes: a slow start (#81).
+    pub start_wait: Mutex<Duration>,
 }
 
 fn kind_name(k: Kind) -> &'static str {
@@ -184,6 +186,7 @@ impl Sources for Fake {
         false
     }
     fn network_available(&self) -> bool {
+        std::thread::sleep(*self.start_wait.lock().unwrap());
         !self.network_down.load(Ordering::SeqCst)
     }
     fn suggestions(&self, q: &str) -> Vec<String> {
@@ -294,6 +297,19 @@ pub fn wait_for(rx: &Receiver<(Change, Instant)>, what: Change, secs: f64) -> bo
 
 fn ids(v: &Option<Vec<Track>>) -> Vec<String> {
     v.as_ref().map(|v| v.iter().map(|t| t.id.clone()).collect()).unwrap_or_default()
+}
+
+/// #81: the first start after an install or an update goes through GStreamer's plugins; on a slower Windows PC (the
+/// antivirus looking at each new file) that took longer than the 30 s the app waited, and it closed before its window
+/// showed. A slow start is still a start.
+#[test]
+fn a_slow_start_still_starts() {
+    let _l = setup();
+    let fake = Arc::new(Fake::default());
+    *fake.start_wait.lock().unwrap() = Duration::from_secs(35);
+    let (heard, _rx) = listener();
+    let c = Controller::start(heard, fake.clone()).expect("a 35 s start is still a start");
+    c.quit();
 }
 
 #[test]
